@@ -1,0 +1,6 @@
+{
+  "name": "pi-threema-extension",
+  "version": "1.0.0",
+  "description": "Pi coding agent extension for two-way Threema messaging",
+  "type": "module"
+}
