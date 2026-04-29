@@ -43,19 +43,44 @@ Duplicate webhook deliveries are deduplicated by message ID and stored in a smal
 
 ## Installation
 
-### Option 1: quick test with `--extension`
+The extension lives in the `threema/` subfolder of the [pi-kit](https://github.com/ulvestuen/pi-kit/) repository. The repository root carries a `pi-package` manifest that exposes `./threema` as an extension, so pi can install it directly from GitHub.
 
-Run pi and point it directly at the extension entry file:
+### Option 1: install as a pi package from GitHub (recommended)
 
 ```bash
-pi -e /absolute/path/to/threema/index.ts
+pi install https://github.com/ulvestuen/pi-kit
 ```
 
-This is the fastest way to try it locally.
+Equivalent shorthands:
 
-### Option 2: install as a normal pi extension
+```bash
+pi install git:github.com/ulvestuen/pi-kit
+pi install ssh://git@github.com/ulvestuen/pi-kit
+```
 
-Copy or symlink the `threema/` folder into one of pi's extension locations:
+Pin to a tag, branch, or commit using the `@<ref>` suffix:
+
+```bash
+pi install git:github.com/ulvestuen/pi-kit@main
+pi install git:github.com/ulvestuen/pi-kit@v1.0.0
+```
+
+Pi clones the repository, runs `npm install`, and registers the extension in `./threema` automatically. See the [pi packages docs](https://pi.dev/docs/latest/packages) for details.
+
+### Option 2: quick test with `--extension`
+
+Clone the repo and point pi at the entry file:
+
+```bash
+git clone https://github.com/ulvestuen/pi-kit.git
+pi -e /absolute/path/to/pi-kit/threema/index.ts
+```
+
+This is the fastest way to try it locally without installing.
+
+### Option 3: install as a normal pi extension by copying
+
+Clone the repo, then copy or symlink the `threema/` folder into one of pi's extension locations:
 
 - global: `~/.pi/agent/extensions/pi-threema/`
 - project-local: `.pi/extensions/pi-threema/`
@@ -63,8 +88,9 @@ Copy or symlink the `threema/` folder into one of pi's extension locations:
 Example:
 
 ```bash
+git clone https://github.com/ulvestuen/pi-kit.git
 mkdir -p ~/.pi/agent/extensions
-cp -R /absolute/path/to/threema ~/.pi/agent/extensions/pi-threema
+cp -R pi-kit/threema ~/.pi/agent/extensions/pi-threema
 ```
 
 Then start pi normally. If pi is already running, use:
