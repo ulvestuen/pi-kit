@@ -1,6 +1,7 @@
 import { generateKeyPairSync } from "crypto";
 
-const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+// Threema Gateway uses NaCl crypto_box, i.e. X25519 — not Ed25519.
+const { publicKey, privateKey } = generateKeyPairSync("x25519");
 
 // Raw 32-byte keys without ASN.1 wrapping
 const pubRaw = publicKey.export({ type: "spki", format: "der" }).subarray(-32);

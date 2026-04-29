@@ -10,9 +10,14 @@ A pi extension that lets the agent:
 
 ## What it does
 
-Outbound messages are sent through the Threema Gateway **End-to-End Mode** API (`send_e2e`).
+Outbound messages can be sent through either Threema Gateway mode, depending on how your Gateway ID is registered:
 
-Inbound messages are accepted through a local webhook server, validated with the Gateway MAC, decrypted with your Threema private key, and then delivered to pi as user messages.
+- **End-to-End mode** (`send_e2e`, default) — the extension encrypts each message client-side using your private key and the recipient's public key (looked up from the Gateway and cached in memory). Supports inbound messages.
+- **Basic mode** (`send_simple`) — the extension POSTs plaintext to the Gateway and lets Threema do the encryption server-side. Outbound only; Basic IDs cannot receive inbound webhooks.
+
+Pick the mode that matches your Gateway ID via the `mode` config field (`"e2e"` or `"basic"`). Mixing is not allowed by Threema: an E2E ID can only call `/send_e2e`, and a Basic ID can only call `/send_simple`.
+
+Inbound messages (E2E mode only) are accepted through a local webhook server, validated with the Gateway MAC, decrypted with your Threema private key, and then delivered to pi as user messages.
 
 Currently, inbound **text messages** are supported.
 
@@ -110,10 +115,13 @@ cp /absolute/path/to/threema/threema.example.json ~/.pi/agent/extensions/pi-thre
 chmod 600 ~/.pi/agent/extensions/pi-threema/threema.json
 ```
 
-Then edit `~/.pi/agent/extensions/pi-threema/threema.json`:
+Then edit `~/.pi/agent/extensions/pi-threema/threema.json`.
+
+For an **End-to-End Gateway ID** (default):
 
 ```json
 {
+  "mode": "e2e",
   "apiId": "*MYAPID",
   "apiSecret": "your_api_secret_here",
   "privateKey": "0000000000000000000000000000000000000000000000000000000000000000",
@@ -123,26 +131,42 @@ Then edit `~/.pi/agent/extensions/pi-threema/threema.json`:
 }
 ```
 
-You do **not** need to configure the recipient's public key. For outbound E2E sends, the extension automatically fetches the recipient public key from Threema Gateway using `/pubkeys/<recipientId>` and caches it in memory.
+For a **Basic Gateway ID** (outbound only, no key material needed):
+
+```json
+{
+  "mode": "basic",
+  "apiId": "*MYAPID",
+  "apiSecret": "your_api_secret_here",
+  "recipientId": "ABCD1234"
+}
+```
+
+In E2E mode you do **not** need to configure the recipient's public key. The extension automatically fetches it from Threema Gateway using `/pubkeys/<recipientId>` and caches it in memory.
 
 ### JSON config fields
 
-Required:
+Always required:
 
 - `apiId` – your 8-character Threema Gateway ID
 - `apiSecret` – your Gateway API secret; used for outbound API calls and inbound webhook MAC verification
-- `privateKey` – 32-byte private key as 64 hex characters; used to encrypt outbound E2E messages and decrypt inbound messages
-- `recipientId` – default outbound recipient and the default inbound allowlist entry. The recipient public key is looked up automatically; no config field is required for it.
+- `recipientId` – default outbound recipient (and the default inbound allowlist entry in E2E mode). The recipient public key is looked up automatically; no config field is required for it.
+
+Required in `mode: "e2e"` only:
+
+- `privateKey` – 32-byte X25519 private key as 64 hex characters; used to encrypt outbound E2E messages and decrypt inbound messages.
 
 Optional:
 
-- `allowedSenders` – inbound sender allowlist as an array of Threema IDs, or a comma-separated string. If omitted, the extension only accepts inbound messages from `recipientId`.
-- `webhookPort` – local HTTP port for `/webhook` and `/health`. If omitted, the extension defaults to `7633`.
+- `mode` – `"e2e"` (default) or `"basic"`. Use `"basic"` for Gateway IDs that were registered without an uploaded public key (Simple Mode); they are outbound-only.
+- `allowedSenders` – inbound sender allowlist as an array of Threema IDs, or a comma-separated string. E2E mode only. If omitted, the extension only accepts inbound messages from `recipientId`.
+- `webhookPort` – local HTTP port for `/webhook` and `/health`. E2E mode only. If omitted, the extension defaults to `7633`.
 
 Environment overrides:
 
 - `THREEMA_CONFIG_PATH` – optional path to a different JSON config file.
 - `PI_CODING_AGENT_DIR` – optional. If set, the default config path becomes `$PI_CODING_AGENT_DIR/extensions/pi-threema/threema.json`, and the duplicate-message cache is stored under `$PI_CODING_AGENT_DIR`.
+- `THREEMA_MODE` – optional. Selects the mode when configuring via env vars instead of JSON.
 
 Legacy environment-variable config is still supported if no JSON config file exists.
 

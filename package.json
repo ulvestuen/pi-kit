@@ -2,6 +2,7 @@
   "name": "pi-kit",
   "version": "1.0.0",
   "description": "pi extensions and integrations",
+  "type": "module",
   "keywords": [
     "pi-package"
   ],

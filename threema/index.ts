@@ -26,14 +26,17 @@ const THREEMA_ID_RE = /^[A-Z0-9*]{8}$/;
 const HEX_RE = /^[0-9a-fA-F]+$/;
 const MAX_PERSISTED_INBOUND_KEYS = 1000;
 
+type ThreemaMode = "e2e" | "basic";
+
 interface ThreemaConfig {
   apiId: string;
   apiSecret: string;
-  privateKey: Uint8Array;
+  privateKey?: Uint8Array;
   recipientId: string;
   webhookPort: number;
   allowedSenders: Set<string>;
   configPath?: string;
+  mode: ThreemaMode;
 }
 
 interface RawThreemaConfig {
@@ -43,6 +46,7 @@ interface RawThreemaConfig {
   recipientId?: string;
   webhookPort?: number | string;
   allowedSenders?: string[] | string;
+  mode?: string;
 }
 
 interface IncomingWebhookParams {
@@ -162,6 +166,13 @@ function loadRawConfigFromJson(
   return raw as RawThreemaConfig;
 }
 
+function parseMode(value: string | undefined): ThreemaMode {
+  if (value === undefined) return "e2e";
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "e2e" || normalized === "basic") return normalized;
+  throw new Error(`mode must be "e2e" or "basic" (got: ${value})`);
+}
+
 function loadConfig(): ThreemaConfig {
   const configPath = getConfigPath();
   const fileConfig = loadRawConfigFromJson(configPath);
@@ -172,16 +183,24 @@ function loadConfig(): ThreemaConfig {
     recipientId: process.env.THREEMA_RECIPIENT_ID,
     webhookPort: process.env.THREEMA_WEBHOOK_PORT,
     allowedSenders: process.env.THREEMA_ALLOWED_SENDERS,
+    mode: process.env.THREEMA_MODE,
   };
 
   const { apiId, apiSecret, privateKey: privateKeyHex, recipientId } = config;
   const webhookPortRaw = config.webhookPort ?? DEFAULT_WEBHOOK_PORT;
+  const mode = parseMode(config.mode);
 
-  if (!apiId || !apiSecret || !privateKeyHex || !recipientId) {
+  const baseRequired = !apiId || !apiSecret || !recipientId;
+  const e2eMissingKey = mode === "e2e" && !privateKeyHex;
+  if (baseRequired || e2eMissingKey) {
+    const requiredFields =
+      mode === "e2e"
+        ? "apiId, apiSecret, privateKey, recipientId"
+        : "apiId, apiSecret, recipientId";
     throw new Error(
       fileConfig
-        ? `Missing required fields in ${configPath}. Set: apiId, apiSecret, privateKey, recipientId`
-        : `Missing Threema config. Create ${configPath} with apiId, apiSecret, privateKey, recipientId (or set THREEMA_CONFIG_PATH).`,
+        ? `Missing required fields in ${configPath}. Set: ${requiredFields}`
+        : `Missing Threema config. Create ${configPath} with ${requiredFields} (or set THREEMA_CONFIG_PATH).`,
     );
   }
 
@@ -190,14 +209,18 @@ function loadConfig(): ThreemaConfig {
     "recipientId",
     recipientId,
   );
-  const normalizedPrivateKeyHex = assertValidHex(
-    "privateKey",
-    privateKeyHex,
-    64,
-  );
-  const privateKey = hexToBytes(normalizedPrivateKeyHex);
-  if (privateKey.length !== 32) {
-    throw new Error("privateKey must decode to exactly 32 bytes");
+
+  let privateKey: Uint8Array | undefined;
+  if (mode === "e2e") {
+    const normalizedPrivateKeyHex = assertValidHex(
+      "privateKey",
+      privateKeyHex!,
+      64,
+    );
+    privateKey = hexToBytes(normalizedPrivateKeyHex);
+    if (privateKey.length !== 32) {
+      throw new Error("privateKey must decode to exactly 32 bytes");
+    }
   }
 
   const webhookPort =
@@ -221,6 +244,7 @@ function loadConfig(): ThreemaConfig {
       normalizedRecipientId,
     ),
     configPath: fileConfig ? configPath : undefined,
+    mode,
   };
 }
 
@@ -265,13 +289,24 @@ function inboundMessageKey(
 }
 
 function buildSystemPrompt(config: ThreemaConfig): string {
-  return [
+  const lines = [
     "You have a Threema messaging integration.",
     `Use the threema_send tool to send short text messages to the default recipient ${config.recipientId} or to a specified Threema ID.`,
-    `Incoming Threema messages are accepted only from these sender IDs: ${[...config.allowedSenders].join(", ")}.`,
-    "If a Threema message arrives while you are already working, it is queued as a follow-up user message.",
+  ];
+  if (config.mode === "e2e") {
+    lines.push(
+      `Incoming Threema messages are accepted only from these sender IDs: ${[...config.allowedSenders].join(", ")}.`,
+      "If a Threema message arrives while you are already working, it is queued as a follow-up user message.",
+    );
+  } else {
+    lines.push(
+      "This Gateway ID is in basic mode — outbound messages only; inbound messages are not received.",
+    );
+  }
+  lines.push(
     "Use Threema to notify the user of completed tasks, ask concise clarifying questions, or send short status updates when remote messaging is appropriate.",
-  ].join("\n");
+  );
+  return lines.join("\n");
 }
 
 // Cache for looked-up public keys
@@ -303,31 +338,11 @@ async function lookupPublicKey(
   return key;
 }
 
-async function sendThreemaMessage(
-  text: string,
-  recipientId: string,
-  config: ThreemaConfig,
+async function postSendRequest(
+  endpoint: "send_simple" | "send_e2e",
+  body: URLSearchParams,
 ): Promise<string> {
-  const message = text.trim();
-  if (!message) {
-    throw new Error("Threema message must not be empty");
-  }
-
-  const to = assertValidThreemaId("recipient", recipientId);
-  const recipientPublicKey = await lookupPublicKey(to, config);
-  const nonce = new Uint8Array(crypto.randomBytes(24));
-  const payload = buildThreemaTextPayload(message);
-  const box = naclBox(payload, nonce, recipientPublicKey, config.privateKey);
-
-  const body = new URLSearchParams({
-    from: config.apiId,
-    secret: config.apiSecret,
-    to,
-    nonce: bytesToHex(nonce),
-    box: bytesToHex(box),
-  });
-
-  const resp = await fetch("https://msgapi.threema.ch/send_e2e", {
+  const resp = await fetch(`https://msgapi.threema.ch/${endpoint}`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: body.toString(),
@@ -342,6 +357,47 @@ async function sendThreemaMessage(
   }
 
   return (await resp.text()).trim();
+}
+
+async function sendThreemaMessage(
+  text: string,
+  recipientId: string,
+  config: ThreemaConfig,
+): Promise<string> {
+  const message = text.trim();
+  if (!message) {
+    throw new Error("Threema message must not be empty");
+  }
+
+  const to = assertValidThreemaId("recipient", recipientId);
+
+  if (config.mode === "basic") {
+    const body = new URLSearchParams({
+      from: config.apiId,
+      secret: config.apiSecret,
+      to,
+      text: message,
+    });
+    return postSendRequest("send_simple", body);
+  }
+
+  if (!config.privateKey) {
+    throw new Error("E2E mode requires a privateKey");
+  }
+  const recipientPublicKey = await lookupPublicKey(to, config);
+  const nonce = new Uint8Array(crypto.randomBytes(24));
+  const payload = buildThreemaTextPayload(message);
+  const box = naclBox(payload, nonce, recipientPublicKey, config.privateKey);
+
+  const body = new URLSearchParams({
+    from: config.apiId,
+    secret: config.apiSecret,
+    to,
+    nonce: bytesToHex(nonce),
+    box: bytesToHex(box),
+  });
+
+  return postSendRequest("send_e2e", body);
 }
 
 const threemaSendTool = defineTool({
@@ -515,6 +571,11 @@ export default function (pi: ExtensionAPI) {
           return;
         }
 
+        if (!config.privateKey) {
+          throw new Error(
+            "Inbound webhook requires E2E mode with a privateKey",
+          );
+        }
         const senderPublicKey = await lookupPublicKey(params.from, config);
         const text = decryptMessage(
           params.box,
@@ -587,6 +648,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (_event, ctx) => {
+    if (config.mode !== "e2e") return;
     await restoreSeenInboundMessages(ctx, seenInboundKeys);
     try {
       await persistSeenInboundMessages(seenInboundKeys);
@@ -616,22 +678,25 @@ export default function (pi: ExtensionAPI) {
         if (resp.ok) credits = (await resp.text()).trim();
       } catch {}
 
-      ctx.ui.notify(
-        [
-          `Threema Extension Status`,
-          `  API ID:          ${config.apiId}`,
-          `  Recipient:       ${config.recipientId}`,
+      const lines = [
+        `Threema Extension Status`,
+        `  Mode:            ${config.mode}`,
+        `  API ID:          ${config.apiId}`,
+        `  Recipient:       ${config.recipientId}`,
+        `  Config file:     ${config.configPath ?? "environment variables"}`,
+        `  Credits:         ${credits}`,
+        `  Agent busy:      ${agentBusy ? "yes" : "no"}`,
+      ];
+      if (config.mode === "e2e") {
+        lines.push(
           `  Allowed senders: ${[...config.allowedSenders].join(", ")}`,
-          `  Config file:     ${config.configPath ?? "environment variables"}`,
           `  Webhook port:    ${config.webhookPort}`,
           `  Webhook URL:     http://<host>:${config.webhookPort}/webhook`,
-          `  Credits:         ${credits}`,
-          `  Agent busy:      ${agentBusy ? "yes" : "no"}`,
           `  Server:          ${webhookServerListening ? "running" : "stopped"}`,
           `  Seen inbound IDs: ${seenInboundKeys.size}`,
-        ].join("\n"),
-        "info",
-      );
+        );
+      }
+      ctx.ui.notify(lines.join("\n"), "info");
     },
   });
 

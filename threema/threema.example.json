@@ -1,4 +1,5 @@
 {
+  "mode": "e2e",
   "apiId": "*MYAPID",
   "apiSecret": "your_api_secret_here",
   "privateKey": "0000000000000000000000000000000000000000000000000000000000000000",
