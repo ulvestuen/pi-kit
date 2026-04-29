@@ -2,12 +2,16 @@
   "name": "pi-kit",
   "version": "1.0.0",
   "description": "pi extensions and integrations",
-  "keywords": ["pi-package"],
+  "keywords": [
+    "pi-package"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/ulvestuen/pi-kit.git"
   },
   "pi": {
-    "extensions": ["./threema"]
+    "extensions": [
+      "./threema"
+    ]
   }
 }

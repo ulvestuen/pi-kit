@@ -10,7 +10,7 @@ A pi extension that lets the agent:
 
 ## What it does
 
-Outbound messages are sent through the Threema Gateway **Simple Mode** API.
+Outbound messages are sent through the Threema Gateway **End-to-End Mode** API (`send_e2e`).
 
 Inbound messages are accepted through a local webhook server, validated with the Gateway MAC, decrypted with your Threema private key, and then delivered to pi as user messages.
 
@@ -123,14 +123,16 @@ Then edit `~/.pi/agent/extensions/pi-threema/threema.json`:
 }
 ```
 
+You do **not** need to configure the recipient's public key. For outbound E2E sends, the extension automatically fetches the recipient public key from Threema Gateway using `/pubkeys/<recipientId>` and caches it in memory.
+
 ### JSON config fields
 
 Required:
 
 - `apiId` – your 8-character Threema Gateway ID
 - `apiSecret` – your Gateway API secret; used for outbound API calls and inbound webhook MAC verification
-- `privateKey` – 32-byte private key as 64 hex characters; used to decrypt inbound messages
-- `recipientId` – default outbound recipient and the default inbound allowlist entry
+- `privateKey` – 32-byte private key as 64 hex characters; used to encrypt outbound E2E messages and decrypt inbound messages
+- `recipientId` – default outbound recipient and the default inbound allowlist entry. The recipient public key is looked up automatically; no config field is required for it.
 
 Optional:
 
@@ -241,7 +243,8 @@ This uses Node's TypeScript stripping support to run `test.ts` directly.
 ## Notes and limitations
 
 - inbound support is currently limited to **text** messages
-- outbound messages use Gateway **Simple Mode**, not end-to-end encryption
+- outbound messages use Gateway **End-to-End Mode** (`send_e2e`)
+- recipient public keys are fetched automatically from Threema Gateway and cached only in memory
 - inbound webhook duplicates are deduplicated and stored in a small local cache
 - the webhook server must be reachable from Threema Gateway
 

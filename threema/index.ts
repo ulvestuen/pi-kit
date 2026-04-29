@@ -4,12 +4,21 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 import { defineTool } from "@mariozechner/pi-coding-agent";
 import { Type } from "@mariozechner/pi-ai";
+import * as crypto from "node:crypto";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { decryptMessage, hexToBytes, parseFormBody, verifyMac } from "./lib.ts";
+import {
+  buildThreemaTextPayload,
+  bytesToHex,
+  decryptMessage,
+  hexToBytes,
+  naclBox,
+  parseFormBody,
+  verifyMac,
+} from "./lib.ts";
 
 const DEFAULT_WEBHOOK_PORT = 7633;
 const INBOUND_ENTRY_TYPE = "threema-inbound";
@@ -305,15 +314,20 @@ async function sendThreemaMessage(
   }
 
   const to = assertValidThreemaId("recipient", recipientId);
+  const recipientPublicKey = await lookupPublicKey(to, config);
+  const nonce = new Uint8Array(crypto.randomBytes(24));
+  const payload = buildThreemaTextPayload(message);
+  const box = naclBox(payload, nonce, recipientPublicKey, config.privateKey);
 
   const body = new URLSearchParams({
     from: config.apiId,
     secret: config.apiSecret,
     to,
-    text: message,
+    nonce: bytesToHex(nonce),
+    box: bytesToHex(box),
   });
 
-  const resp = await fetch("https://msgapi.threema.ch/send_simple", {
+  const resp = await fetch("https://msgapi.threema.ch/send_e2e", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: body.toString(),
@@ -321,7 +335,10 @@ async function sendThreemaMessage(
 
   if (!resp.ok) {
     const errText = await resp.text();
-    throw new Error(`Threema API error ${resp.status}: ${errText}`);
+    const suffix = errText.trim() ? `: ${errText}` : "";
+    throw new Error(
+      `Threema API error ${resp.status} ${resp.statusText}${suffix}`,
+    );
   }
 
   return (await resp.text()).trim();
