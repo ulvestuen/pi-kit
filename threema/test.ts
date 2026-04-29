@@ -21,7 +21,7 @@ import {
   decryptMessage,
   buildThreemaTextPayload,
   computeMac,
-} from "./lib.js";
+} from "./lib.ts";
 
 // ── Helper: generate an X25519 key pair ────────────────────────────────────────
 
@@ -45,7 +45,10 @@ describe("hexToBytes", () => {
   });
 
   it("converts multi-byte hex", () => {
-    assert.deepStrictEqual(hexToBytes("deadbeef"), new Uint8Array([0xde, 0xad, 0xbe, 0xef]));
+    assert.deepStrictEqual(
+      hexToBytes("deadbeef"),
+      new Uint8Array([0xde, 0xad, 0xbe, 0xef]),
+    );
   });
 
   it("handles leading zeros", () => {
@@ -59,6 +62,14 @@ describe("hexToBytes", () => {
   it("round-trips with bytesToHex", () => {
     const original = "0123456789abcdef";
     assert.strictEqual(bytesToHex(hexToBytes(original)), original);
+  });
+
+  it("rejects odd-length hex", () => {
+    assert.throws(() => hexToBytes("abc"), /even number of characters/);
+  });
+
+  it("rejects invalid hex", () => {
+    assert.throws(() => hexToBytes("zz"), /non-hex characters/);
   });
 });
 
@@ -86,7 +97,9 @@ describe("parseFormBody", () => {
   });
 
   it("decodes URL-encoded values", () => {
-    assert.deepStrictEqual(parseFormBody("msg=hello%20world"), { msg: "hello world" });
+    assert.deepStrictEqual(parseFormBody("msg=hello%20world"), {
+      msg: "hello world",
+    });
   });
 
   it("handles values containing '='", () => {
@@ -100,6 +113,12 @@ describe("parseFormBody", () => {
   it("handles URL-encoded keys", () => {
     assert.deepStrictEqual(parseFormBody("my%20key=val"), { "my key": "val" });
   });
+
+  it("treats '+' as a space", () => {
+    assert.deepStrictEqual(parseFormBody("msg=hello+world"), {
+      msg: "hello world",
+    });
+  });
 });
 
 // ════════════════════════════════════════════════════════════════════════════════
@@ -108,12 +127,18 @@ describe("parseFormBody", () => {
 
 describe("removePkcs7Padding", () => {
   it("returns empty for empty input", () => {
-    assert.deepStrictEqual(removePkcs7Padding(new Uint8Array([])), new Uint8Array([]));
+    assert.deepStrictEqual(
+      removePkcs7Padding(new Uint8Array([])),
+      new Uint8Array([]),
+    );
   });
 
   it("removes padding of length 1", () => {
     const input = new Uint8Array([0x41, 0x42, 0x01]);
-    assert.deepStrictEqual(removePkcs7Padding(input), new Uint8Array([0x41, 0x42]));
+    assert.deepStrictEqual(
+      removePkcs7Padding(input),
+      new Uint8Array([0x41, 0x42]),
+    );
   });
 
   it("removes padding of length 4", () => {
@@ -162,6 +187,11 @@ describe("verifyMac", () => {
   it("rejects when a field is tampered", () => {
     const mac = computeMac(params, secret);
     assert.ok(!verifyMac({ ...params, from: "TAMPERED", mac }, secret));
+  });
+
+  it("accepts uppercase MAC hex", () => {
+    const mac = computeMac(params, secret).toUpperCase();
+    assert.ok(verifyMac({ ...params, mac }, secret));
   });
 
   it("rejects when secret differs", () => {
@@ -248,7 +278,10 @@ describe("littleEndianToBigInt", () => {
 
   it("uses little-endian byte order", () => {
     // 0x01 0x02 in LE = 0x0201 = 513
-    assert.strictEqual(littleEndianToBigInt(new Uint8Array([0x01, 0x02])), 513n);
+    assert.strictEqual(
+      littleEndianToBigInt(new Uint8Array([0x01, 0x02])),
+      513n,
+    );
   });
 
   it("handles large values", () => {
@@ -380,13 +413,18 @@ describe("salsa20Rounds", () => {
     // After 20 rounds with sigma constants, state should change
     let changed = false;
     for (let i = 0; i < 16; i++) {
-      if (s[i] !== before[i]) { changed = true; break; }
+      if (s[i] !== before[i]) {
+        changed = true;
+        break;
+      }
     }
     assert.ok(changed, "state should be mutated");
   });
 
   it("is deterministic", () => {
-    const s1 = new Int32Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+    const s1 = new Int32Array([
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+    ]);
     const s2 = Int32Array.from(s1);
     salsa20Rounds(s1);
     salsa20Rounds(s2);
@@ -449,7 +487,7 @@ describe("poly1305", () => {
   it("matches RFC 7539 test vector", () => {
     const msg = new TextEncoder().encode("Cryptographic Forum Research Group");
     const key = hexToBytes(
-      "85d6be7857556d337f4452fe42d506a80103808afb0db2fd4abff6af4149f51b"
+      "85d6be7857556d337f4452fe42d506a80103808afb0db2fd4abff6af4149f51b",
     );
     const expected = hexToBytes("a8061dc1305136c6c22b8baf0c0127a9");
     assert.deepStrictEqual(poly1305(msg, key), expected);
@@ -598,8 +636,18 @@ describe("naclBox / naclBoxOpen", () => {
     const bob = generateKeyPair();
     const msg = new TextEncoder().encode("same message");
 
-    const box1 = naclBox(msg, new Uint8Array(crypto.randomBytes(24)), bob.pub, alice.priv);
-    const box2 = naclBox(msg, new Uint8Array(crypto.randomBytes(24)), bob.pub, alice.priv);
+    const box1 = naclBox(
+      msg,
+      new Uint8Array(crypto.randomBytes(24)),
+      bob.pub,
+      alice.priv,
+    );
+    const box2 = naclBox(
+      msg,
+      new Uint8Array(crypto.randomBytes(24)),
+      bob.pub,
+      alice.priv,
+    );
     assert.notDeepStrictEqual(box1, box2);
   });
 
@@ -632,12 +680,17 @@ describe("naclBoxOpen authentication", () => {
     const alice = generateKeyPair();
     const bob = generateKeyPair();
     const nonce = new Uint8Array(crypto.randomBytes(24));
-    const box = naclBox(new TextEncoder().encode("test"), nonce, bob.pub, alice.priv);
+    const box = naclBox(
+      new TextEncoder().encode("test"),
+      nonce,
+      bob.pub,
+      alice.priv,
+    );
 
     box[0] ^= 0xff; // flip a bit in the tag
     assert.throws(
       () => naclBoxOpen(box, nonce, alice.pub, bob.priv),
-      /authentication failed/
+      /authentication failed/,
     );
   });
 
@@ -645,12 +698,17 @@ describe("naclBoxOpen authentication", () => {
     const alice = generateKeyPair();
     const bob = generateKeyPair();
     const nonce = new Uint8Array(crypto.randomBytes(24));
-    const box = naclBox(new TextEncoder().encode("test"), nonce, bob.pub, alice.priv);
+    const box = naclBox(
+      new TextEncoder().encode("test"),
+      nonce,
+      bob.pub,
+      alice.priv,
+    );
 
     box[16] ^= 0xff; // flip a bit in the ciphertext (after the 16-byte tag)
     assert.throws(
       () => naclBoxOpen(box, nonce, alice.pub, bob.priv),
-      /authentication failed/
+      /authentication failed/,
     );
   });
 
@@ -659,11 +717,16 @@ describe("naclBoxOpen authentication", () => {
     const bob = generateKeyPair();
     const eve = generateKeyPair();
     const nonce = new Uint8Array(crypto.randomBytes(24));
-    const box = naclBox(new TextEncoder().encode("test"), nonce, bob.pub, alice.priv);
+    const box = naclBox(
+      new TextEncoder().encode("test"),
+      nonce,
+      bob.pub,
+      alice.priv,
+    );
 
     assert.throws(
       () => naclBoxOpen(box, nonce, eve.pub, bob.priv), // wrong sender key
-      /authentication failed/
+      /authentication failed/,
     );
   });
 
@@ -672,11 +735,16 @@ describe("naclBoxOpen authentication", () => {
     const bob = generateKeyPair();
     const eve = generateKeyPair();
     const nonce = new Uint8Array(crypto.randomBytes(24));
-    const box = naclBox(new TextEncoder().encode("test"), nonce, bob.pub, alice.priv);
+    const box = naclBox(
+      new TextEncoder().encode("test"),
+      nonce,
+      bob.pub,
+      alice.priv,
+    );
 
     assert.throws(
       () => naclBoxOpen(box, nonce, alice.pub, eve.priv), // wrong private key
-      /authentication failed/
+      /authentication failed/,
     );
   });
 
@@ -685,11 +753,16 @@ describe("naclBoxOpen authentication", () => {
     const bob = generateKeyPair();
     const nonce = new Uint8Array(crypto.randomBytes(24));
     const wrongNonce = new Uint8Array(crypto.randomBytes(24));
-    const box = naclBox(new TextEncoder().encode("test"), nonce, bob.pub, alice.priv);
+    const box = naclBox(
+      new TextEncoder().encode("test"),
+      nonce,
+      bob.pub,
+      alice.priv,
+    );
 
     assert.throws(
       () => naclBoxOpen(box, wrongNonce, alice.pub, bob.priv),
-      /authentication failed/
+      /authentication failed/,
     );
   });
 
@@ -697,13 +770,18 @@ describe("naclBoxOpen authentication", () => {
     const alice = generateKeyPair();
     const bob = generateKeyPair();
     const nonce = new Uint8Array(crypto.randomBytes(24));
-    const box = naclBox(new TextEncoder().encode("test message"), nonce, bob.pub, alice.priv);
+    const box = naclBox(
+      new TextEncoder().encode("test message"),
+      nonce,
+      bob.pub,
+      alice.priv,
+    );
 
     // Truncate to just tag + partial ciphertext
     const truncated = box.slice(0, 20);
     assert.throws(
       () => naclBoxOpen(truncated, nonce, alice.pub, bob.priv),
-      /authentication failed/
+      /authentication failed/,
     );
   });
 
@@ -711,14 +789,19 @@ describe("naclBoxOpen authentication", () => {
     const alice = generateKeyPair();
     const bob = generateKeyPair();
     const nonce = new Uint8Array(crypto.randomBytes(24));
-    const box = naclBox(new TextEncoder().encode("test"), nonce, bob.pub, alice.priv);
+    const box = naclBox(
+      new TextEncoder().encode("test"),
+      nonce,
+      bob.pub,
+      alice.priv,
+    );
 
     const extended = new Uint8Array(box.length + 1);
     extended.set(box);
     extended[box.length] = 0x42;
     assert.throws(
       () => naclBoxOpen(extended, nonce, alice.pub, bob.priv),
-      /authentication failed/
+      /authentication failed/,
     );
   });
 });
@@ -803,7 +886,7 @@ describe("decryptMessage", () => {
       bytesToHex(box),
       bytesToHex(nonce),
       sender.pub,
-      recipient.priv
+      recipient.priv,
     );
     assert.strictEqual(text, "Hello from Threema");
   });
@@ -816,7 +899,12 @@ describe("decryptMessage", () => {
     const payload = buildThreemaTextPayload(longText);
 
     const box = naclBox(payload, nonce, recipient.pub, sender.priv);
-    const text = decryptMessage(bytesToHex(box), bytesToHex(nonce), sender.pub, recipient.priv);
+    const text = decryptMessage(
+      bytesToHex(box),
+      bytesToHex(nonce),
+      sender.pub,
+      recipient.priv,
+    );
     assert.strictEqual(text, longText);
   });
 
@@ -827,7 +915,12 @@ describe("decryptMessage", () => {
     const payload = buildThreemaTextPayload("Hej! 🇸🇪 Tjena!");
 
     const box = naclBox(payload, nonce, recipient.pub, sender.priv);
-    const text = decryptMessage(bytesToHex(box), bytesToHex(nonce), sender.pub, recipient.priv);
+    const text = decryptMessage(
+      bytesToHex(box),
+      bytesToHex(nonce),
+      sender.pub,
+      recipient.priv,
+    );
     assert.strictEqual(text, "Hej! 🇸🇪 Tjena!");
   });
 
@@ -843,8 +936,14 @@ describe("decryptMessage", () => {
 
     const box = naclBox(fakePayload, nonce, recipient.pub, sender.priv);
     assert.throws(
-      () => decryptMessage(bytesToHex(box), bytesToHex(nonce), sender.pub, recipient.priv),
-      /Unsupported message type: 0x10/
+      () =>
+        decryptMessage(
+          bytesToHex(box),
+          bytesToHex(nonce),
+          sender.pub,
+          recipient.priv,
+        ),
+      /Unsupported message type: 0x10/,
     );
   });
 
@@ -859,8 +958,14 @@ describe("decryptMessage", () => {
 
     const box = naclBox(fakePayload, nonce, recipient.pub, sender.priv);
     assert.throws(
-      () => decryptMessage(bytesToHex(box), bytesToHex(nonce), sender.pub, recipient.priv),
-      /Unsupported message type: 0x80/
+      () =>
+        decryptMessage(
+          bytesToHex(box),
+          bytesToHex(nonce),
+          sender.pub,
+          recipient.priv,
+        ),
+      /Unsupported message type: 0x80/,
     );
   });
 
@@ -873,8 +978,14 @@ describe("decryptMessage", () => {
 
     const box = naclBox(payload, nonce, recipient.pub, sender.priv);
     assert.throws(
-      () => decryptMessage(bytesToHex(box), bytesToHex(nonce), sender.pub, eve.priv),
-      /authentication failed/
+      () =>
+        decryptMessage(
+          bytesToHex(box),
+          bytesToHex(nonce),
+          sender.pub,
+          eve.priv,
+        ),
+      /authentication failed/,
     );
   });
 
@@ -889,8 +1000,9 @@ describe("decryptMessage", () => {
     // Flip a character in the middle of the hex string
     const tampered = boxHex.slice(0, 40) + "ff" + boxHex.slice(42);
     assert.throws(
-      () => decryptMessage(tampered, bytesToHex(nonce), sender.pub, recipient.priv),
-      /authentication failed/
+      () =>
+        decryptMessage(tampered, bytesToHex(nonce), sender.pub, recipient.priv),
+      /authentication failed/,
     );
   });
 });
@@ -917,25 +1029,34 @@ describe("end-to-end webhook payload simulation", () => {
     const boxHex = bytesToHex(box);
 
     // 2. Build the webhook POST params (as Threema Gateway would send)
-    const webhookParams = {
+    const webhookParams: {
+      from: string;
+      to: string;
+      messageId: string;
+      date: string;
+      nonce: string;
+      box: string;
+      mac: string;
+    } = {
       from: "SENDER01",
       to: "*GATEWAY",
       messageId: bytesToHex(new Uint8Array(crypto.randomBytes(8))),
       date: String(Math.floor(Date.now() / 1000)),
       nonce: nonceHex,
       box: boxHex,
+      mac: "",
     };
-    webhookParams.mac = computeMac(webhookParams, apiSecret) as any;
+    webhookParams.mac = computeMac(webhookParams, apiSecret);
 
     // 3. Verify MAC (as the webhook handler would)
-    assert.ok(verifyMac(webhookParams as any, apiSecret));
+    assert.ok(verifyMac(webhookParams, apiSecret));
 
     // 4. Decrypt (as the webhook handler would)
     const decrypted = decryptMessage(
       webhookParams.box,
       webhookParams.nonce,
       senderKeyPair.pub,
-      gatewayKeyPair.priv
+      gatewayKeyPair.priv,
     );
     assert.strictEqual(decrypted, messageText);
   });
@@ -953,7 +1074,9 @@ describe("end-to-end webhook payload simulation", () => {
     const mac = computeMac(params, apiSecret);
 
     // Tamper with the 'from' field
-    assert.ok(!verifyMac({ ...params, from: "EVILDOER", mac } as any, apiSecret));
+    assert.ok(
+      !verifyMac({ ...params, from: "EVILDOER", mac } as any, apiSecret),
+    );
   });
 
   it("serializes and deserializes webhook form body correctly", () => {

@@ -1,0 +1,9 @@
+.env
+.env.local
+*.pem
+*.der
+threema.json
+
+node_modules/
+dist/
+

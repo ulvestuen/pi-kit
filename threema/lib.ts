@@ -3,6 +3,15 @@ import * as crypto from "node:crypto";
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 export function hexToBytes(hex: string): Uint8Array {
+  if (hex.length % 2 !== 0) {
+    throw new Error(
+      `Hex string must have an even number of characters (got ${hex.length})`,
+    );
+  }
+  if (!/^[0-9a-fA-F]*$/.test(hex)) {
+    throw new Error("Hex string contains non-hex characters");
+  }
+
   const bytes = new Uint8Array(hex.length / 2);
   for (let i = 0; i < hex.length; i += 2) {
     bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
@@ -19,8 +28,11 @@ export function bytesToHex(bytes: Uint8Array): string {
 export function parseFormBody(body: string): Record<string, string> {
   const params: Record<string, string> = {};
   for (const pair of body.split("&")) {
+    if (!pair) continue;
     const [key, ...rest] = pair.split("=");
-    params[decodeURIComponent(key)] = decodeURIComponent(rest.join("="));
+    const decode = (value: string) =>
+      decodeURIComponent(value.replace(/\+/g, " "));
+    params[decode(key)] = decode(rest.join("="));
   }
   return params;
 }
@@ -33,13 +45,30 @@ export function removePkcs7Padding(data: Uint8Array): Uint8Array {
 }
 
 export function verifyMac(
-  params: Record<string, string>,
-  secret: string
+  params: {
+    from: string;
+    to: string;
+    messageId: string;
+    date: string;
+    nonce: string;
+    box: string;
+    mac: string;
+  },
+  secret: string,
 ): boolean {
   const data =
-    params.from + params.to + params.messageId + params.date + params.nonce + params.box;
+    params.from +
+    params.to +
+    params.messageId +
+    params.date +
+    params.nonce +
+    params.box;
   const hmac = crypto.createHmac("sha256", secret).update(data).digest("hex");
-  return hmac === params.mac;
+  const expected = Buffer.from(hmac, "utf8");
+  const received = Buffer.from((params.mac || "").toLowerCase(), "utf8");
+
+  if (expected.length !== received.length) return false;
+  return crypto.timingSafeEqual(expected, received);
 }
 
 // ── NaCl crypto primitives ─────────────────────────────────────────────────────
@@ -145,7 +174,11 @@ export function hsalsa20(key: Uint8Array, input: Uint8Array): Uint8Array {
   return out;
 }
 
-export function salsa20Block(key: Uint8Array, nonce8: Uint8Array, counter: number): Uint8Array {
+export function salsa20Block(
+  key: Uint8Array,
+  nonce8: Uint8Array,
+  counter: number,
+): Uint8Array {
   const s = new Int32Array([
     0x61707865,
     readU32LE(key, 0),
@@ -209,7 +242,7 @@ export function naclBoxOpen(
   ciphertext: Uint8Array,
   nonce: Uint8Array,
   senderPublicKey: Uint8Array,
-  recipientPrivateKey: Uint8Array
+  recipientPrivateKey: Uint8Array,
 ): Uint8Array {
   const myPrivKey = crypto.createPrivateKey({
     key: Buffer.concat([
@@ -228,7 +261,7 @@ export function naclBoxOpen(
     type: "spki",
   });
   const sharedSecret = new Uint8Array(
-    crypto.diffieHellman({ privateKey: myPrivKey, publicKey: theirPubKey })
+    crypto.diffieHellman({ privateKey: myPrivKey, publicKey: theirPubKey }),
   );
 
   const subkey = hsalsa20(sharedSecret, nonce.slice(0, 16));
@@ -262,7 +295,7 @@ export function naclBox(
   plaintext: Uint8Array,
   nonce: Uint8Array,
   recipientPublicKey: Uint8Array,
-  senderPrivateKey: Uint8Array
+  senderPrivateKey: Uint8Array,
 ): Uint8Array {
   const myPrivKey = crypto.createPrivateKey({
     key: Buffer.concat([
@@ -281,7 +314,7 @@ export function naclBox(
     type: "spki",
   });
   const sharedSecret = new Uint8Array(
-    crypto.diffieHellman({ privateKey: myPrivKey, publicKey: theirPubKey })
+    crypto.diffieHellman({ privateKey: myPrivKey, publicKey: theirPubKey }),
   );
 
   const subkey = hsalsa20(sharedSecret, nonce.slice(0, 16));
@@ -316,7 +349,9 @@ export function x25519PublicKey(privateKey: Uint8Array): Uint8Array {
     format: "der",
     type: "pkcs8",
   });
-  const pubKeyDer = crypto.createPublicKey(privKeyObj).export({ format: "der", type: "spki" });
+  const pubKeyDer = crypto
+    .createPublicKey(privKeyObj)
+    .export({ format: "der", type: "spki" });
   return new Uint8Array(pubKeyDer.slice(12));
 }
 
@@ -324,7 +359,7 @@ export function decryptMessage(
   boxHex: string,
   nonceHex: string,
   senderPublicKey: Uint8Array,
-  privateKey: Uint8Array
+  privateKey: Uint8Array,
 ): string {
   const box = hexToBytes(boxHex);
   const nonce = hexToBytes(nonceHex);
@@ -335,7 +370,7 @@ export function decryptMessage(
   const messageType = unpadded[0];
   if (messageType !== 0x01) {
     throw new Error(
-      `Unsupported message type: 0x${messageType.toString(16).padStart(2, "0")} (only text messages supported)`
+      `Unsupported message type: 0x${messageType.toString(16).padStart(2, "0")} (only text messages supported)`,
     );
   }
 
@@ -365,9 +400,22 @@ export function buildThreemaTextPayload(text: string): Uint8Array {
 }
 
 export function computeMac(
-  params: { from: string; to: string; messageId: string; date: string; nonce: string; box: string },
-  secret: string
+  params: {
+    from: string;
+    to: string;
+    messageId: string;
+    date: string;
+    nonce: string;
+    box: string;
+  },
+  secret: string,
 ): string {
-  const data = params.from + params.to + params.messageId + params.date + params.nonce + params.box;
+  const data =
+    params.from +
+    params.to +
+    params.messageId +
+    params.date +
+    params.nonce +
+    params.box;
   return crypto.createHmac("sha256", secret).update(data).digest("hex");
 }
