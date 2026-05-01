@@ -6,6 +6,9 @@
   "keywords": [
     "pi-package"
   ],
+  "workspaces": [
+    "threema"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/ulvestuen/pi-kit.git"

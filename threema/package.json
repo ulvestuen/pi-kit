@@ -4,12 +4,13 @@
   "description": "Pi coding agent extension for two-way Threema messaging",
   "type": "module",
   "scripts": {
-    "test": "node --experimental-strip-types --test test.ts"
+    "test": "tsx --test test.ts"
   },
   "devDependencies": {
-    "@mariozechner/pi-ai": "^0.70.6",
-    "@mariozechner/pi-coding-agent": "^0.70.6",
+    "@mariozechner/pi-ai": "^0.71.0",
+    "@mariozechner/pi-coding-agent": "^0.71.0",
     "@types/node": "^22.0.0",
+    "tsx": "^4.21.0",
     "typescript": "^6.0.3"
   }
 }
