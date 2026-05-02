@@ -377,26 +377,25 @@ export function decryptMessage(
   return new TextDecoder().decode(unpadded.slice(1));
 }
 
-// Build a Threema-format E2E encrypted text message payload (for testing)
+function pkcs7Pad(data: Uint8Array): Uint8Array {
+  let padLen = crypto.randomInt(1, 256);
+  if (data.length + padLen < 32) {
+    padLen = 32 - data.length;
+  }
+
+  const padded = new Uint8Array(data.length + padLen);
+  padded.set(data);
+  padded.fill(padLen, data.length);
+  return padded;
+}
+
 export function buildThreemaTextPayload(text: string): Uint8Array {
   const textBytes = new TextEncoder().encode(text);
-  const payload = new Uint8Array(1 + textBytes.length);
+  const paddedText = pkcs7Pad(textBytes);
+  const payload = new Uint8Array(1 + paddedText.length);
   payload[0] = 0x01; // text message type
-  payload.set(textBytes, 1);
-  // PKCS#7 pad to minimum 32 bytes
-  const minLen = 32;
-  if (payload.length >= minLen) {
-    const padLen = 1;
-    const padded = new Uint8Array(payload.length + padLen);
-    padded.set(payload);
-    padded.fill(padLen, payload.length);
-    return padded;
-  }
-  const padLen = minLen - payload.length;
-  const padded = new Uint8Array(minLen);
-  padded.set(payload);
-  padded.fill(padLen, payload.length);
-  return padded;
+  payload.set(paddedText, 1);
+  return payload;
 }
 
 export function computeMac(

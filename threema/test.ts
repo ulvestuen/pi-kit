@@ -823,17 +823,17 @@ describe("buildThreemaTextPayload", () => {
     assert.strictEqual(payload[2], "i".charCodeAt(0));
   });
 
-  it("pads short messages to at least 32 bytes", () => {
+  it("pads the inner message data to at least 32 bytes", () => {
     const payload = buildThreemaTextPayload("hi");
-    assert.ok(payload.length >= 32);
+    assert.ok(payload.slice(1).length >= 32);
   });
 
   it("applies PKCS#7 padding", () => {
     const payload = buildThreemaTextPayload("hi");
-    // 1 (type) + 2 (text) = 3 bytes content, pad to 32 = 29 bytes padding
+    const paddedData = payload.slice(1);
     const padLen = payload[payload.length - 1];
-    assert.strictEqual(padLen, 29);
-    // All padding bytes should equal padLen
+    assert.ok(padLen >= 1 && padLen <= 255);
+    assert.ok(paddedData.length >= 32);
     for (let i = payload.length - padLen; i < payload.length; i++) {
       assert.strictEqual(payload[i], padLen);
     }
@@ -857,7 +857,7 @@ describe("buildThreemaTextPayload", () => {
   it("handles empty text", () => {
     const payload = buildThreemaTextPayload("");
     assert.strictEqual(payload[0], 0x01);
-    assert.ok(payload.length >= 32);
+    assert.ok(payload.slice(1).length >= 32);
     const unpadded = removePkcs7Padding(payload);
     assert.strictEqual(unpadded.length, 1); // just the type byte
   });
