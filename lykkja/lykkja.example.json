@@ -1,0 +1,7 @@
+{
+  "passThreshold": 8,
+  "scaleMax": 10,
+  "maxIterations": 25,
+  "injectSystemPrompt": true,
+  "showStatus": true
+}

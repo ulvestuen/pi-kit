@@ -7,7 +7,8 @@
     "pi-package"
   ],
   "workspaces": [
-    "threema"
+    "threema",
+    "lykkja"
   ],
   "repository": {
     "type": "git",
@@ -15,7 +16,14 @@
   },
   "pi": {
     "extensions": [
-      "./threema"
+      "./threema",
+      "./lykkja"
+    ],
+    "skills": [
+      "./lykkja/skills"
+    ],
+    "prompts": [
+      "./lykkja/prompts"
     ]
   }
 }
