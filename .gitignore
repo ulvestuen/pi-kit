@@ -3,6 +3,7 @@
 *.pem
 *.der
 threema.json
+lykkja.json
 
 node_modules/
 dist/

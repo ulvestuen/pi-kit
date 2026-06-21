@@ -1,0 +1,21 @@
+{
+  "name": "pi-lykkja",
+  "version": "1.0.0",
+  "description": "Loop-based agentic development framework for the pi coding agent — a Plan-Do-Check-Act self-checking loop with tools, skills, and slash commands",
+  "type": "module",
+  "scripts": {
+    "test": "tsx --test test.ts"
+  },
+  "pi": {
+    "extensions": ["./index.ts"],
+    "skills": ["./skills"],
+    "prompts": ["./prompts"]
+  },
+  "devDependencies": {
+    "@mariozechner/pi-ai": "^0.71.0",
+    "@mariozechner/pi-coding-agent": "^0.71.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3"
+  }
+}
