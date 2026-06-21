@@ -8,7 +8,8 @@ description: Run the lykkja Plan-Do-Check-Act self-checking loop to drive a task
 lykkja drives a task to a strict, explicit bar by looping. It combines the
 Plan-Do-Check-Act cycle from systems engineering with a brutally honest
 self-scoring protocol. You run the loop yourself; the `lykkja_start` and
-`lykkja_checkpoint` tools keep the score and tell you when to stop.
+`lykkja_checkpoint` tools keep the score and return the next automated prompt
+for the following PDCA phase.
 
 ## When to use this
 
@@ -42,12 +43,13 @@ weaker.
 3. **CHECK** — Score the result on every criterion, 1 to 10, honestly. List
    exactly what is still weak for anything below its threshold. See the
    `honest-verification` skill.
-4. **DECIDE** — Call `lykkja_checkpoint` with the step (PLAN), what changed
-   (DO), and the scores (CHECK). The tool returns the verdict:
-   - **FINAL** — every criterion met its threshold. Stop. State that the bar is
-     met and summarize the result.
-   - **ITERATING** — at least one criterion is below its threshold. The tool
-     names the weakest one. Fix that first, then run another pass.
+4. **ACT** — Call `lykkja_checkpoint` with the step (PLAN), what changed
+   (DO), and the scores (CHECK). The tool returns both the ACT verdict and an
+   `AUTOMATED ... PROMPT`; follow that prompt immediately:
+   - **FINAL** — every criterion met its threshold. Run ACT: state `FINAL`, say
+     the bar is met, and summarize the evidence.
+   - **ITERATING** — at least one criterion is below its threshold. Start the
+     next pass immediately, planning around the weakest named criterion first.
    - **STOPPED** — the loop hit its safety limit on passes without clearing the
      bar. Stop and report honestly which criteria are still failing and why,
      rather than declaring success.
@@ -59,8 +61,9 @@ weaker.
 - Each pass must target the weakest criterion from the previous check first.
 - Score honestly. Inflating a score to escape the loop defeats the entire
   point and produces work that silently misses the bar.
-- Do not stall waiting for the user. If something is ambiguous, make a sensible
-  assumption, record it in the DO summary or `changes`, and keep looping.
+- Do not stall waiting for the user between PDCA phases. If something is
+  ambiguous, make a sensible assumption, record it in the DO summary or
+  `changes`, and keep looping.
 - Keep PLAN to a single step. If you find yourself listing several steps, the
   step is too big — pick the first one.
 

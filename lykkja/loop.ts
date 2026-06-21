@@ -94,7 +94,7 @@ export interface Decision {
   weakest: string | null;
   /** All criteria that did not meet their threshold, weakest first. */
   failing: CriterionScore[];
-  /** Human-readable DECIDE summary. */
+  /** Human-readable ACT summary. */
   message: string;
 }
 
@@ -272,7 +272,7 @@ export function failingScores(
 }
 
 /**
- * Record one full PLAN/DO/CHECK pass and compute the DECIDE verdict.
+ * Record one full PLAN/DO/CHECK pass and compute the ACT verdict.
  * Mutates and returns the same state object, plus the decision.
  */
 export function recordCheckpoint(

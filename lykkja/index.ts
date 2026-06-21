@@ -31,7 +31,8 @@ function buildSystemPrompt(config: LykkjaConfig): string {
     `1. Call lykkja_start with the task and strict, measurable success criteria (default pass bar ${config.passThreshold}/${config.scaleMax}).`,
     "2. Each pass: PLAN the single next step, DO the work, then call lykkja_checkpoint with that step, what changed, and an honest 1-" +
       `${config.scaleMax} score for every criterion.`,
-    "3. lykkja_checkpoint returns the DECIDE verdict. If ITERATING, fix the weakest criterion first and loop again. If FINAL, stop.",
+    "3. lykkja_checkpoint returns the ACT verdict and an explicit next-step prompt. Follow that prompt immediately: iterate on the weakest criterion, finalize on FINAL, or report failure on STOPPED.",
+    "4. Do not wait for the user between PDCA phases unless the user explicitly asked for a pause; the tool output prompts the next phase.",
     "",
     "Score brutally honestly — never inflate to end the loop. For the full protocol, use the pdca-loop skill.",
   ].join("\n");
@@ -81,6 +82,54 @@ function renderDashboard(state: LoopState): string {
   return lines.join("\n");
 }
 
+function renderAutomationPrompt(state: LoopState): string {
+  const s = summarizeLoop(state);
+  const criteria = state.criteria
+    .map((c) => `- ${c.name} (threshold ${c.threshold}/${state.scaleMax})`)
+    .join("\n");
+
+  if (s.status === "final") {
+    return [
+      "AUTOMATED ACT PROMPT:",
+      "The latest checkpoint is FINAL. Do not keep iterating.",
+      "1. State `FINAL`.",
+      "2. Summarize what was produced and the evidence that every criterion passed.",
+      "3. Mention any assumptions or follow-up risks without weakening the result.",
+    ].join("\n");
+  }
+
+  if (s.status === "stopped") {
+    return [
+      "AUTOMATED STOP PROMPT:",
+      "The loop hit its safety limit. Do not claim success.",
+      "1. Report which criteria still fail and why.",
+      "2. Summarize the best partial result and what would be needed next.",
+    ].join("\n");
+  }
+
+  if (!s.latest) {
+    return [
+      "AUTOMATED PLAN→DO→CHECK PROMPT:",
+      "Start pass 1 now, without asking for another prompt.",
+      "PLAN: Choose exactly one next step that best advances the task.",
+      "DO: Execute that step using the available tools.",
+      "CHECK: Gather concrete evidence and score every criterion honestly:",
+      criteria,
+      "ACT: Call lykkja_checkpoint with the PLAN, DO summary, and all scores."
+    ].join("\n");
+  }
+
+  return [
+    "AUTOMATED ACT→PLAN→DO→CHECK PROMPT:",
+    `The verdict is ITERATING. Start pass ${s.iterationCount + 1} now, without asking for another prompt.`,
+    `PLAN: Fix the weakest failing criterion first: ${s.weakest}. Choose one next step only.`,
+    "DO: Execute that step using the available tools.",
+    "CHECK: Re-gather evidence and score every criterion honestly:",
+    criteria,
+    "ACT: Call lykkja_checkpoint again. Continue until the tool returns FINAL or STOPPED."
+  ].join("\n");
+}
+
 export default function (pi: ExtensionAPI) {
   let config: LykkjaConfig;
   try {
@@ -121,6 +170,7 @@ export default function (pi: ExtensionAPI) {
       promptGuidelines: [
         "Use lykkja_start when a task should be driven to a strict, measurable bar rather than done in one shot.",
         "Write criteria that can be scored honestly: avoid vague goals like 'good code'; prefer 'all tests pass', 'no type errors', 'handles empty input'.",
+        "After lykkja_start returns, follow its AUTOMATED PLAN→DO→CHECK PROMPT immediately unless the user explicitly requested planning only.",
       ],
       parameters: Type.Object({
         task: Type.String({
@@ -164,8 +214,7 @@ export default function (pi: ExtensionAPI) {
 
         const text =
           `lykkja loop started.\n\n${renderDashboard(loop)}\n\n` +
-          `Now run the loop: PLAN the single next step, DO it, then call lykkja_checkpoint ` +
-          `with that step, what changed, and an honest 1-${loop.scaleMax} score for every criterion.`;
+          renderAutomationPrompt(loop);
         return {
           content: [{ type: "text" as const, text }],
           details: summarizeLoop(loop),
@@ -179,12 +228,13 @@ export default function (pi: ExtensionAPI) {
       name: "lykkja_checkpoint",
       label: "lykkja: Checkpoint",
       description:
-        "Record one full PLAN/DO/CHECK pass of the active lykkja loop and get the DECIDE verdict. Provide the single step taken, what changed, and an honest score for every criterion. Returns FINAL (stop) or ITERATING (fix the weakest criterion and loop again).",
+        "Record one full PLAN/DO/CHECK pass of the active lykkja loop and get the ACT verdict. Provide the single step taken, what changed, and an honest score for every criterion. Returns FINAL (stop) or ITERATING (fix the weakest criterion and loop again).",
       promptSnippet:
-        "lykkja_checkpoint: score the current pass against the criteria and get the iterate/stop verdict.",
+        "lykkja_checkpoint: score the current pass against the criteria and get the ACT verdict/prompt.",
       promptGuidelines: [
         "Call lykkja_checkpoint once per loop pass, after doing the work, scoring every criterion honestly on the 1..scale range.",
-        "If the verdict is ITERATING, fix the named weakest criterion first, then loop again. Only stop on FINAL.",
+        "Follow the AUTOMATED prompt in the tool result: ITERATING means immediately start the next pass on the weakest criterion; FINAL means finalize; STOPPED means report failure honestly.",
+        "Do not wait for an extra user prompt between PDCA phases unless the user explicitly requested a pause.",
       ],
       parameters: Type.Object({
         plan: Type.String({
@@ -225,7 +275,7 @@ export default function (pi: ExtensionAPI) {
         persist();
         updateStatus(ctx);
 
-        const text = `${decision.message}\n\n${renderDashboard(loop)}`;
+        const text = `${decision.message}\n\n${renderDashboard(loop)}\n\n${renderAutomationPrompt(loop)}`;
         return {
           content: [{ type: "text" as const, text }],
           details: decision,

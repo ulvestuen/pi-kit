@@ -70,8 +70,8 @@ A pass where you honestly drop a criterion from 8 to 5 because you found a real
 defect is the loop working, not the loop failing. Reward yourself for finding
 the weakness, not for reaching FINAL quickly.
 
-## Then decide
+## Then act
 
-Feed the honest scores into `lykkja_checkpoint`. Trust its verdict: if it says
-ITERATING, the bar is genuinely not met — fix the weakest criterion it names and
-loop again. See the `pdca-loop` skill for the full cycle.
+Feed the honest scores into `lykkja_checkpoint`. Trust its ACT verdict: if it
+says ITERATING, the bar is genuinely not met — fix the weakest criterion it
+names and loop again. See the `pdca-loop` skill for the full cycle.

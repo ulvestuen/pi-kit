@@ -19,8 +19,9 @@ Plan-Do-Check-Act loop instead of a single shot.
 2. **DO** — make the single next change for this pass.
 3. **CHECK** — score every criterion 1-10 against real evidence (run the tests,
    the type-checker, the edge case). Be brutally honest. (Skill: `honest-verification`.)
-4. **DECIDE** — call `lykkja_checkpoint`. On ITERATING, fix the weakest criterion
-   first and loop again. On FINAL, stop and summarize.
+4. **ACT** — call `lykkja_checkpoint`. Follow the returned AUTOMATED prompt:
+   on ITERATING, immediately fix the weakest criterion first and loop again; on
+   FINAL, stop and summarize; on STOPPED, report the remaining failures.
 
 Project-specific bars (edit for your repo):
 
@@ -30,8 +31,9 @@ Project-specific bars (edit for your repo):
 - <!-- add your own: performance budgets, accessibility, API surface, etc. -->
 
 Do not declare a task done until every criterion meets its threshold. Do not
-inflate a score to end the loop. If something is ambiguous, make a sensible
-assumption, note it, and keep going rather than stopping to ask.
+inflate a score to end the loop. Do not wait for the user between PDCA phases
+unless they explicitly asked for a pause. If something is ambiguous, make a
+sensible assumption, note it, and keep going rather than stopping to ask.
 
 Quick start: `/lykkja-run <task>` opens and runs a loop end to end. `/lykkja`
 shows the live dashboard.

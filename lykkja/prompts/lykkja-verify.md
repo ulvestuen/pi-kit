@@ -1,9 +1,9 @@
 ---
-description: Run the CHECK/DECIDE step of the lykkja loop — score the current work honestly and decide whether to iterate
+description: Run the CHECK/ACT step of the lykkja loop — score the current work honestly and act on whether to iterate
 argument-hint: [what changed this pass]
 ---
 
-Run the **CHECK** and **DECIDE** steps of the active lykkja loop.
+Run the **CHECK** and **ACT** steps of the active lykkja loop.
 
 WHAT CHANGED THIS PASS (if empty, infer it from the recent work):
 $ARGUMENTS
