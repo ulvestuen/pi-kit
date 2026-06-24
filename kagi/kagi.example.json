@@ -1,0 +1,6 @@
+{
+  "apiKey": "your_kagi_api_token_here",
+  "baseUrl": "https://kagi.com/api/v0",
+  "limit": 10,
+  "includeRelated": false
+}
