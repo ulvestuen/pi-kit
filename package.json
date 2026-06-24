@@ -8,7 +8,8 @@
   ],
   "workspaces": [
     "threema",
-    "lykkja"
+    "lykkja",
+    "exa"
   ],
   "repository": {
     "type": "git",
@@ -17,7 +18,8 @@
   "pi": {
     "extensions": [
       "./threema",
-      "./lykkja"
+      "./lykkja",
+      "./exa"
     ],
     "skills": [
       "./lykkja/skills"

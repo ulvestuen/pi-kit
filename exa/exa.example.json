@@ -1,0 +1,8 @@
+{
+  "apiKey": "your_exa_api_key_here",
+  "baseUrl": "https://api.exa.ai",
+  "numResults": 5,
+  "searchType": "auto",
+  "includeText": true,
+  "maxCharacters": 1000
+}

@@ -4,6 +4,7 @@
 *.der
 threema.json
 lykkja.json
+exa.json
 
 node_modules/
 dist/
