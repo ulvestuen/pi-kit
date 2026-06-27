@@ -6,8 +6,8 @@ This repository contains pi-related integrations and extensions.
 
 - [`lykkja/`](./lykkja/) – loop-based agentic development framework for pi (a Plan-Do-Check-Act self-checking loop with tools, skills, and slash commands)
 - [`threema/`](./threema/) – Threema integration for pi
-- [`exa/`](./exa/) – web search integration for pi via [Exa](https://exa.ai)
-- [`kagi/`](./kagi/) – web search integration for pi via [Kagi](https://kagi.com)
+- [`exa/`](./exa/) – Exa web search extension for pi (adds the `exa_search` tool and `/exa` status command)
+- [`kagi/`](./kagi/) – Kagi web search extension for pi (adds the `kagi_search` tool and `/kagi` status command)
 
 ## Documentation
 
