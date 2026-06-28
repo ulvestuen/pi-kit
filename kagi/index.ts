@@ -2,7 +2,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { defineTool } from "@mariozechner/pi-coding-agent";
 import { Type } from "@mariozechner/pi-ai";
 import { getConfigPath, loadConfig, type KagiConfig } from "./config.ts";
-import { kagiSearch, formatResults } from "./search.ts";
+import { kagiSearch, formatResults, getSearchResults } from "./search.ts";
 
 function buildSystemPrompt(config: KagiConfig): string {
   return [
@@ -33,9 +33,7 @@ function buildSearchTool(config: KagiConfig) {
     }),
     async execute(_toolCallId, params) {
       const response = await kagiSearch(params, config);
-      const resultCount = (response.data ?? []).filter(
-        (item) => item.t === 0,
-      ).length;
+      const resultCount = getSearchResults(response).length;
       return {
         content: [
           {

@@ -13,6 +13,7 @@ import {
 import {
   buildSearchParams,
   formatResults,
+  getSearchResults,
   type KagiSearchResponse,
 } from "./search.ts";
 import type { KagiConfig } from "./config.ts";
@@ -182,6 +183,42 @@ describe("formatResults", () => {
       false,
     );
     assert.match(out, /\(untitled\)/);
+  });
+
+  it("renders v1 object-shaped data.search responses", () => {
+    const resp: KagiSearchResponse = {
+      data: {
+        search: [{ url: "https://v1.example.com", title: "V1 Result" }],
+        related: ["v1 related"],
+      },
+    };
+    const out = formatResults(resp, "q", true);
+    assert.match(out, /1\. V1 Result/);
+    assert.match(out, /https:\/\/v1\.example\.com/);
+    assert.match(out, /v1 related/);
+  });
+});
+
+describe("getSearchResults", () => {
+  it("counts array-shaped current API responses", () => {
+    assert.strictEqual(
+      getSearchResults({
+        data: [
+          { t: 0, url: "https://a.com" },
+          { t: 1, list: ["related"] },
+        ],
+      }).length,
+      1,
+    );
+  });
+
+  it("counts object-shaped v1 API responses without calling .filter on an object", () => {
+    assert.strictEqual(
+      getSearchResults({
+        data: { search: [{ url: "https://v1.example.com" }] },
+      }).length,
+      1,
+    );
   });
 });
 

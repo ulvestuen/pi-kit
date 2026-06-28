@@ -75,6 +75,14 @@ function isRelatedSearches(item: KagiSearchItem): item is KagiRelatedSearches {
   return item.t === 1;
 }
 
+/** Extract organic search results from either supported Kagi response shape. */
+export function getSearchResults(response: KagiSearchResponse): KagiSearchResult[] {
+  const rawData = response.data;
+  return Array.isArray(rawData)
+    ? rawData.filter(isSearchResult)
+    : (rawData?.search ?? []);
+}
+
 /** Render a Kagi search response as readable text for the agent. */
 export function formatResults(
   response: KagiSearchResponse,
@@ -83,9 +91,7 @@ export function formatResults(
 ): string {
   const rawData = response.data;
   const items = Array.isArray(rawData) ? rawData : [];
-  const results = Array.isArray(rawData)
-    ? items.filter(isSearchResult)
-    : (rawData?.search ?? []);
+  const results = getSearchResults(response);
 
   if (results.length === 0) {
     return `No Kagi results found for "${query}".`;
@@ -167,7 +173,7 @@ export async function kagiSearch(
   const errors = json.error ?? json.errors;
   if (errors && errors.length > 0) {
     const msg = errors
-      .map((e) => e.msg || e.message || `code ${e.code}`)
+      .map((e) => e.msg || ("message" in e ? e.message : undefined) || `code ${e.code}`)
       .join("; ");
     throw new Error(`Kagi API returned an error: ${msg}`);
   }
