@@ -91,7 +91,7 @@ Then edit it:
 ```json
 {
   "apiKey": "your_kagi_api_token_here",
-  "baseUrl": "https://kagi.com/api/v0",
+  "baseUrl": "https://kagi.com/api/v1",
   "limit": 10,
   "includeRelated": false
 }
@@ -105,7 +105,7 @@ Required:
 
 Optional:
 
-- `baseUrl` – Kagi API base URL (default `https://kagi.com/api/v0`).
+- `baseUrl` – Kagi API base URL (default `https://kagi.com/api/v1`).
 - `limit` – default number of results, 1–100 (default `10`). Each call can override this.
 - `includeRelated` – whether to append Kagi's "related searches" suggestions to the output (default `false`).
 

@@ -2,7 +2,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-export const DEFAULT_BASE_URL = "https://kagi.com/api/v0";
+export const DEFAULT_BASE_URL = "https://kagi.com/api/v1";
 export const DEFAULT_LIMIT = 10;
 export const DEFAULT_INCLUDE_RELATED = false;
 

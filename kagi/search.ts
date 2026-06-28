@@ -7,7 +7,7 @@ export interface KagiSearchOptions {
 
 /** A single search-result object from the Kagi /search endpoint (t: 0). */
 export interface KagiSearchResult {
-  t: 0;
+  t?: 0;
   rank?: number;
   url: string;
   title?: string;
@@ -24,15 +24,22 @@ export interface KagiRelatedSearches {
 
 export type KagiSearchItem = KagiSearchResult | KagiRelatedSearches;
 
+export interface KagiSearchV1Data {
+  search?: KagiSearchResult[];
+  related?: string[];
+}
+
 export interface KagiSearchResponse {
   meta?: {
     id?: string;
+    trace?: string;
     node?: string;
     ms?: number;
     api_balance?: number;
   };
-  data?: KagiSearchItem[];
+  data?: KagiSearchItem[] | KagiSearchV1Data;
   error?: Array<{ code?: number; msg?: string; ref?: string }>;
+  errors?: Array<{ code?: string; message?: string; msg?: string; ref?: string }>;
 }
 
 /**
@@ -74,8 +81,11 @@ export function formatResults(
   query: string,
   includeRelated: boolean,
 ): string {
-  const items = response.data ?? [];
-  const results = items.filter(isSearchResult);
+  const rawData = response.data;
+  const items = Array.isArray(rawData) ? rawData : [];
+  const results = Array.isArray(rawData)
+    ? items.filter(isSearchResult)
+    : (rawData?.search ?? []);
 
   if (results.length === 0) {
     return `No Kagi results found for "${query}".`;
@@ -103,10 +113,10 @@ export function formatResults(
   let output = `Kagi results for "${query}":\n\n${blocks.join("\n\n")}`;
 
   if (includeRelated) {
-    const related = items
-      .filter(isRelatedSearches)
-      .flatMap((item) => item.list ?? [])
-      .filter((s) => typeof s === "string" && s.trim());
+    const related = (Array.isArray(rawData)
+      ? items.filter(isRelatedSearches).flatMap((item) => item.list ?? [])
+      : (rawData?.related ?? [])
+    ).filter((s) => typeof s === "string" && s.trim());
     if (related.length > 0) {
       output += `\n\nRelated searches:\n${related
         .map((s) => `  - ${s}`)
@@ -123,12 +133,26 @@ export async function kagiSearch(
 ): Promise<KagiSearchResponse> {
   const params = buildSearchParams(options, config);
 
-  const resp = await fetch(`${config.baseUrl}/search?${params.toString()}`, {
-    method: "GET",
-    headers: {
-      Authorization: `Bot ${config.apiKey}`,
+  const baseUrl = config.baseUrl.replace(/\/$/, "");
+  const isV1 = /\/api\/v1$/.test(baseUrl);
+  const resp = await fetch(
+    isV1 ? `${baseUrl}/search` : `${baseUrl}/search?${params.toString()}`,
+    {
+      method: isV1 ? "POST" : "GET",
+      headers: {
+        Authorization: `Bot ${config.apiKey}`,
+        ...(isV1
+          ? { "Content-Type": "application/json", Accept: "application/json" }
+          : {}),
+      },
+      body: isV1
+        ? JSON.stringify({
+            query: params.get("q"),
+            limit: Number(params.get("limit")),
+          })
+        : undefined,
     },
-  });
+  );
 
   if (!resp.ok) {
     const errText = (await resp.text().catch(() => "")).trim();
@@ -140,9 +164,10 @@ export async function kagiSearch(
 
   const json = (await resp.json()) as KagiSearchResponse;
 
-  if (json.error && json.error.length > 0) {
-    const msg = json.error
-      .map((e) => e.msg || `code ${e.code}`)
+  const errors = json.error ?? json.errors;
+  if (errors && errors.length > 0) {
+    const msg = errors
+      .map((e) => e.msg || e.message || `code ${e.code}`)
       .join("; ");
     throw new Error(`Kagi API returned an error: ${msg}`);
   }
