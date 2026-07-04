@@ -25,9 +25,6 @@
     ],
     "skills": [
       "./lykkja/skills"
-    ],
-    "prompts": [
-      "./lykkja/prompts"
     ]
   }
 }

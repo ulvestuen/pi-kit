@@ -35,5 +35,5 @@ inflate a score to end the loop. Do not wait for the user between PDCA phases
 unless they explicitly asked for a pause. If something is ambiguous, make a
 sensible assumption, note it, and keep going rather than stopping to ask.
 
-Quick start: `/lykkja-run <task>` opens and runs a loop end to end. `/lykkja`
+Quick start: `/lykkja <task>` opens and runs a loop end to end. Bare `/lykkja`
 shows the live dashboard.

@@ -12,14 +12,13 @@ actually cleared its threshold*, not "looks finished."
 
 ## What you get
 
-lykkja is a single pi package that bundles four kinds of resources:
+lykkja is a single pi package that bundles three kinds of resources:
 
-| Kind          | Name                                                            | What it does                                                                 |
-| ------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| **Extension** | `index.ts`                                                     | Loop engine: the `lykkja_start` and `lykkja_checkpoint` tools, the `/lykkja` dashboard command, persisted loop state, a status-bar line, and a short system-prompt injection. |
-| **Skills**    | `pdca-loop`, `success-criteria`, `honest-verification`         | Model-invocable instructions for running the loop, writing strict criteria, and scoring honestly. |
-| **Prompts**   | `/lykkja-run`, `/lykkja-plan`, `/lykkja-verify`, `/lykkja-ship` | Slash commands that drive each phase of the loop.                            |
-| **Template**  | `templates/AGENTS.lykkja.md`                                   | A snippet to drop into your project's `AGENTS.md` to make the loop the default working style. |
+| Kind          | Name                                                    | What it does                                                                 |
+| ------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| **Extension** | `index.ts`                                             | Loop engine: the `lykkja_start` and `lykkja_checkpoint` tools, the single `/lykkja` command, persisted loop state, a status-bar line, and a short system-prompt injection. |
+| **Skills**    | `pdca-loop`, `success-criteria`, `honest-verification` | Model-invocable instructions for running the loop, writing strict criteria, and scoring honestly. |
+| **Template**  | `templates/AGENTS.lykkja.md`                           | A snippet to drop into your project's `AGENTS.md` to make the loop the default working style. |
 
 ## How the loop works
 
@@ -47,6 +46,27 @@ lykkja is a single pi package that bundles four kinds of resources:
    criterion and loop), or **STOPPED** (hit the pass safety limit — report what
    still fails).
 
+## The `/lykkja` command
+
+One slash command drives everything:
+
+- **`/lykkja <task>`** — open a loop on the task and run it end to end until
+  FINAL.
+- **`/lykkja plan <task>`** — PLAN only: frame the task, define strict criteria,
+  open the loop, and pause so you can review the criteria before any work
+  starts.
+- **`/lykkja go`** — continue the active loop: score the current state honestly,
+  checkpoint, and follow the verdict. Use it to run a loop opened with `plan`,
+  or to nudge a loop that stalled mid-way. (`continue` and `resume` are
+  aliases.)
+- **`/lykkja`** — show the live loop dashboard.
+- **`/lykkja reset`** — clear the loop. (`clear` is an alias.)
+
+There are no per-phase commands. The extension prompts the agent through the
+whole PDCA cycle from the tool results (see below), so once a loop is running
+the phases drive themselves; `go` is the only manual nudge you should ever
+need.
+
 ## Tools the agent can call
 
 - **`lykkja_start`** — open a loop with a task and strict success criteria
@@ -59,8 +79,8 @@ survives `/reload` and resumes with the session.
 
 ## Automated PDCA prompting
 
-lykkja now prompts the agent through the whole cycle from the tool results, not
-just from the slash-command text. After `lykkja_start`, the extension returns an
+lykkja prompts the agent through the whole cycle from the tool results, not
+just from the command text. After `lykkja_start`, the extension returns an
 `AUTOMATED PLAN→DO→CHECK PROMPT` that tells the agent to start pass 1, execute a
 single next step, gather evidence, and call `lykkja_checkpoint`. Each checkpoint
 then returns one of three follow-up prompts:
@@ -72,10 +92,10 @@ then returns one of three follow-up prompts:
 - **STOPPED** → an `AUTOMATED STOP PROMPT` telling the agent to report the
   remaining failures honestly instead of claiming success.
 
-This means `/lykkja-run <task>` can drive an end-to-end loop with no extra user
-nudges. Use `/lykkja-plan` when you intentionally want to pause after criteria
-creation; otherwise let the automated prompts carry the agent from PLAN to DO to
-CHECK to ACT.
+This means `/lykkja <task>` can drive an end-to-end loop with no extra user
+nudges. Use `/lykkja plan <task>` when you intentionally want to pause after
+criteria creation, then `/lykkja go` to set the loop running; otherwise let the
+automated prompts carry the agent from PLAN to DO to CHECK to ACT.
 
 ## Best ways to use lykkja
 
@@ -84,7 +104,7 @@ each pass. Good prompts include the desired outcome, constraints, and any known
 validation command:
 
 ```text
-/lykkja-run Add CSV export to the invoices page. Preserve existing filters, add
+/lykkja Add CSV export to the invoices page. Preserve existing filters, add
 unit tests for escaping and empty rows, and run npm test -- invoices.
 ```
 
@@ -108,7 +128,7 @@ iterated result.
 ### 1. Bug fix with regression protection
 
 ```text
-/lykkja-run Fix the login redirect loop. Success means the redirect is
+/lykkja Fix the login redirect loop. Success means the redirect is
 reproduced by a failing test, the test passes after the fix, existing auth tests
 still pass, and the cause is documented in the PR notes.
 ```
@@ -116,7 +136,7 @@ still pass, and the cause is documented in the PR notes.
 ### 2. Safe refactor
 
 ```text
-/lykkja-run Refactor the billing date helpers into a single module. Preserve the
+/lykkja Refactor the billing date helpers into a single module. Preserve the
 public API, remove duplicated parsing logic, keep TypeScript strict checks clean,
 and add edge-case coverage for time zones.
 ```
@@ -124,20 +144,10 @@ and add edge-case coverage for time zones.
 ### 3. Docs that match implementation
 
 ```text
-/lykkja-run Update the lykkja README for automated PDCA prompting. It must
+/lykkja Update the lykkja README for automated PDCA prompting. It must
 explain when to use it, when not to use it, and include at least three concrete
 examples that a new pi user can copy.
 ```
-
-## Slash commands
-
-- **`/lykkja-run <task>`** — open and run a loop end to end until FINAL.
-- **`/lykkja-plan [task]`** — just the PLAN step: frame the task and define
-  criteria.
-- **`/lykkja-verify [what changed]`** — the CHECK/ACT step: score honestly and
-  act on whether to iterate or finalize.
-- **`/lykkja-ship`** — the ACT step: confirm the bar is met and finalize.
-- **`/lykkja`** — show the live loop dashboard. `/lykkja reset` clears the loop.
 
 ## Installation
 
@@ -151,8 +161,8 @@ lykkja lives in the `lykkja/` subfolder of the
 pi install https://github.com/ulvestuen/pi-kit
 ```
 
-pi clones the repo, runs `npm install`, and registers the lykkja extension,
-skills, and prompts automatically.
+pi clones the repo, runs `npm install`, and registers the lykkja extension and
+skills automatically.
 
 ### Option 2: quick test with `--extension`
 
@@ -161,23 +171,21 @@ git clone https://github.com/ulvestuen/pi-kit.git
 pi -e /absolute/path/to/pi-kit/lykkja/index.ts
 ```
 
-This loads the extension (tools, command, system prompt). To also pick up the
-skills and prompts in a quick test, point pi at the directories:
+This loads the extension (tools, the `/lykkja` command, system prompt). To also
+pick up the skills in a quick test, point pi at the directory:
 
 ```bash
 pi -e /absolute/path/to/pi-kit/lykkja/index.ts \
-   --skills /absolute/path/to/pi-kit/lykkja/skills \
-   --prompts /absolute/path/to/pi-kit/lykkja/prompts
+   --skills /absolute/path/to/pi-kit/lykkja/skills
 ```
 
 ### Option 3: copy into a pi resource location
 
 ```bash
 git clone https://github.com/ulvestuen/pi-kit.git
-mkdir -p ~/.pi/agent/extensions ~/.pi/agent/skills ~/.pi/agent/prompts
+mkdir -p ~/.pi/agent/extensions ~/.pi/agent/skills
 cp -R pi-kit/lykkja ~/.pi/agent/extensions/lykkja
 cp -R pi-kit/lykkja/skills/* ~/.pi/agent/skills/
-cp -R pi-kit/lykkja/prompts/* ~/.pi/agent/prompts/
 ```
 
 Then start pi (or run `/reload` if it is already running).
@@ -233,12 +241,11 @@ so it is fully covered in isolation.
 
 ## Files
 
-- `index.ts` — pi extension entry point (tools, command, hooks, state).
+- `index.ts` — pi extension entry point (tools, the `/lykkja` command, hooks, state).
 - `loop.ts` — pure loop state model and scoring logic.
 - `config.ts` — configuration loading.
 - `test.ts` — unit tests for the loop engine.
 - `skills/` — `pdca-loop`, `success-criteria`, `honest-verification`.
-- `prompts/` — the four `/lykkja-*` slash commands.
 - `templates/AGENTS.lykkja.md` — project-instructions snippet.
 - `lykkja.example.json` — configuration template.
 
@@ -248,6 +255,10 @@ so it is fully covered in isolation.
   work — they record passes, enforce that every criterion is scored, compute the
   weakest failing one, and return the ACT verdict (FINAL/ITERATING/STOPPED). This keeps the model
   honest without taking the reasoning away from it.
+- **One command, not five.** The automated prompting makes per-phase commands
+  redundant: the tool results themselves carry the next-phase prompt. So the
+  whole surface is `/lykkja` — a task argument to run, `plan` to pause after
+  criteria, `go` to continue, and `reset` to clear.
 - **Honesty is the whole game.** The `honest-verification` skill and the required
   per-criterion `weakness` notes exist to fight the natural pull to inflate a
   score and escape the loop.

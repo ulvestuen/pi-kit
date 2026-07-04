@@ -90,5 +90,6 @@ Criteria via `lykkja_start`:
 
 - `success-criteria` — how to write strict, measurable criteria.
 - `honest-verification` — how to score 1-10 without fooling yourself.
-- `/lykkja-run`, `/lykkja-plan`, `/lykkja-verify`, `/lykkja-ship` — slash
-  commands that drive these phases. Run `/lykkja` to see the live dashboard.
+- `/lykkja <task>` — slash command that opens and runs a loop end to end;
+  `/lykkja plan <task>` plans only, `/lykkja go` continues the active loop, and
+  bare `/lykkja` shows the live dashboard.
