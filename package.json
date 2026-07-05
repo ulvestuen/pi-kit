@@ -10,7 +10,8 @@
     "threema",
     "lykkja",
     "exa",
-    "kagi"
+    "kagi",
+    "planner"
   ],
   "repository": {
     "type": "git",
@@ -21,10 +22,12 @@
       "./threema",
       "./lykkja",
       "./exa",
-      "./kagi"
+      "./kagi",
+      "./planner"
     ],
     "skills": [
-      "./lykkja/skills"
+      "./lykkja/skills",
+      "./planner/skills"
     ]
   }
 }

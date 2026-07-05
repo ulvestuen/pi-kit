@@ -1,0 +1,7 @@
+{
+  "defaultAgent": "implementer",
+  "defaultThreshold": 8,
+  "scaleMax": 10,
+  "injectSystemPrompt": true,
+  "showStatus": true
+}
