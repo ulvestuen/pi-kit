@@ -10,7 +10,11 @@
     "threema",
     "lykkja",
     "exa",
-    "kagi"
+    "kagi",
+    "fleet",
+    "planner",
+    "critic",
+    "orchestrator"
   ],
   "repository": {
     "type": "git",
@@ -21,10 +25,17 @@
       "./threema",
       "./lykkja",
       "./exa",
-      "./kagi"
+      "./kagi",
+      "./fleet",
+      "./planner",
+      "./critic",
+      "./orchestrator"
     ],
     "skills": [
-      "./lykkja/skills"
+      "./lykkja/skills",
+      "./planner/skills",
+      "./critic/skills",
+      "./orchestrator/skills"
     ]
   }
 }

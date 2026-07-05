@@ -1,0 +1,11 @@
+{
+  "maxConcurrent": 4,
+  "maxAttempts": 2,
+  "isolation": "none",
+  "taskTimeoutMs": 600000,
+  "reviewTimeoutMs": 300000,
+  "outputCapBytes": 51200,
+  "criticModel": "",
+  "defaultAgent": "implementer",
+  "piBinary": "pi"
+}

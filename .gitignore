@@ -10,3 +10,7 @@ kagi.json
 node_modules/
 dist/
 
+fleet.json
+planner.json
+critic.json
+orchestrator.json
