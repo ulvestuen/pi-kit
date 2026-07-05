@@ -1,0 +1,7 @@
+{
+  "passThreshold": 8,
+  "scaleMax": 10,
+  "defaultAgent": "implementer",
+  "injectSystemPrompt": true,
+  "showStatus": true
+}

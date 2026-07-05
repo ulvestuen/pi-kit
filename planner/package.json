@@ -1,0 +1,20 @@
+{
+  "name": "pi-planner",
+  "version": "1.0.0",
+  "description": "Plans as data for the pi coding agent — a validated task DAG with per-task acceptance criteria, plan_create/plan_update tools, a /plan dashboard, and a plan-decomposition skill",
+  "type": "module",
+  "scripts": {
+    "test": "tsx --test test.ts"
+  },
+  "pi": {
+    "extensions": ["./index.ts"],
+    "skills": ["./skills"]
+  },
+  "devDependencies": {
+    "@mariozechner/pi-ai": "^0.71.0",
+    "@mariozechner/pi-coding-agent": "^0.71.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3"
+  }
+}

@@ -1,6 +1,8 @@
 # Multi-Agent Orchestration for pi-kit — Design
 
-Status: **Design proposal** (no implementation yet)
+Status: **Implemented** (phases 1–4 shipped as [`fleet/`](../fleet/),
+[`planner/`](../planner/), [`critic/`](../critic/), and
+[`orchestrator/`](../orchestrator/); phase 5 remains optional future work)
 
 This document designs a set of pi extensions that together provide an
 **orchestrator**, a **planner**, an **advisor/critic**, and a **fleet of

@@ -1,0 +1,7 @@
+{
+  "model": "",
+  "scaleMax": 10,
+  "passThreshold": 8,
+  "timeoutMs": 300000,
+  "piBinary": "pi"
+}
