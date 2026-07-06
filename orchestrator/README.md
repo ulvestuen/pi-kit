@@ -12,6 +12,11 @@ The orchestrator owns *control flow only*. Planning intelligence lives in the
 model plus the planner skill; execution lives in fleet; judgment lives in the
 critic; the stopping rule lives in lykkja.
 
+For a deep dive into the internals — the goal loop, wave anatomy, the
+scheduler state machine, the critic gate, retries, merges, and failure
+recovery, with diagrams — see
+[`docs/orchestrator-architecture.md`](../docs/orchestrator-architecture.md).
+
 ## What you get
 
 | Kind        | Name               | What it does                                                         |

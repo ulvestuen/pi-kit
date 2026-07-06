@@ -7,6 +7,11 @@ foundational fan-out primitive of the pi-kit multi-agent stack (see
 and is useful entirely on its own: any session gains a `fleet_run` tool for
 delegating independent tasks in parallel.
 
+For a deep dive into the internals — module layout, agent discovery, the
+concurrency pool, the child-process contract, isolation, cancellation, and
+the tmux mirror, with diagrams — see
+[`docs/fleet-architecture.md`](../docs/fleet-architecture.md).
+
 ## What you get
 
 | Kind          | Name        | What it does                                                                 |

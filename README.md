@@ -17,6 +17,11 @@ This repository contains pi-related integrations and extensions.
 
 - [`docs/multi-agent-orchestration.md`](./docs/multi-agent-orchestration.md) – design for the orchestrator, planner, critic, and sub-agent fleet extensions composed with lykkja (implemented by `fleet/`, `planner/`, `critic/`, and `orchestrator/`)
 
+## Architecture documents
+
+- [`docs/orchestrator-architecture.md`](./docs/orchestrator-architecture.md) – how an orchestration run works end to end: the goal loop, dispatch waves, the scheduler state machine, the critic gate, retries, merges, and failure recovery — with workflow diagrams
+- [`docs/fleet-architecture.md`](./docs/fleet-architecture.md) – how the sub-agent runtime works: agent discovery, the concurrency pool, the child-process contract, worktree isolation, timeouts and kill semantics, and the tmux mirror — with workflow diagrams
+
 ## Documentation
 
 The top-level README is intentionally minimal.
