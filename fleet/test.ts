@@ -17,6 +17,14 @@ import {
   type SpawnRequest,
   type TaskSpec,
 } from "./runner.ts";
+import {
+  buildTailCommand,
+  createLineSplitter,
+  createTmuxMirrorSpawn,
+  formatPiEventLine,
+  sanitizeTmuxName,
+  type TmuxEffects,
+} from "./tmux.ts";
 
 const VALID_AGENT = `---
 name: implementer
@@ -546,5 +554,198 @@ describe("runTasks", () => {
     );
     assert.strictEqual(result.status, "error");
     assert.match(result.output, /not a git repo/);
+  });
+});
+
+describe("tmux mirror", () => {
+  const registry = registryOf(def("worker"));
+
+  it("labels the pi child spawn but not auxiliary git spawns", async () => {
+    const calls: SpawnRequest[] = [];
+    await runTasks(registry, [{ agent: "worker", task: "t", isolation: "worktree" }], {
+      spawn: okSpawn("done", (req) => calls.push(req)),
+      cwd: "/repo",
+      worktreeRoot: "/scratch/wt",
+    });
+    assert.strictEqual(calls[0].command, "git");
+    assert.strictEqual(calls[0].label, undefined);
+    assert.strictEqual(calls[1].label, "1-worker");
+  });
+
+  it("sanitizes window names", () => {
+    assert.strictEqual(sanitizeTmuxName("1-implementer"), "1-implementer");
+    assert.strictEqual(sanitizeTmuxName("a b:c.d/e"), "a-b-c-d-e");
+    assert.strictEqual(sanitizeTmuxName("..."), "task");
+  });
+
+  it("quotes log paths for the tail command", () => {
+    assert.strictEqual(
+      buildTailCommand("/tmp/it's.log"),
+      "tail -f -n +1 '/tmp/it'\\''s.log'",
+    );
+  });
+
+  it("splits chunks into lines and flushes the remainder", () => {
+    const lines: string[] = [];
+    const splitter = createLineSplitter((l) => lines.push(l));
+    splitter.push("one\ntw");
+    splitter.push("o\nthr");
+    splitter.flush();
+    assert.deepStrictEqual(lines, ["one", "two", "thr"]);
+  });
+
+  it("formats assistant messages and tool calls, suppresses noise", () => {
+    assert.strictEqual(
+      formatPiEventLine(assistantLine("hello")),
+      "\n[assistant]\nhello",
+    );
+    const withTool = JSON.stringify({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", name: "bash" }],
+      },
+    });
+    assert.strictEqual(formatPiEventLine(withTool), "\n[assistant]\n→ tool: bash");
+    assert.strictEqual(formatPiEventLine("plain text"), "plain text");
+    assert.strictEqual(formatPiEventLine(""), null);
+    assert.strictEqual(
+      formatPiEventLine(JSON.stringify({ type: "message_update" })),
+      null,
+    );
+  });
+
+  /** Fake tmux effects recording calls and in-memory logs. */
+  function fakeEffects(behavior: { failCreate?: boolean } = {}) {
+    const calls: string[][] = [];
+    const logs = new Map<string, string>();
+    let sessionExists = false;
+    let windowSeq = 0;
+    const effects: TmuxEffects = {
+      tmux: async (args) => {
+        calls.push(args);
+        if (args[0] === "has-session") {
+          return { exitCode: sessionExists ? 0 : 1, stdout: "", stderr: "" };
+        }
+        if (args[0] === "new-session" || args[0] === "new-window") {
+          if (behavior.failCreate) {
+            return { exitCode: 1, stdout: "", stderr: "no server" };
+          }
+          sessionExists = true;
+          return { exitCode: 0, stdout: `@${++windowSeq}\n`, stderr: "" };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+      createLogFile: (label) => {
+        const file = `/logs/${label}.log`;
+        logs.set(file, "");
+        return file;
+      },
+      appendToLog: (file, text) => {
+        logs.set(file, (logs.get(file) ?? "") + text);
+      },
+    };
+    return { effects, calls, logs };
+  }
+
+  /** Inner spawn that streams JSONL through onOutput before resolving. */
+  const streamingInner: SpawnFn = async (req) => {
+    const stdout = `${assistantLine("all done")}\n`;
+    req.onOutput?.(stdout);
+    return { exitCode: 0, stdout, stderr: "" };
+  };
+
+  it("opens a session for the first window and reuses it after", async () => {
+    const { effects, calls } = fakeEffects();
+    const spawn = createTmuxMirrorSpawn(streamingInner, effects, {
+      sessionName: "pi-agents",
+    });
+    const signal = new AbortController().signal;
+    await spawn({ command: "pi", args: [], cwd: "/repo", signal, label: "1-worker" });
+    await spawn({ command: "pi", args: [], cwd: "/repo", signal, label: "2-worker" });
+    const creates = calls.filter((c) => c[0] === "new-session" || c[0] === "new-window");
+    assert.deepStrictEqual(creates.map((c) => c[0]), ["new-session", "new-window"]);
+    assert.ok(creates[0].includes("1-worker"));
+    assert.ok(creates[1].includes("2-worker"));
+    assert.ok(creates[1].includes("pi-agents:"));
+  });
+
+  it("mirrors formatted output and a footer into the window's log", async () => {
+    const { effects, logs } = fakeEffects();
+    const spawn = createTmuxMirrorSpawn(streamingInner, effects, {
+      sessionName: "pi-agents",
+    });
+    await spawn({
+      command: "pi",
+      args: [],
+      cwd: "/repo",
+      signal: new AbortController().signal,
+      label: "1-worker",
+    });
+    const log = logs.get("/logs/1-worker.log")!;
+    assert.match(log, /\[fleet\] 1-worker/);
+    assert.match(log, /\[assistant\]\nall done/);
+    assert.match(log, /exited 0/);
+  });
+
+  it("still forwards output to the original onOutput", async () => {
+    const { effects } = fakeEffects();
+    const spawn = createTmuxMirrorSpawn(streamingInner, effects, {
+      sessionName: "pi-agents",
+    });
+    const chunks: string[] = [];
+    const outcome = await spawn({
+      command: "pi",
+      args: [],
+      cwd: "/repo",
+      signal: new AbortController().signal,
+      label: "1-worker",
+      onOutput: (c) => chunks.push(c),
+    });
+    assert.strictEqual(outcome.exitCode, 0);
+    assert.strictEqual(chunks.length, 1);
+  });
+
+  it("passes unlabeled requests through without touching tmux", async () => {
+    const { effects, calls } = fakeEffects();
+    const spawn = createTmuxMirrorSpawn(streamingInner, effects, {
+      sessionName: "pi-agents",
+    });
+    await spawn({ command: "git", args: ["status"], cwd: "/repo", signal: new AbortController().signal });
+    assert.deepStrictEqual(calls, []);
+  });
+
+  it("kills the window by id when closeWindows is set", async () => {
+    const { effects, calls } = fakeEffects();
+    const spawn = createTmuxMirrorSpawn(streamingInner, effects, {
+      sessionName: "pi-agents",
+      closeWindows: true,
+    });
+    await spawn({
+      command: "pi",
+      args: [],
+      cwd: "/repo",
+      signal: new AbortController().signal,
+      label: "1-worker",
+    });
+    assert.deepStrictEqual(calls[calls.length - 1], ["kill-window", "-t", "@1"]);
+  });
+
+  it("degrades to plain runs after the first tmux failure", async () => {
+    const { effects, calls } = fakeEffects({ failCreate: true });
+    const errors: string[] = [];
+    const spawn = createTmuxMirrorSpawn(streamingInner, effects, {
+      sessionName: "pi-agents",
+      onError: (m) => errors.push(m),
+    });
+    const signal = new AbortController().signal;
+    const first = await spawn({ command: "pi", args: [], cwd: "/r", signal, label: "1-worker" });
+    assert.strictEqual(first.exitCode, 0);
+    assert.strictEqual(errors.length, 1);
+    assert.match(errors[0], /no server/);
+    const callsBefore = calls.length;
+    const second = await spawn({ command: "pi", args: [], cwd: "/r", signal, label: "2-worker" });
+    assert.strictEqual(second.exitCode, 0);
+    assert.strictEqual(calls.length, callsBefore);
   });
 });

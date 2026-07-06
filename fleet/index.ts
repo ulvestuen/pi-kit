@@ -7,10 +7,12 @@ import { Type } from "@mariozechner/pi-ai";
 import { getConfigPath, loadConfig, type FleetConfig } from "./config.ts";
 import {
   createFullOutputSaver,
+  createHostSpawn,
   createWorktreeRoot,
   discoverAgents,
-  nodeSpawn,
+  isTmuxAvailable,
 } from "./host.ts";
+import { DEFAULT_TMUX_SESSION } from "./tmux.ts";
 import type { AgentDefinition } from "./registry.ts";
 import { runTasks, type TaskResult, type TaskSpec } from "./runner.ts";
 
@@ -24,12 +26,17 @@ interface FleetStateEntry {
   tasks: { agent: string; task: string; status?: string }[];
 }
 
-function buildSystemPrompt(config: FleetConfig): string {
+function buildSystemPrompt(config: FleetConfig, tmuxLive: boolean): string {
   return [
     "You have the fleet sub-agent runtime for delegating work.",
     "The fleet_run tool dispatches tasks to sub-agents (child pi processes), each with an isolated context window; a batch of tasks runs concurrently.",
     `Use it to fan out independent, well-scoped tasks — exploration (scout), implementation (implementer), or review (critic) — up to ${config.maxConcurrent} at a time.`,
     "Give each task a complete, self-contained brief: sub-agents share none of your context. Do not delegate trivial single-step work.",
+    ...(tmuxLive
+      ? [
+          `Every sub-agent's live progress is mirrored into a window of the tmux session "${config.tmuxSession}"; the user can watch with \`tmux attach -t ${config.tmuxSession}\`.`,
+        ]
+      : []),
     "Run /fleet to list the available agents.",
   ].join("\n");
 }
@@ -66,8 +73,15 @@ export default function (pi: ExtensionAPI) {
       outputCapBytes: 50 * 1024,
       piBinary: "pi",
       injectSystemPrompt: true,
+      tmux: true,
+      tmuxSession: DEFAULT_TMUX_SESSION,
+      tmuxCloseWindows: false,
     };
   }
+
+  /** Whether sub-agents actually get live tmux windows on this host. */
+  const tmuxLive = config.tmux && isTmuxAvailable();
+  const spawn = createHostSpawn(config, "pi-fleet");
 
   /** In-flight batch info for /fleet pool status. */
   let activeBatch: FleetStateEntry | null = null;
@@ -139,7 +153,7 @@ export default function (pi: ExtensionAPI) {
         let results: TaskResult[];
         try {
           results = await runTasks(registry, specs, {
-            spawn: nodeSpawn,
+            spawn,
             cwd: ctx.cwd,
             piBinary: config.piBinary,
             maxConcurrent: config.maxConcurrent,
@@ -228,7 +242,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event) => {
     if (!config.injectSystemPrompt) return;
     return {
-      systemPrompt: `${event.systemPrompt}\n\n${buildSystemPrompt(config)}`,
+      systemPrompt: `${event.systemPrompt}\n\n${buildSystemPrompt(config, tmuxLive)}`,
     };
   });
 
@@ -255,6 +269,13 @@ export default function (pi: ExtensionAPI) {
       }
       lines.push(
         `  Pool: max ${config.maxConcurrent} concurrent, batch cap ${config.maxBatch}, timeout ${Math.round(config.defaultTimeoutMs / 1000)}s`,
+      );
+      lines.push(
+        tmuxLive
+          ? `  tmux: live windows in session "${config.tmuxSession}" — attach with: tmux attach -t ${config.tmuxSession}`
+          : config.tmux
+            ? "  tmux: enabled but tmux is not installed; no live windows"
+            : "  tmux: disabled",
       );
       if (activeBatch) {
         lines.push(

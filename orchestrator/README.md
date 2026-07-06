@@ -104,13 +104,18 @@ orchestrator works with zero configuration. To change defaults, create
 | `criticModel`     | *(none)*        | Model override for reviews.                     |
 | `defaultAgent`    | `"implementer"` | Agent for plan tasks that name none.            |
 | `piBinary`        | `"pi"`          | Binary spawned for sub-agents.                  |
+| `tmux`            | `true`          | Mirror every dispatched sub-agent and critic review into live tmux windows (see the fleet README). |
+| `tmuxSession`     | `"pi-agents"`   | tmux session that collects the agent windows.   |
+| `tmuxCloseWindows`| `false`         | Kill each window when its task ends.            |
 
 Environment overrides (used when no JSON config exists):
 `ORCHESTRATOR_CONFIG_PATH`, `ORCHESTRATOR_MAX_CONCURRENT`,
 `ORCHESTRATOR_MAX_ATTEMPTS`, `ORCHESTRATOR_ISOLATION`,
 `ORCHESTRATOR_TASK_TIMEOUT_MS`, `ORCHESTRATOR_REVIEW_TIMEOUT_MS`,
 `ORCHESTRATOR_OUTPUT_CAP_BYTES`, `ORCHESTRATOR_CRITIC_MODEL`,
-`ORCHESTRATOR_DEFAULT_AGENT`, `ORCHESTRATOR_PI_BINARY`.
+`ORCHESTRATOR_DEFAULT_AGENT`, `ORCHESTRATOR_PI_BINARY`,
+`ORCHESTRATOR_TMUX`, `ORCHESTRATOR_TMUX_SESSION`,
+`ORCHESTRATOR_TMUX_CLOSE_WINDOWS`.
 
 ## Running tests
 

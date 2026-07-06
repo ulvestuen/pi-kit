@@ -245,6 +245,13 @@ Mechanics:
   the tool result's `details` for UI expansion.
 - **Cancellation**: `signal` aborts queued tasks immediately and kills running
   children (SIGTERM, then SIGKILL after a grace period).
+- **Live visibility** (`tmux.ts`, pure with injected effects): the spawn
+  function handed to the runner can be wrapped so every labeled sub-agent
+  child gets its own window in a shared tmux session (default `pi-agents`),
+  streaming a human-readable rendering of its JSONL output. fleet, critic,
+  and orchestrator all enable this by default via `host.ts`'s
+  `createHostSpawn`; execution is unaffected and everything degrades to
+  plain runs when tmux is absent or fails.
 
 ### 4.3 Wiring — `index.ts`
 
@@ -261,7 +268,8 @@ Mechanics:
 - **System prompt** (`before_agent_start`, config-gated like lykkja): one short
   paragraph advertising delegation and when to use it.
 - Config: `maxConcurrent`, `maxBatch`, `defaultTimeoutMs`, `outputCapBytes`,
-  `piBinary` (default `"pi"`), `injectSystemPrompt`.
+  `piBinary` (default `"pi"`), `injectSystemPrompt`, `tmux`, `tmuxSession`,
+  `tmuxCloseWindows`.
 
 ---
 

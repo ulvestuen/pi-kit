@@ -8,8 +8,9 @@
  * transcript saver.
  */
 
-import { spawn as nodeChildSpawn } from "node:child_process";
+import { spawn as nodeChildSpawn, spawnSync } from "node:child_process";
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -25,6 +26,12 @@ import {
   type AgentDefinition,
 } from "./registry.ts";
 import type { SpawnFn, TaskSpec } from "./runner.ts";
+import {
+  createTmuxMirrorSpawn,
+  sanitizeTmuxName,
+  type TmuxEffects,
+  type TmuxSettings,
+} from "./tmux.ts";
 
 const KILL_GRACE_MS = 3000;
 
@@ -161,4 +168,72 @@ export function createWorktreeRoot(subdir: string): string {
   const dir = path.join(os.tmpdir(), subdir, "worktrees");
   mkdirSync(dir, { recursive: true });
   return dir;
+}
+
+/** Whether a usable tmux binary is on PATH. */
+export function isTmuxAvailable(): boolean {
+  try {
+    return spawnSync("tmux", ["-V"], { stdio: "ignore" }).status === 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Real tmux-mirror effects: tmux via the spawn adapter, logs under tmpdir. */
+export function createTmuxEffects(subdir: string): TmuxEffects {
+  // tmux commands are short-lived and never cancelled from here.
+  const neverAborted = new AbortController();
+  return {
+    tmux: async (args) => {
+      try {
+        return await nodeSpawn({
+          command: "tmux",
+          args,
+          cwd: os.tmpdir(),
+          signal: neverAborted.signal,
+        });
+      } catch (e: any) {
+        return { exitCode: null, stdout: "", stderr: String(e?.message ?? e) };
+      }
+    },
+    createLogFile: (label) => {
+      const dir = path.join(os.tmpdir(), subdir, "tmux");
+      mkdirSync(dir, { recursive: true });
+      const file = path.join(
+        dir,
+        `${Date.now()}-${sanitizeTmuxName(label)}.log`,
+      );
+      writeFileSync(file, "", "utf8");
+      return file;
+    },
+    appendToLog: (file, text) => {
+      try {
+        appendFileSync(file, text, "utf8");
+      } catch {
+        // Log mirroring is best-effort; the task result stands without it.
+      }
+    },
+  };
+}
+
+/**
+ * Resolve the spawn function an extension should hand the runner: the plain
+ * adapter, or — when tmux mirroring is enabled and tmux is installed — the
+ * adapter wrapped so every sub-agent gets a live tmux window. Falls back to
+ * the plain adapter (with a one-time console note) when tmux is missing;
+ * mirror failures at runtime degrade the same way.
+ */
+export function createHostSpawn(settings: TmuxSettings, tag: string): SpawnFn {
+  if (!settings.tmux) return nodeSpawn;
+  if (!isTmuxAvailable()) {
+    console.error(
+      `[${tag}] tmux mirroring is enabled but tmux is not installed; sub-agents run without live windows`,
+    );
+    return nodeSpawn;
+  }
+  return createTmuxMirrorSpawn(nodeSpawn, createTmuxEffects(tag), {
+    sessionName: settings.tmuxSession,
+    closeWindows: settings.tmuxCloseWindows,
+    onError: (message) => console.error(`[${tag}] tmux mirror off: ${message}`),
+  });
 }
