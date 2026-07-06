@@ -8,12 +8,13 @@ import {
   DEFAULT_PI_BINARY,
   DEFAULT_TIMEOUT_MS,
 } from "./runner.ts";
+import { DEFAULT_TMUX_SESSION, type TmuxSettings } from "./tmux.ts";
 
 /**
  * fleet configuration. All fields are optional with sensible defaults, so the
  * extension works with zero configuration.
  */
-export interface FleetConfig {
+export interface FleetConfig extends TmuxSettings {
   /** Concurrency pool size for sub-agent tasks. */
   maxConcurrent: number;
   /** Maximum tasks accepted in one fleet_run batch. */
@@ -37,6 +38,9 @@ interface RawFleetConfig {
   outputCapBytes?: number | string;
   piBinary?: string;
   injectSystemPrompt?: boolean | string;
+  tmux?: boolean | string;
+  tmuxSession?: string;
+  tmuxCloseWindows?: boolean | string;
 }
 
 function getDefaultPiAgentDir(): string {
@@ -94,6 +98,9 @@ function loadRawConfig(): { raw: RawFleetConfig; configPath?: string } {
       outputCapBytes: process.env.FLEET_OUTPUT_CAP_BYTES,
       piBinary: process.env.FLEET_PI_BINARY,
       injectSystemPrompt: process.env.FLEET_INJECT_SYSTEM_PROMPT,
+      tmux: process.env.FLEET_TMUX,
+      tmuxSession: process.env.FLEET_TMUX_SESSION,
+      tmuxCloseWindows: process.env.FLEET_TMUX_CLOSE_WINDOWS,
     },
   };
 }
@@ -144,6 +151,9 @@ export function loadConfig(): FleetConfig {
     outputCapBytes: Math.round(outputCapBytes),
     piBinary: raw.piBinary?.trim() || DEFAULT_PI_BINARY,
     injectSystemPrompt: parseBoolean(raw.injectSystemPrompt, true),
+    tmux: parseBoolean(raw.tmux, true),
+    tmuxSession: raw.tmuxSession?.trim() || DEFAULT_TMUX_SESSION,
+    tmuxCloseWindows: parseBoolean(raw.tmuxCloseWindows, false),
     configPath,
   };
 }

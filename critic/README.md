@@ -79,10 +79,14 @@ critic works with zero configuration. To change defaults, create
 | `passThreshold` | `8`      | Default threshold for criteria that carry none.        |
 | `timeoutMs`     | `300000` | Timeout for one critic run (5 minutes).                |
 | `piBinary`      | `"pi"`   | Binary spawned for critic runs.                        |
+| `tmux`          | `true`   | Mirror critic runs into live tmux windows (see the fleet README). |
+| `tmuxSession`   | `"pi-agents"` | tmux session that collects the agent windows.     |
+| `tmuxCloseWindows` | `false` | Kill each window when its run ends.                  |
 
 Environment overrides (used when no JSON config exists):
 `CRITIC_CONFIG_PATH`, `CRITIC_MODEL`, `CRITIC_SCALE_MAX`,
-`CRITIC_PASS_THRESHOLD`, `CRITIC_TIMEOUT_MS`, `CRITIC_PI_BINARY`.
+`CRITIC_PASS_THRESHOLD`, `CRITIC_TIMEOUT_MS`, `CRITIC_PI_BINARY`,
+`CRITIC_TMUX`, `CRITIC_TMUX_SESSION`, `CRITIC_TMUX_CLOSE_WINDOWS`.
 
 ## Running tests
 

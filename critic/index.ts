@@ -3,9 +3,10 @@ import { defineTool } from "@mariozechner/pi-coding-agent";
 import { Type } from "@mariozechner/pi-ai";
 import {
   createFullOutputSaver,
+  createHostSpawn,
   discoverAgents,
-  nodeSpawn,
 } from "../fleet/host.ts";
+import { DEFAULT_TMUX_SESSION } from "../fleet/tmux.ts";
 import type { AgentDefinition } from "../fleet/registry.ts";
 import { runTasks } from "../fleet/runner.ts";
 import { normalizeCriteria, type CriterionInput } from "../lykkja/loop.ts";
@@ -69,8 +70,13 @@ export default function (pi: ExtensionAPI) {
       passThreshold: 8,
       timeoutMs: 5 * 60 * 1000,
       piBinary: "pi",
+      tmux: true,
+      tmuxSession: DEFAULT_TMUX_SESSION,
+      tmuxCloseWindows: false,
     };
   }
+
+  const spawn = createHostSpawn(config, "pi-critic");
 
   /** Resolve the critic agent definition, applying the config model override. */
   function criticAgent(cwd: string): AgentDefinition {
@@ -92,7 +98,7 @@ export default function (pi: ExtensionAPI) {
       registry,
       [{ agent: def.name, task: prompt, timeoutMs: config.timeoutMs }],
       {
-        spawn: nodeSpawn,
+        spawn,
         cwd,
         piBinary: config.piBinary,
         maxConcurrent: 1,
@@ -230,6 +236,7 @@ export default function (pi: ExtensionAPI) {
         `  Tools:      ${def.tools?.join(", ") ?? "(parent's tools)"}`,
         `  Scale:      1..${config.scaleMax}, default threshold ${config.passThreshold}`,
         `  Timeout:    ${Math.round(config.timeoutMs / 1000)}s`,
+        `  tmux:       ${config.tmux ? `live windows in session "${config.tmuxSession}"` : "disabled"}`,
         `  Config:     ${config.configPath ?? "defaults / environment variables"}`,
       ];
       ctx.ui.notify(lines.join("\n"), "info");

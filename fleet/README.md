@@ -56,6 +56,29 @@ transcript is written to a scratch file referenced in the result details.
 - **Restart safety**: dispatched batches are recorded in the session entry
   log; children do not survive the parent, so stale "running" batches are
   marked aborted on session start.
+- **Live tmux windows**: when tmux is installed (and `tmux` isn't disabled in
+  the config), every sub-agent gets its own window in a shared tmux session,
+  streaming a human-readable rendering of its progress — see below.
+
+## Watching sub-agents in tmux
+
+Every dispatched sub-agent is mirrored into its own window of one tmux
+session (default `pi-agents`, shared with the critic and orchestrator
+extensions so a single attach shows all delegated work):
+
+```bash
+tmux attach -t pi-agents
+```
+
+Windows are named after the task (`1-implementer`, `2-scout`, …) and show
+each agent's messages and tool calls as they happen, ending with an exit
+status line. Windows stay open after a task finishes so you can review what
+happened (set `tmuxCloseWindows: true` to have them cleaned up instead).
+
+The mirror is a pure visualization layer: the runner still owns the child
+process, its output parsing, timeouts, and cancellation. If tmux is missing
+or a tmux command fails, tasks run exactly as before — just without live
+windows — and a note is printed once.
 
 ## Installation
 
@@ -86,10 +109,14 @@ fleet works with zero configuration. To change defaults, create
 | `outputCapBytes`     | `51200`  | Cap on model-visible output per task (50 KB).   |
 | `piBinary`           | `"pi"`   | Binary spawned for each sub-agent.              |
 | `injectSystemPrompt` | `true`   | Inject the short delegation note into the system prompt. |
+| `tmux`               | `true`   | Mirror each sub-agent into a live tmux window.  |
+| `tmuxSession`        | `"pi-agents"` | tmux session that collects the agent windows. |
+| `tmuxCloseWindows`   | `false`  | Kill each window when its task ends instead of leaving it to inspect. |
 
 Environment overrides (used when no JSON config exists): `FLEET_CONFIG_PATH`,
 `FLEET_MAX_CONCURRENT`, `FLEET_MAX_BATCH`, `FLEET_DEFAULT_TIMEOUT_MS`,
-`FLEET_OUTPUT_CAP_BYTES`, `FLEET_PI_BINARY`, `FLEET_INJECT_SYSTEM_PROMPT`.
+`FLEET_OUTPUT_CAP_BYTES`, `FLEET_PI_BINARY`, `FLEET_INJECT_SYSTEM_PROMPT`,
+`FLEET_TMUX`, `FLEET_TMUX_SESSION`, `FLEET_TMUX_CLOSE_WINDOWS`.
 
 ## Running tests
 
@@ -106,7 +133,8 @@ worktree argument construction are all tested with fakes.
 - `index.ts` — pi extension wiring (the `fleet_run` tool, `/fleet`, persistence, system prompt).
 - `registry.ts` — pure agent-definition parsing and layered merging.
 - `runner.ts` — pure task-execution engine with injected spawn (the reusable module).
-- `host.ts` — the real Node effects: child-process spawn adapter, file-system discovery walk, transcript saver.
+- `tmux.ts` — pure tmux mirror: wraps a spawn function so each sub-agent gets a live tmux window (injected effects).
+- `host.ts` — the real Node effects: child-process spawn adapter, file-system discovery walk, transcript saver, tmux effects.
 - `agents/` — kit-shipped default agent definitions.
 - `config.ts` — configuration loading.
 - `test.ts` — unit tests.
@@ -114,6 +142,6 @@ worktree argument construction are all tested with fakes.
 ## Standalone use of the pure core
 
 Other pi-kit extensions (`critic`, `orchestrator`) import `registry.ts`,
-`runner.ts`, and `host.ts` directly via workspace-relative paths — never
-`index.ts`. A standalone copy of one of those packages must either keep the
-`fleet/` folder alongside it or vendor those three files.
+`runner.ts`, `tmux.ts`, and `host.ts` directly via workspace-relative paths —
+never `index.ts`. A standalone copy of one of those packages must either keep
+the `fleet/` folder alongside it or vendor those four files.

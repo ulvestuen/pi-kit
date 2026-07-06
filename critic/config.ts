@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { DEFAULT_PASS_THRESHOLD } from "../lykkja/loop.ts";
+import { DEFAULT_TMUX_SESSION, type TmuxSettings } from "../fleet/tmux.ts";
 import { DEFAULT_SCALE_MAX } from "./review.ts";
 
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
@@ -10,7 +11,7 @@ const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
  * critic configuration. All fields are optional with sensible defaults, so
  * the extension works with zero configuration.
  */
-export interface CriticConfig {
+export interface CriticConfig extends TmuxSettings {
   /** Model override for critic runs; a strong model here pays for itself. */
   model?: string;
   /** Top of the scoring scale (scores run 1..scaleMax). */
@@ -31,6 +32,9 @@ interface RawCriticConfig {
   passThreshold?: number | string;
   timeoutMs?: number | string;
   piBinary?: string;
+  tmux?: boolean | string;
+  tmuxSession?: string;
+  tmuxCloseWindows?: boolean | string;
 }
 
 function getDefaultPiAgentDir(): string {
@@ -59,6 +63,18 @@ function parseNumber(
   return parsed;
 }
 
+function parseBoolean(
+  value: boolean | string | undefined,
+  fallback: boolean,
+): boolean {
+  if (value === undefined) return fallback;
+  if (typeof value === "boolean") return value;
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return fallback;
+}
+
 function loadRawConfig(): { raw: RawCriticConfig; configPath?: string } {
   const configPath = getConfigPath();
   if (existsSync(configPath)) {
@@ -75,6 +91,9 @@ function loadRawConfig(): { raw: RawCriticConfig; configPath?: string } {
       passThreshold: process.env.CRITIC_PASS_THRESHOLD,
       timeoutMs: process.env.CRITIC_TIMEOUT_MS,
       piBinary: process.env.CRITIC_PI_BINARY,
+      tmux: process.env.CRITIC_TMUX,
+      tmuxSession: process.env.CRITIC_TMUX_SESSION,
+      tmuxCloseWindows: process.env.CRITIC_TMUX_CLOSE_WINDOWS,
     },
   };
 }
@@ -109,6 +128,9 @@ export function loadConfig(): CriticConfig {
     passThreshold: Math.round(passThreshold),
     timeoutMs: Math.round(timeoutMs),
     piBinary: raw.piBinary?.trim() || "pi",
+    tmux: parseBoolean(raw.tmux, true),
+    tmuxSession: raw.tmuxSession?.trim() || DEFAULT_TMUX_SESSION,
+    tmuxCloseWindows: parseBoolean(raw.tmuxCloseWindows, false),
     configPath,
   };
 }

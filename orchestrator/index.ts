@@ -6,10 +6,11 @@ import { defineTool } from "@mariozechner/pi-coding-agent";
 import { Type } from "@mariozechner/pi-ai";
 import {
   createFullOutputSaver,
+  createHostSpawn,
   createWorktreeRoot,
   discoverAgents,
-  nodeSpawn,
 } from "../fleet/host.ts";
+import { DEFAULT_TMUX_SESSION } from "../fleet/tmux.ts";
 import { getAgent, type AgentDefinition } from "../fleet/registry.ts";
 import { runTasks, type TaskResult, type TaskSpec } from "../fleet/runner.ts";
 import {
@@ -127,8 +128,13 @@ export default function (pi: ExtensionAPI) {
       outputCapBytes: 50 * 1024,
       defaultAgent: "implementer",
       piBinary: "pi",
+      tmux: true,
+      tmuxSession: DEFAULT_TMUX_SESSION,
+      tmuxCloseWindows: false,
     };
   }
+
+  const spawn = createHostSpawn(config, "pi-orchestrator");
 
   const policy: SchedulerPolicy = {
     maxConcurrent: config.maxConcurrent,
@@ -264,7 +270,7 @@ export default function (pi: ExtensionAPI) {
         const scaleMax = DEFAULT_SCALE_MAX;
         const resultsById = new Map<string, TaskResult>();
         const runnerBase = {
-          spawn: nodeSpawn,
+          spawn,
           cwd: ctx.cwd,
           piBinary: config.piBinary,
           maxConcurrent: config.maxConcurrent,
@@ -510,6 +516,7 @@ export default function (pi: ExtensionAPI) {
           "orchestrator — thin composition layer",
           `  Wave:        ${state.wave}${state.stopped ? " (stopped)" : ""}`,
           `  Policy:      ${config.maxConcurrent} concurrent, ${config.maxAttempts} attempt(s) per task, isolation ${config.isolation}`,
+          `  tmux:        ${config.tmux ? `live agent windows in session "${config.tmuxSession}" (tmux attach -t ${config.tmuxSession})` : "disabled"}`,
           `  Plan:        ${plan ? `${summarizePlan(plan).counts.done}/${plan.tasks.length} done — "${plan.goal}"` : "(none)"}`,
           missing.length > 0
             ? `  MISSING dependencies: ${missing.join(", ")} — install the lykkja and planner packages.`

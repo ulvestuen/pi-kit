@@ -7,6 +7,7 @@ import {
   DEFAULT_PI_BINARY,
   DEFAULT_TIMEOUT_MS,
 } from "../fleet/runner.ts";
+import { DEFAULT_TMUX_SESSION, type TmuxSettings } from "../fleet/tmux.ts";
 import { DEFAULT_MAX_ATTEMPTS } from "./scheduler.ts";
 
 const DEFAULT_REVIEW_TIMEOUT_MS = 5 * 60 * 1000;
@@ -15,7 +16,7 @@ const DEFAULT_REVIEW_TIMEOUT_MS = 5 * 60 * 1000;
  * orchestrator configuration. All fields are optional with sensible
  * defaults, so the extension works with zero configuration.
  */
-export interface OrchestratorConfig {
+export interface OrchestratorConfig extends TmuxSettings {
   /** Dispatch-wave width, forwarded to the fleet runner. */
   maxConcurrent: number;
   /** Per-task re-dispatch cap after a failed attempt or review. */
@@ -48,6 +49,9 @@ interface RawOrchestratorConfig {
   criticModel?: string;
   defaultAgent?: string;
   piBinary?: string;
+  tmux?: boolean | string;
+  tmuxSession?: string;
+  tmuxCloseWindows?: boolean | string;
 }
 
 function getDefaultPiAgentDir(): string {
@@ -81,6 +85,18 @@ function parseNumber(
   return parsed;
 }
 
+function parseBoolean(
+  value: boolean | string | undefined,
+  fallback: boolean,
+): boolean {
+  if (value === undefined) return fallback;
+  if (typeof value === "boolean") return value;
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return fallback;
+}
+
 function loadRawConfig(): { raw: RawOrchestratorConfig; configPath?: string } {
   const configPath = getConfigPath();
   if (existsSync(configPath)) {
@@ -103,6 +119,9 @@ function loadRawConfig(): { raw: RawOrchestratorConfig; configPath?: string } {
       criticModel: process.env.ORCHESTRATOR_CRITIC_MODEL,
       defaultAgent: process.env.ORCHESTRATOR_DEFAULT_AGENT,
       piBinary: process.env.ORCHESTRATOR_PI_BINARY,
+      tmux: process.env.ORCHESTRATOR_TMUX,
+      tmuxSession: process.env.ORCHESTRATOR_TMUX_SESSION,
+      tmuxCloseWindows: process.env.ORCHESTRATOR_TMUX_CLOSE_WINDOWS,
     },
   };
 }
@@ -170,6 +189,9 @@ export function loadConfig(): OrchestratorConfig {
     criticModel: raw.criticModel?.trim() || undefined,
     defaultAgent: raw.defaultAgent?.trim() || "implementer",
     piBinary: raw.piBinary?.trim() || DEFAULT_PI_BINARY,
+    tmux: parseBoolean(raw.tmux, true),
+    tmuxSession: raw.tmuxSession?.trim() || DEFAULT_TMUX_SESSION,
+    tmuxCloseWindows: parseBoolean(raw.tmuxCloseWindows, false),
     configPath,
   };
 }

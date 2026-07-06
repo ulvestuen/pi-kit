@@ -7,5 +7,8 @@
   "outputCapBytes": 51200,
   "criticModel": "",
   "defaultAgent": "implementer",
-  "piBinary": "pi"
+  "piBinary": "pi",
+  "tmux": true,
+  "tmuxSession": "pi-agents",
+  "tmuxCloseWindows": false
 }

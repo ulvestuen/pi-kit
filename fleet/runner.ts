@@ -61,6 +61,12 @@ export interface SpawnRequest {
   signal: AbortSignal;
   /** Streaming stdout chunks, for progress reporting. */
   onOutput?: (chunk: string) => void;
+  /**
+   * Human-readable identity of a sub-agent child, e.g. "1-implementer".
+   * Set only for the pi child itself (not auxiliary spawns like git), so
+   * spawn wrappers can attach per-agent visibility such as tmux windows.
+   */
+  label?: string;
 }
 
 export interface SpawnOutcome {
@@ -366,6 +372,7 @@ async function runOneTask(
       args: buildPiArgs(def, spec),
       cwd,
       signal: controller.signal,
+      label: `${index + 1}-${def.name}`,
       onOutput: (chunk) =>
         opts.onEvent?.({ type: "task_update", index, agent: def.name, chunk }),
     });
