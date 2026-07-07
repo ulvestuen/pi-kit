@@ -14,7 +14,8 @@
     "fleet",
     "planner",
     "critic",
-    "orchestrator"
+    "orchestrator",
+    "spawn"
   ],
   "repository": {
     "type": "git",
@@ -29,7 +30,8 @@
       "./fleet",
       "./planner",
       "./critic",
-      "./orchestrator"
+      "./orchestrator",
+      "./spawn"
     ],
     "skills": [
       "./lykkja/skills",

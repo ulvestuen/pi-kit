@@ -14,3 +14,4 @@ fleet.json
 planner.json
 critic.json
 orchestrator.json
+.gstack/

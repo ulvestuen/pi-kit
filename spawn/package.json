@@ -1,0 +1,19 @@
+{
+  "name": "pi-spawn",
+  "version": "1.0.0",
+  "description": "Detached sub-agent jobs for the pi coding agent — launch child pi processes as background jobs in tmux windows, on exe.dev cloud VMs, or in microsandbox microVMs, and poll their status, output, and exit codes across sessions",
+  "type": "module",
+  "scripts": {
+    "test": "tsx --test test.ts"
+  },
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "devDependencies": {
+    "@mariozechner/pi-ai": "^0.71.0",
+    "@mariozechner/pi-coding-agent": "^0.71.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3"
+  }
+}

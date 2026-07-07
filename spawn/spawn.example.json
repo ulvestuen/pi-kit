@@ -1,0 +1,28 @@
+{
+  "backend": "tmux",
+  "piBinary": "pi",
+  "outputTailBytes": 16384,
+  "injectSystemPrompt": true,
+  "envPassthrough": [
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "OPENROUTER_API_KEY",
+    "GROQ_API_KEY",
+    "XAI_API_KEY"
+  ],
+  "sshBinary": "ssh",
+  "tmuxSession": "pi-agents",
+  "exedevVm": "pi-spawn",
+  "exedevDomain": "exe.xyz",
+  "exedevAutoCreate": true,
+  "exedevForwardEnv": false,
+  "msbBinary": "msb",
+  "msbImage": "node",
+  "msbMountCwd": true,
+  "msbForwardEnv": true,
+  "msbRemoveSandbox": true,
+  "msbCpus": 2,
+  "msbMemory": "2G"
+}

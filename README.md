@@ -9,6 +9,7 @@ This repository contains pi-related integrations and extensions.
 - [`planner/`](./planner/) – plans as data for pi (a validated task DAG with per-task acceptance criteria; the `plan_create`/`plan_update` tools and `/plan` dashboard)
 - [`critic/`](./critic/) – independent advisor/reviewer for pi (fresh-context read-only review with the `critic_review`/`critic_advise` tools and `/critic` command)
 - [`orchestrator/`](./orchestrator/) – thin multi-agent composition layer for pi (`/orchestrate` drives planner + fleet + critic inside a lykkja loop)
+- [`spawn/`](./spawn/) – detached sub-agent jobs for pi (launch child `pi` processes as background jobs in tmux windows, on [exe.dev](https://exe.dev) cloud VMs, or in [microsandbox](https://microsandbox.dev) microVMs; the `spawn_agent`/`spawn_jobs`/`spawn_output`/`spawn_kill` tools and `/spawn` command)
 - [`threema/`](./threema/) – Threema integration for pi
 - [`exa/`](./exa/) – Exa web search extension for pi (adds the `exa_search` tool and `/exa` status command)
 - [`kagi/`](./kagi/) – Kagi web search extension for pi (adds the `kagi_search` tool and `/kagi` status command)
@@ -33,6 +34,7 @@ For installation, configuration, usage, and troubleshooting, see the README insi
 - [`planner/README.md`](./planner/README.md)
 - [`critic/README.md`](./critic/README.md)
 - [`orchestrator/README.md`](./orchestrator/README.md)
+- [`spawn/README.md`](./spawn/README.md)
 - [`threema/README.md`](./threema/README.md)
 - [`exa/README.md`](./exa/README.md)
 - [`kagi/README.md`](./kagi/README.md)
