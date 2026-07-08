@@ -35,6 +35,7 @@ import {
 } from "../jobs.ts";
 import {
   localJobDir,
+  readErrTail,
   readLogTail,
   refreshFromLocalMarkers,
 } from "./local.ts";
@@ -51,6 +52,13 @@ export function sandboxNameFor(jobName: string): string {
 /**
  * The run script executed inside the guest. Paths are guest paths (the
  * mounted /job), so the done marker and log land in the host job dir.
+ *
+ * Like the tmux script: stderr goes to its own err file so it never
+ * pollutes the parsed output stream, guard-rail failures explain
+ * themselves in that err file before writing the done marker, and the
+ * exit code is staged and only published as the done marker after the
+ * log is fully written — the marker's appearance means the log is
+ * complete on the host side of the mount too.
  */
 export function buildGuestRunScript(options: {
   jobName: string;
@@ -59,16 +67,17 @@ export function buildGuestRunScript(options: {
   mountCwd: boolean;
 }): string {
   const done = `${GUEST_JOB_DIR}/done`;
-  const cd = options.mountCwd
-    ? `cd ${GUEST_WORKSPACE_DIR}`
-    : `cd "\${HOME:-/root}"`;
+  const exit = `${GUEST_JOB_DIR}/done.exit`;
+  const err = `${GUEST_JOB_DIR}/err.log`;
+  const cdTarget = options.mountCwd ? GUEST_WORKSPACE_DIR : `"\${HOME:-/root}"`;
   return [
     "#!/bin/sh",
     `# pi-spawn job ${options.jobName}: one detached sub-agent in this microVM.`,
     ...options.envExports,
-    `command -v pi > /dev/null 2>&1 || npm install -g @mariozechner/pi-coding-agent > ${GUEST_JOB_DIR}/setup.log 2>&1 || { echo 126 > ${done}; exit 126; }`,
-    `${cd} || { echo 127 > ${done}; exit 127; }`,
-    `{ ${options.piCommand}; echo $? > ${done}; } > ${GUEST_JOB_DIR}/job.log 2>&1`,
+    `command -v pi > /dev/null 2>&1 || npm install -g @mariozechner/pi-coding-agent > ${GUEST_JOB_DIR}/setup.log 2>&1 || { echo '[pi-spawn] could not install pi in the sandbox; see setup.log in the job directory' > ${err}; echo 126 > ${done}; exit 126; }`,
+    `cd ${cdTarget} || { echo "[pi-spawn] could not cd to ${options.mountCwd ? GUEST_WORKSPACE_DIR : "\\$HOME"} in the sandbox" > ${err}; echo 127 > ${done}; exit 127; }`,
+    `{ ${options.piCommand}; echo $? > ${exit}; } > ${GUEST_JOB_DIR}/job.log 2> ${err}`,
+    `mv ${exit} ${done}`,
     "",
   ].join("\n");
 }
@@ -134,6 +143,7 @@ export function createMicrosandboxBackend(
       mkdirSync(jobDir, { recursive: true });
       job.logPath = path.join(jobDir, "job.log");
       job.donePath = path.join(jobDir, "done");
+      job.errPath = path.join(jobDir, "err.log");
       const runScript = path.join(jobDir, "run.sh");
       writeFileSync(
         runScript,
@@ -176,6 +186,10 @@ export function createMicrosandboxBackend(
 
     async output(job: SpawnJob, maxBytes: number): Promise<string> {
       return readLogTail(job.logPath, maxBytes);
+    },
+
+    async errorOutput(job: SpawnJob, maxBytes: number): Promise<string> {
+      return readErrTail(job.errPath, maxBytes);
     },
 
     async kill(job: SpawnJob): Promise<void> {

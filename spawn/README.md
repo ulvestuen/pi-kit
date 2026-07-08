@@ -36,10 +36,17 @@ definitions).
 
 Each job is one `pi -p --no-session` invocation (plain-text print mode) with
 the agent's system prompt, model, thinking level, and tool allowlist, and
-the task text as the prompt. The job's run script writes the child's output
-to a **log** and its exit code to a **done marker**; a persistent registry
+the task text as the prompt. The job's run script writes the child's stdout
+to a **log**, its stderr to a separate **err file** (so it can never corrupt
+the output stream the parent parses), and its exit code to a **done
+marker** — published only *after* the log is fully written, so anyone who
+sees the marker sees the complete output. A persistent registry
 (`<logDir>/jobs.json`) records every job so any later pi session can check
-on it. Status is derived, never guessed:
+on it. `spawn_output` shows the captured stderr alongside the log tail for
+jobs that did not end cleanly, and guard-rail failures (a cwd that does not
+exist, a sandbox that could not install pi) explain themselves in the err
+file instead of surfacing as a bare exit code. Status is derived, never
+guessed:
 
 - done marker present → `done` (exit 0) or `failed` (non-zero),
 - no marker, runner alive → `running`,
@@ -52,9 +59,15 @@ runaways with `spawn_kill`.
 ### tmux backend
 
 The window *is* the runner: it executes the job's run script, which tees
-pi's output into the log and records the exit code. Windows collect in the
-shared kit session (default `pi-agents`, `tmux attach -t pi-agents`) and
-stay open after the job exits (`remain-on-exit`) so you can scroll back.
+pi's stdout into the log (stderr goes to the job's err file) and records
+the exit code. Windows collect in the shared kit session (default
+`pi-agents`, `tmux attach -t pi-agents`) and stay open after the job exits
+(`remain-on-exit`) so you can scroll back.
+
+A tmux window inherits the tmux *server's* environment, not the pi
+session's, so the `envPassthrough` API keys are forwarded into the run
+script by default (`tmuxForwardEnv: false` disables this; the run script
+is owner-only, mode 0700).
 
 ### exe.dev backend
 
@@ -145,6 +158,7 @@ defaults, create `~/.pi/agent/extensions/spawn/spawn.json` (see
 | `envPassthrough`     | common API keys  | Variables forwarded when a backend forwards env.        |
 | `sshBinary`          | `"ssh"`          | ssh client for the exedev backend.                      |
 | `tmuxSession`        | `"pi-agents"`    | tmux session collecting job windows.                    |
+| `tmuxForwardEnv`     | `true`           | Forward `envPassthrough` keys into tmux run scripts (the window inherits the tmux server's env, not this session's). |
 | `exedevVm`           | `"pi-spawn"`     | exe.dev VM that hosts jobs.                             |
 | `exedevDomain`       | `"exe.xyz"`      | Domain suffix of VM SSH destinations.                   |
 | `exedevAutoCreate`   | `true`           | Create the VM on first use when missing.                |
@@ -160,7 +174,8 @@ defaults, create `~/.pi/agent/extensions/spawn/spawn.json` (see
 Environment overrides (used when no JSON config exists): `SPAWN_CONFIG_PATH`,
 `SPAWN_BACKEND`, `SPAWN_LOG_DIR`, `SPAWN_PI_BINARY`, `SPAWN_OUTPUT_TAIL_BYTES`,
 `SPAWN_INJECT_SYSTEM_PROMPT`, `SPAWN_ENV_PASSTHROUGH` (comma-separated),
-`SPAWN_SSH_BINARY`, `SPAWN_TMUX_SESSION`, `SPAWN_EXEDEV_VM`,
+`SPAWN_SSH_BINARY`, `SPAWN_TMUX_SESSION`, `SPAWN_TMUX_FORWARD_ENV`,
+`SPAWN_EXEDEV_VM`,
 `SPAWN_EXEDEV_DOMAIN`, `SPAWN_EXEDEV_AUTO_CREATE`, `SPAWN_EXEDEV_FORWARD_ENV`,
 `SPAWN_MSB_BINARY`, `SPAWN_MSB_IMAGE`, `SPAWN_MSB_MOUNT_CWD`,
 `SPAWN_MSB_FORWARD_ENV`, `SPAWN_MSB_REMOVE_SANDBOX`, `SPAWN_MSB_CPUS`,

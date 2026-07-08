@@ -12,7 +12,11 @@
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { sanitizeTmuxName, shellQuote } from "../../fleet/tmux.ts";
-import { buildPiShellCommand, buildShellCommand } from "../agent-command.ts";
+import {
+  buildEnvExports,
+  buildPiShellCommand,
+  buildShellCommand,
+} from "../agent-command.ts";
 import type { SpawnConfig } from "../config.ts";
 import type {
   ExecFn,
@@ -22,6 +26,7 @@ import type {
 } from "../jobs.ts";
 import {
   localJobDir,
+  readErrTail,
   readLogTail,
   refreshFromLocalMarkers,
 } from "./local.ts";
@@ -30,6 +35,13 @@ import {
  * The run script a job's tmux window executes. The exit-code capture rides
  * inside the braces so `$?` is pi's status, not tee's; output is teed so
  * the window shows it live while the log captures it for spawn_output.
+ *
+ * Two ordering rules make the report-back reliable:
+ *  - stderr goes to its own err file, never into the pipe, so it cannot
+ *    interleave with (and corrupt) the JSONL stream fleet parses;
+ *  - the exit code is staged in a temp file and only published as the done
+ *    marker *after* the pipeline — tee included — has finished, so anyone
+ *    who sees the marker sees the complete log.
  */
 export function buildTmuxRunScript(options: {
   jobName: string;
@@ -37,13 +49,21 @@ export function buildTmuxRunScript(options: {
   piCommand: string;
   logPath: string;
   donePath: string;
+  errPath: string;
+  /** Export lines forwarding API keys: the window inherits the tmux
+   * server's environment, not the launching pi session's. */
+  envExports?: string[];
 }): string {
-  const { jobName, cwd, piCommand, logPath, donePath } = options;
+  const { jobName, cwd, piCommand, logPath, donePath, errPath } = options;
+  const exitPath = `${donePath}.exit`;
+  const cdFailed = shellQuote(`[pi-spawn] could not cd to ${cwd}`);
   return [
     "#!/bin/sh",
     `# pi-spawn job ${jobName}: runs one detached sub-agent in this window.`,
-    `cd ${shellQuote(cwd)} || { echo 127 > ${shellQuote(donePath)}; exit 127; }`,
-    `{ ${piCommand}; echo $? > ${shellQuote(donePath)}; } 2>&1 | tee ${shellQuote(logPath)}`,
+    ...(options.envExports ?? []),
+    `cd ${shellQuote(cwd)} || { echo ${cdFailed} > ${shellQuote(errPath)}; echo 127 > ${shellQuote(donePath)}; exit 127; }`,
+    `{ ${piCommand}; echo $? > ${shellQuote(exitPath)}; } 2> ${shellQuote(errPath)} | tee ${shellQuote(logPath)}`,
+    `mv ${shellQuote(exitPath)} ${shellQuote(donePath)}`,
     "",
   ].join("\n");
 }
@@ -139,6 +159,7 @@ export function createTmuxBackend(
       mkdirSync(jobDir, { recursive: true });
       job.logPath = path.join(jobDir, "job.log");
       job.donePath = path.join(jobDir, "done");
+      job.errPath = path.join(jobDir, "err.log");
       const runScript = path.join(jobDir, "run.sh");
       writeFileSync(
         runScript,
@@ -154,10 +175,15 @@ export function createTmuxBackend(
               ),
           logPath: job.logPath,
           donePath: job.donePath,
+          errPath: job.errPath,
+          envExports: config.tmuxForwardEnv
+            ? buildEnvExports(config.envPassthrough, process.env)
+            : [],
         }),
         "utf8",
       );
-      chmodSync(runScript, 0o755);
+      // The script may carry forwarded API keys; keep it owner-only.
+      chmodSync(runScript, 0o700);
 
       const setup = setupChain.then(() =>
         openWindow(
@@ -178,6 +204,10 @@ export function createTmuxBackend(
 
     async output(job: SpawnJob, maxBytes: number): Promise<string> {
       return readLogTail(job.logPath, maxBytes);
+    },
+
+    async errorOutput(job: SpawnJob, maxBytes: number): Promise<string> {
+      return readErrTail(job.errPath, maxBytes);
     },
 
     async kill(job: SpawnJob): Promise<void> {

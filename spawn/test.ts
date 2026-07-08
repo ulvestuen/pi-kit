@@ -28,11 +28,13 @@ import {
 import {
   localJobDir,
   readDoneMarker,
+  readErrTail,
   readLogTail,
   refreshFromLocalMarkers,
 } from "./backends/local.ts";
 import { buildTmuxRunScript, createTmuxBackend } from "./backends/tmux.ts";
 import {
+  buildErrTailCommand,
   buildKillCommand,
   buildLaunchCommand,
   buildProbeCommand,
@@ -113,6 +115,7 @@ function runningJob(
   mkdirSync(dir, { recursive: true });
   job.logPath = job.logPath ?? path.join(dir, "job.log");
   job.donePath = job.donePath ?? path.join(dir, "done");
+  job.errPath = job.errPath ?? path.join(dir, "err.log");
   return job;
 }
 
@@ -222,6 +225,16 @@ describe("local markers", () => {
     assert.equal(job.status, "lost");
   });
 
+  it("reads missing and empty stderr files as empty, tails the rest", () => {
+    const config = testConfig();
+    const job = runningJob(config);
+    assert.equal(readErrTail(job.errPath, 100), "");
+    writeFileSync(job.errPath!, "", "utf8");
+    assert.equal(readErrTail(job.errPath, 100), "");
+    writeFileSync(job.errPath!, "pi: command not found\n", "utf8");
+    assert.equal(readErrTail(job.errPath, 100), "pi: command not found\n");
+  });
+
   it("tails logs with a truncation prefix", () => {
     const config = testConfig();
     const job = runningJob(config);
@@ -293,12 +306,25 @@ describe("tmux backend", () => {
       piCommand: "'pi' '-p' 'task'",
       logPath: "/logs/j1/job.log",
       donePath: "/logs/j1/done",
+      errPath: "/logs/j1/err.log",
     });
-    assert.ok(script.includes(`cd '/work dir' || { echo 127 > '/logs/j1/done'; exit 127; }`));
     assert.ok(
       script.includes(
-        `{ 'pi' '-p' 'task'; echo $? > '/logs/j1/done'; } 2>&1 | tee '/logs/j1/job.log'`,
+        `cd '/work dir' || { echo '[pi-spawn] could not cd to /work dir' > '/logs/j1/err.log'; echo 127 > '/logs/j1/done'; exit 127; }`,
       ),
+    );
+    // stderr must stay out of the teed stream (it would corrupt the JSONL
+    // fleet parses), and the done marker must only appear after tee has
+    // finished writing the log — otherwise a poller can see "done" and
+    // read a log that is still missing the final assistant message.
+    assert.ok(
+      script.includes(
+        `{ 'pi' '-p' 'task'; echo $? > '/logs/j1/done.exit'; } 2> '/logs/j1/err.log' | tee '/logs/j1/job.log'`,
+      ),
+    );
+    assert.ok(script.includes(`mv '/logs/j1/done.exit' '/logs/j1/done'`));
+    assert.ok(
+      script.indexOf("| tee") < script.indexOf("mv '/logs/j1/done.exit'"),
     );
   });
 
@@ -345,6 +371,59 @@ describe("tmux backend", () => {
     );
     assert.ok(script.includes("'scout prompt'"));
     assert.ok(script.includes("'t1'"));
+  });
+
+  it("forwards API keys into the run script (the window inherits the tmux server's env)", async () => {
+    const config = testConfig({ envPassthrough: ["SPAWN_TEST_KEY"] });
+    process.env.SPAWN_TEST_KEY = "k3y";
+    try {
+      const { exec } = fakeExec((call) => {
+        if (call.args[0] === "has-session") return { exitCode: 1 };
+        if (call.args[0] === "new-session") return { stdout: "@1\n" };
+        return {};
+      });
+      const backend = createTmuxBackend(exec, config);
+      const job = await backend.launch({
+        jobName: "j-env",
+        agent: def("scout"),
+        task: "t",
+        cwd: "/tmp",
+      });
+      const script = readFileSync(
+        path.join(localJobDir(job, config), "run.sh"),
+        "utf8",
+      );
+      assert.ok(script.includes("export SPAWN_TEST_KEY='k3y'"));
+    } finally {
+      delete process.env.SPAWN_TEST_KEY;
+    }
+
+    const off = testConfig({
+      envPassthrough: ["SPAWN_TEST_KEY"],
+      tmuxForwardEnv: false,
+    });
+    process.env.SPAWN_TEST_KEY = "k3y";
+    try {
+      const { exec } = fakeExec((call) => {
+        if (call.args[0] === "has-session") return { exitCode: 1 };
+        if (call.args[0] === "new-session") return { stdout: "@1\n" };
+        return {};
+      });
+      const backend = createTmuxBackend(exec, off);
+      const job = await backend.launch({
+        jobName: "j-noenv",
+        agent: def("scout"),
+        task: "t",
+        cwd: "/tmp",
+      });
+      const script = readFileSync(
+        path.join(localJobDir(job, off), "run.sh"),
+        "utf8",
+      );
+      assert.doesNotMatch(script, /SPAWN_TEST_KEY/);
+    } finally {
+      delete process.env.SPAWN_TEST_KEY;
+    }
   });
 
   it("uses a runner-provided command instead of building pi -p", async () => {
@@ -436,11 +515,14 @@ describe("exedev command builders", () => {
     assert.ok(script.includes('echo $$ > "$d/pid"'));
     assert.ok(script.includes("export A_KEY='x'"));
     assert.ok(script.includes('cd "$HOME"'));
+    // stderr goes to its own file and the done marker is published only
+    // after the log is fully written.
     assert.ok(
       script.includes(
-        `{ 'pi' '-p' 'task'; echo $? > "$d/done"; } > "$d/job.log" 2>&1`,
+        `{ 'pi' '-p' 'task'; echo $? > "$d/done.exit"; } > "$d/job.log" 2> "$d/err.log"`,
       ),
     );
+    assert.ok(script.includes('mv "$d/done.exit" "$d/done"'));
 
     const runnerScript = buildRemoteRunScript({
       jobName: "j2",
@@ -449,9 +531,18 @@ describe("exedev command builders", () => {
       envExports: [],
       cwd: "/remote/repo worktree",
     });
+    assert.ok(runnerScript.includes("cd '/remote/repo worktree' || { echo "));
+    assert.ok(runnerScript.includes('> "$d/err.log"; echo 127 > "$d/done"; exit 127; }'));
+    assert.match(runnerScript, /could not cd to \/remote\/repo worktree on the VM/);
+  });
+
+  it("tails the remote stderr file without a placeholder", () => {
+    const err = buildErrTailCommand(".pi-spawn/j1", 1024);
+    assert.ok(err.includes('tail -c 1024 "$d/err.log"'));
+    assert.ok(err.endsWith("true"));
     assert.ok(
-      runnerScript.includes(
-        "cd '/remote/repo worktree' || { echo 127 > \"$d/done\"; exit 127; }",
+      buildErrTailCommand(".pi-spawn/j1", Number.POSITIVE_INFINITY).includes(
+        'cat "$d/err.log"',
       ),
     );
   });
@@ -635,10 +726,20 @@ describe("microsandbox backend", () => {
     });
     assert.ok(script.includes("export K='v'"));
     assert.ok(script.includes("npm install -g @mariozechner/pi-coding-agent"));
-    assert.ok(script.includes("cd /workspace || { echo 127 > /job/done; exit 127; }"));
     assert.ok(
-      script.includes(`{ 'pi' '-p' 't'; echo $? > /job/done; } > /job/job.log 2>&1`),
+      script.includes(
+        'cd /workspace || { echo "[pi-spawn] could not cd to /workspace in the sandbox" > /job/err.log; echo 127 > /job/done; exit 127; }',
+      ),
     );
+    // stderr to its own file; done marker published after the log is
+    // complete (the mv is what the host-side poller keys on).
+    assert.ok(
+      script.includes(
+        `{ 'pi' '-p' 't'; echo $? > /job/done.exit; } > /job/job.log 2> /job/err.log`,
+      ),
+    );
+    assert.ok(script.includes("mv /job/done.exit /job/done"));
+    assert.match(script, /could not install pi in the sandbox/);
     assert.ok(
       buildGuestRunScript({
         jobName: "j1",
@@ -771,6 +872,9 @@ describe("spawn runner adapter", () => {
       async output(job, maxBytes) {
         return readLogTail(job.logPath, maxBytes);
       },
+      async errorOutput(job, maxBytes) {
+        return readErrTail(job.errPath, maxBytes);
+      },
       async kill(job) {
         killed.push(job.name);
       },
@@ -807,6 +911,44 @@ describe("spawn runner adapter", () => {
     assert.equal(jobs.length, 1);
     assert.equal(jobs[0].status, "done");
     assert.match(jobs[0].name, /^pi-fleet-test-1-scout-/);
+  });
+
+  it("reports a failed child's captured stderr back to the runner", async () => {
+    const config = testConfig();
+    const { backend } = backendForAdapter(config);
+    backend.launch = async (request) => {
+      const job = runningJob(config, {
+        name: request.jobName,
+        agent: request.agent.name,
+        task: request.task,
+        cwd: request.cwd,
+      });
+      writeFileSync(job.errPath!, "Error: no API key configured\n", "utf8");
+      return job;
+    };
+    backend.refresh = async (job) => {
+      if (job.status !== "running") return false;
+      job.status = "failed";
+      job.exitCode = 1;
+      job.updatedAt = Date.now();
+      return true;
+    };
+    const spawn = createSpawnToolingSpawn({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      pollIntervalMs: 0,
+      jobNamePrefix: "pi-fleet-test",
+    });
+    const outcome = await spawn({
+      command: "pi",
+      args: ["--mode", "json", "task"],
+      cwd: "/repo",
+      signal: new AbortController().signal,
+      label: "1-scout",
+    });
+    assert.equal(outcome.exitCode, 1);
+    assert.match(outcome.stderr, /ended with status failed \(exit 1\)/);
+    assert.match(outcome.stderr, /no API key configured/);
   });
 
   it("delegates unlabeled helper commands to the fallback", async () => {
