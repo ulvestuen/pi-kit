@@ -12,7 +12,7 @@
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { sanitizeTmuxName, shellQuote } from "../../fleet/tmux.ts";
-import { buildPiShellCommand } from "../agent-command.ts";
+import { buildPiShellCommand, buildShellCommand } from "../agent-command.ts";
 import type { SpawnConfig } from "../config.ts";
 import type {
   ExecFn,
@@ -145,11 +145,13 @@ export function createTmuxBackend(
         buildTmuxRunScript({
           jobName: job.name,
           cwd: request.cwd,
-          piCommand: buildPiShellCommand(
-            config.piBinary,
-            request.agent,
-            request.task,
-          ),
+          piCommand: request.command
+            ? buildShellCommand(request.command, request.args ?? [])
+            : buildPiShellCommand(
+                config.piBinary,
+                request.agent,
+                request.task,
+              ),
           logPath: job.logPath,
           donePath: job.donePath,
         }),

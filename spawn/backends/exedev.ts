@@ -14,7 +14,11 @@
  */
 
 import { shellQuote } from "../../fleet/tmux.ts";
-import { buildEnvExports, buildPiShellCommand } from "../agent-command.ts";
+import {
+  buildEnvExports,
+  buildPiShellCommand,
+  buildShellCommand,
+} from "../agent-command.ts";
 import type { SpawnConfig } from "../config.ts";
 import {
   resolveStatus,
@@ -54,15 +58,18 @@ export function buildRemoteRunScript(options: {
   piCommand: string;
   remoteDir: string;
   envExports: string[];
+  /** Optional cwd for prebuilt synchronous runner commands. */
+  cwd?: string;
 }): string {
   const d = remoteDirExpr(options.remoteDir);
+  const cwd = options.cwd ? shellQuote(options.cwd) : '"$HOME"';
   return [
     "#!/bin/sh",
     `# pi-spawn job ${options.jobName}: one detached sub-agent on this VM.`,
     `d=${d}`,
     'echo $$ > "$d/pid"',
     ...options.envExports,
-    'cd "$HOME" || { echo 127 > "$d/done"; exit 127; }',
+    `cd ${cwd} || { echo 127 > "$d/done"; exit 127; }`,
     `{ ${options.piCommand}; echo $? > "$d/done"; } > "$d/job.log" 2>&1`,
     "",
   ].join("\n");
@@ -103,6 +110,9 @@ export function buildProbeCommand(remoteDir: string): string {
 /** Tail the remote job log; prints a placeholder when there is none yet. */
 export function buildTailCommand(remoteDir: string, maxBytes: number): string {
   const d = remoteDirExpr(remoteDir);
+  if (!Number.isFinite(maxBytes)) {
+    return `d=${d}; cat "$d/job.log" 2>/dev/null || echo "(no output yet)"`;
+  }
   return `d=${d}; tail -c ${Math.max(1, Math.floor(maxBytes))} "$d/job.log" 2>/dev/null || echo "(no output yet)"`;
 }
 
@@ -214,15 +224,18 @@ export function createExedevBackend(
       const remoteDir = remoteJobDir(request.jobName);
       const runScript = buildRemoteRunScript({
         jobName: request.jobName,
-        piCommand: buildPiShellCommand(
-          config.piBinary,
-          request.agent,
-          request.task,
-        ),
+        piCommand: request.command
+          ? buildShellCommand(request.command, request.args ?? [])
+          : buildPiShellCommand(
+              config.piBinary,
+              request.agent,
+              request.task,
+            ),
         remoteDir,
         envExports: config.exedevForwardEnv
           ? buildEnvExports(config.envPassthrough, process.env)
           : [],
+        cwd: request.command ? request.cwd : undefined,
       });
       const launched = await ssh(dest, buildLaunchCommand(remoteDir), {
         stdin: runScript,

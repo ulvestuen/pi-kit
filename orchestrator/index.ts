@@ -6,9 +6,12 @@ import { defineTool } from "@mariozechner/pi-coding-agent";
 import { Type } from "@mariozechner/pi-ai";
 import {
   createFullOutputSaver,
+  cleanupHostSpawnJobs,
   createHostSpawn,
   createWorktreeRoot,
   discoverAgents,
+  isTmuxAvailable,
+  loadHostSpawnConfig,
 } from "../fleet/host.ts";
 import { DEFAULT_TMUX_SESSION } from "../fleet/tmux.ts";
 import { getAgent, type AgentDefinition } from "../fleet/registry.ts";
@@ -134,7 +137,9 @@ export default function (pi: ExtensionAPI) {
     };
   }
 
-  const spawn = createHostSpawn(config, "pi-orchestrator");
+  const spawnConfig = loadHostSpawnConfig(config, "pi-orchestrator");
+  const spawnTmuxLive = spawnConfig.backend === "tmux" && isTmuxAvailable();
+  const spawn = createHostSpawn(config, "pi-orchestrator", spawnConfig);
 
   const policy: SchedulerPolicy = {
     maxConcurrent: config.maxConcurrent,
@@ -482,6 +487,7 @@ export default function (pi: ExtensionAPI) {
   );
 
   pi.on("session_start", async (_event, ctx) => {
+    await cleanupHostSpawnJobs(spawnConfig, "pi-orchestrator");
     let latest: OrchestratorState | null = null;
     for (const entry of ctx.sessionManager.getEntries()) {
       if (entry.type === "custom" && entry.customType === STATE_ENTRY_TYPE) {
@@ -516,7 +522,8 @@ export default function (pi: ExtensionAPI) {
           "orchestrator — thin composition layer",
           `  Wave:        ${state.wave}${state.stopped ? " (stopped)" : ""}`,
           `  Policy:      ${config.maxConcurrent} concurrent, ${config.maxAttempts} attempt(s) per task, isolation ${config.isolation}`,
-          `  tmux:        ${config.tmux ? `live agent windows in session "${config.tmuxSession}" (tmux attach -t ${config.tmuxSession})` : "disabled"}`,
+          `  spawn:       backend ${spawnConfig.backend} (config: ${spawnConfig.configPath ?? "defaults / environment variables"})`,
+          `  tmux:        ${spawnTmuxLive ? `sub-agent runner windows in session "${spawnConfig.tmuxSession}" (tmux attach -t ${spawnConfig.tmuxSession})` : spawnConfig.backend === "tmux" ? "spawn backend selected but tmux is not installed" : "not used by selected spawn backend"}`,
           `  Plan:        ${plan ? `${summarizePlan(plan).counts.done}/${plan.tasks.length} done — "${plan.goal}"` : "(none)"}`,
           missing.length > 0
             ? `  MISSING dependencies: ${missing.join(", ")} — install the lykkja and planner packages.`

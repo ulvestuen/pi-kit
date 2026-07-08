@@ -3,8 +3,11 @@ import { defineTool } from "@mariozechner/pi-coding-agent";
 import { Type } from "@mariozechner/pi-ai";
 import {
   createFullOutputSaver,
+  cleanupHostSpawnJobs,
   createHostSpawn,
   discoverAgents,
+  isTmuxAvailable,
+  loadHostSpawnConfig,
 } from "../fleet/host.ts";
 import { DEFAULT_TMUX_SESSION } from "../fleet/tmux.ts";
 import type { AgentDefinition } from "../fleet/registry.ts";
@@ -76,7 +79,9 @@ export default function (pi: ExtensionAPI) {
     };
   }
 
-  const spawn = createHostSpawn(config, "pi-critic");
+  const spawnConfig = loadHostSpawnConfig(config, "pi-critic");
+  const spawnTmuxLive = spawnConfig.backend === "tmux" && isTmuxAvailable();
+  const spawn = createHostSpawn(config, "pi-critic", spawnConfig);
 
   /** Resolve the critic agent definition, applying the config model override. */
   function criticAgent(cwd: string): AgentDefinition {
@@ -109,12 +114,16 @@ export default function (pi: ExtensionAPI) {
     return { output: result.output, status: result.status };
   }
 
+  pi.on("session_start", async () => {
+    await cleanupHostSpawnJobs(spawnConfig, "pi-critic");
+  });
+
   pi.registerTool(
     defineTool({
       name: "critic_review",
       label: "critic: Independent Review",
       description:
-        "Score work against explicit criteria using an independent critic agent with fresh context (a read-only child pi process). Provide the subject (diff, file list, artifact, or task result), optional context, and the rubric. Returns lykkja-shaped criterion scores, a pass/fail verdict, and prioritized weaknesses — usable directly as the CHECK step of a lykkja loop.",
+        "Score work against explicit criteria using an independent critic agent with fresh context (a read-only spawn-backed child pi run). Provide the subject (diff, file list, artifact, or task result), optional context, and the rubric. Returns lykkja-shaped criterion scores, a pass/fail verdict, and prioritized weaknesses — usable directly as the CHECK step of a lykkja loop.",
       promptSnippet:
         "critic_review: have an independent read-only critic score work against explicit criteria.",
       promptGuidelines: [
@@ -191,7 +200,7 @@ export default function (pi: ExtensionAPI) {
       name: "critic_advise",
       label: "critic: Design Advice",
       description:
-        "Get pre-implementation design feedback on a plan or approach from an independent advisor agent with fresh context (a read-only child pi process). Returns a prioritized list of concerns and concrete improvements rather than scores. Use before committing to a design.",
+        "Get pre-implementation design feedback on a plan or approach from an independent advisor agent with fresh context (a read-only spawn-backed child pi run). Returns a prioritized list of concerns and concrete improvements rather than scores. Use before committing to a design.",
       promptSnippet:
         "critic_advise: get independent, prioritized design feedback on a plan before implementing it.",
       promptGuidelines: [
@@ -236,7 +245,8 @@ export default function (pi: ExtensionAPI) {
         `  Tools:      ${def.tools?.join(", ") ?? "(parent's tools)"}`,
         `  Scale:      1..${config.scaleMax}, default threshold ${config.passThreshold}`,
         `  Timeout:    ${Math.round(config.timeoutMs / 1000)}s`,
-        `  tmux:       ${config.tmux ? `live windows in session "${config.tmuxSession}"` : "disabled"}`,
+        `  spawn:      backend ${spawnConfig.backend} (config: ${spawnConfig.configPath ?? "defaults / environment variables"})`,
+        `  tmux:       ${spawnTmuxLive ? `runner windows in session "${spawnConfig.tmuxSession}"` : spawnConfig.backend === "tmux" ? "spawn backend selected but tmux is not installed" : "not used by selected spawn backend"}`,
         `  Config:     ${config.configPath ?? "defaults / environment variables"}`,
       ];
       ctx.ui.notify(lines.join("\n"), "info");

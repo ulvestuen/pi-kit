@@ -57,7 +57,7 @@ export interface SpawnRequest {
   command: string;
   args: string[];
   cwd: string;
-  /** Abort to kill the child (SIGTERM, then SIGKILL after a grace period). */
+  /** Abort to stop the child through the injected spawn implementation. */
   signal: AbortSignal;
   /** Streaming stdout chunks, for progress reporting. */
   onOutput?: (chunk: string) => void;

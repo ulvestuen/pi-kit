@@ -22,8 +22,9 @@ step of a plain lykkja loop.
 `critic_review` builds a strict scoring prompt from the rubric
 (`review.ts:buildCriticPrompt`) and dispatches the shipped read-only `critic`
 agent definition through the fleet runner (`fleet/runner.ts`, a pure-module
-import — never `fleet/index.ts`). The critic can inspect the repository but
-not modify it.
+import — never `fleet/index.ts`). The runner's labeled child execution is
+spawn-backed through `fleet/host.ts` + `spawn/runner-adapter.ts`. The critic can
+inspect the repository but not modify it.
 
 The reply must contain one fenced JSON block of scores.
 `review.ts:parseCriticOutput` is where robustness lives: tolerant JSON-block
@@ -63,9 +64,10 @@ pi -e /absolute/path/to/pi-kit/critic/index.ts \
 ```
 
 Note: critic imports the pure engines `lykkja/loop.ts`, `fleet/registry.ts`,
-`fleet/runner.ts`, and the `fleet/host.ts` spawn/discovery helpers via
-workspace-relative paths. A standalone copy of `critic/` must keep the
-`lykkja/` and `fleet/` folders alongside it or vendor those files.
+`fleet/runner.ts`, and the `fleet/host.ts` discovery/spawn-tooling helpers via
+workspace-relative paths. Because `fleet/host.ts` delegates child execution to
+spawn tooling, a standalone copy of `critic/` must keep the `lykkja/`,
+`fleet/`, and `spawn/` folders alongside it or vendor those files.
 
 ## Configuration
 
@@ -79,14 +81,16 @@ critic works with zero configuration. To change defaults, create
 | `passThreshold` | `8`      | Default threshold for criteria that carry none.        |
 | `timeoutMs`     | `300000` | Timeout for one critic run (5 minutes).                |
 | `piBinary`      | `"pi"`   | Binary spawned for critic runs.                        |
-| `tmux`          | `true`   | Mirror critic runs into live tmux windows (see the fleet README). |
-| `tmuxSession`   | `"pi-agents"` | tmux session that collects the agent windows.     |
-| `tmuxCloseWindows` | `false` | Kill each window when its run ends.                  |
+| `tmux`          | `true`   | Historical live-window flag. With spawn's `tmux` backend, tmux is the critic runner. |
+| `tmuxSession`   | `"pi-agents"` | tmux session passed to the spawn tmux backend.     |
+| `tmuxCloseWindows` | `false` | Historical mirror option; spawn tmux jobs remain inspectable after exit. |
 
 Environment overrides (used when no JSON config exists):
 `CRITIC_CONFIG_PATH`, `CRITIC_MODEL`, `CRITIC_SCALE_MAX`,
 `CRITIC_PASS_THRESHOLD`, `CRITIC_TIMEOUT_MS`, `CRITIC_PI_BINARY`,
 `CRITIC_TMUX`, `CRITIC_TMUX_SESSION`, `CRITIC_TMUX_CLOSE_WINDOWS`.
+Backend selection and remote/sandbox details come from the spawn extension's
+configuration (`~/.pi/agent/extensions/spawn/spawn.json` or `SPAWN_*`).
 
 ## Running tests
 

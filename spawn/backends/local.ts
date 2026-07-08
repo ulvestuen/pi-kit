@@ -56,7 +56,10 @@ export function readLogTail(
     return "(no output yet)";
   }
   const size = statSync(logPath).size;
-  const start = Math.max(0, size - maxBytes);
+  const cap = Number.isFinite(maxBytes)
+    ? Math.max(1, Math.floor(maxBytes))
+    : size;
+  const start = Math.max(0, size - cap);
   const length = size - start;
   if (length === 0) return "(no output yet)";
   const fd = openSync(logPath, "r");

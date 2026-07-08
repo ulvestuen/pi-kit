@@ -42,7 +42,7 @@ the extension that owns it:
 |---|---|---|
 | Stopping rule, iteration cap | **lykkja** | The run *is* one lykkja PDCA loop; `lykkja_checkpoint` verdicts decide continue-vs-stop |
 | The plan as data | **planner** | Validated task DAG with per-task, lykkja-shaped acceptance criteria |
-| Execution | **fleet** | Waves of concurrent child `pi` processes via the pure runner |
+| Execution | **fleet + spawn** | Waves of concurrent sub-agents via fleet's runner, with labeled child execution delegated to spawn backends |
 | Judgment on results | **critic** | Fresh-context review of every completed task against its own criteria |
 | Wave/retry/terminal mechanics | **orchestrator** | `scheduler.ts`, a pure deterministic state machine |
 | Decomposition, checkpoint scoring, plan repair | **the model** | Guided by the `orchestration`, `plan-decomposition`, and `success-criteria` skills |
@@ -50,8 +50,8 @@ the extension that owns it:
 ## Composition architecture
 
 The orchestrator imports only **pure cores** across packages — never another
-extension's `index.ts` — plus fleet's `host.ts` for the real spawn/discovery
-effects. Runtime coordination with the planner extension happens over the
+extension's `index.ts` — plus fleet's `host.ts` for discovery and the
+spawn-tooling runner adapter. Runtime coordination with the planner extension happens over the
 shared event bus and the session entry log:
 
 ```mermaid
@@ -71,7 +71,8 @@ flowchart TB
         loop["lykkja/loop.ts<br/>criteria/score vocabulary"]
     end
 
-    host["fleet/host.ts<br/>spawn adapter, agent discovery,<br/>worktree root, transcript saver, tmux"]
+    host["fleet/host.ts<br/>agent discovery,<br/>worktree root, transcript saver,<br/>spawn-tooling adapter"]
+    spawn["spawn/runner-adapter.ts + backends<br/>tmux / exe.dev / microsandbox"]
 
     idx --> sched
     idx --> cfg
@@ -81,6 +82,7 @@ flowchart TB
     idx --> review
     idx --> loop
     idx --> host
+    host --> spawn
 
     subgraph runtime["Runtime coupling (loose)"]
         bus["pi.events bus<br/>planner:set_plan,<br/>orchestrator:wave_start/end, fleet:*"]
@@ -106,7 +108,7 @@ Three coupling rules follow from this picture:
    registered, and reports what is missing instead of failing mid-run.
 3. **Reviews ride the same runner as implementation tasks.** The critic is
    just another fleet agent definition dispatched through `runTasks` — same
-   timeouts, same tmux windows, same output discipline.
+   timeouts, same selected spawn backend, same output discipline.
 
 ## The goal loop: a full run end to end
 
@@ -387,14 +389,15 @@ discarded:
 | lykkja `STOPPED` (25-pass cap) | Hard stop with a per-criterion, per-task failure report and any unmerged branches listed |
 | `/orchestrate stop` | The next `orchestrate_step` reports the stop instead of dispatching |
 | Session restart mid-run | See below — the next `orchestrate_step` resumes idempotently |
-| User abort (`ctx.signal`) | The runner kills children (SIGTERM → SIGKILL), queued tasks abort, state entries record it |
+| User abort (`ctx.signal`) | The runner aborts queued tasks and asks the spawn adapter to kill/stamp running spawn jobs; state entries record it |
 
 Restart recovery is a three-layer handshake, each layer repairing its own
 state from the session entry log:
 
 ```mermaid
 flowchart LR
-    restart["session_start"] --> f["fleet: stale 'running' batch<br/>entries marked aborted<br/>(children never survive the parent)"]
+    restart["session_start"] --> c["fleet/critic/orchestrator:<br/>stale internal spawn jobs killed/stamped"]
+    c --> f["fleet: stale 'running' batch<br/>entries marked aborted<br/>(interrupted synchronous wave)"]
     restart --> p["planner: plan restored;<br/>'running' tasks reset to 'ready'"]
     restart --> o["orchestrator: wave counter and<br/>stopped flag restored"]
     f --> resume["next orchestrate_step:<br/>nextActions recomputes from the plan —<br/>interrupted tasks simply dispatch again,<br/>pending reviews get reviewed"]
@@ -409,13 +412,15 @@ path.
 ## Run control: `/orchestrate status` and `stop`
 
 - **`/orchestrate status`** (or bare `/orchestrate`) prints the wave counter,
-  policy (concurrency, attempts, isolation), tmux session, plan progress, and
-  a dependency check for the required lykkja/planner tools.
+  policy (concurrency, attempts, isolation), selected spawn backend / tmux
+  session, plan progress, and a dependency check for the required
+  lykkja/planner tools.
 - **`/orchestrate stop`** sets a persisted `stopped` flag. It does not kill
   anything mid-flight: the *next* `orchestrate_step` call reports the stop
   instead of dispatching, and instructs the model to summarize the plan state
   honestly. Starting a new run (`/orchestrate <goal>`) clears the flag and
   resets the wave counter.
-- **Watching live**: with tmux enabled, every implementer and critic
-  sub-agent streams into the shared `pi-agents` session —
-  `tmux attach -t pi-agents` — while `/plan` shows the live DAG.
+- **Watching live**: with spawn's `tmux` backend selected, every implementer
+  and critic sub-agent runs in the shared `pi-agents` session —
+  `tmux attach -t pi-agents` — while `/plan` shows the live DAG. Other spawn
+  backends are polled through their logs/status APIs.

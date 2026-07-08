@@ -26,18 +26,24 @@ import {
   type AgentDefinition,
 } from "./registry.ts";
 import type { SpawnFn, TaskSpec } from "./runner.ts";
+import { sanitizeTmuxName, type TmuxEffects, type TmuxSettings } from "./tmux.ts";
 import {
-  createTmuxMirrorSpawn,
-  sanitizeTmuxName,
-  type TmuxEffects,
-  type TmuxSettings,
-} from "./tmux.ts";
+  defaultConfig as defaultSpawnConfig,
+  loadConfig as loadSpawnConfig,
+  type SpawnConfig,
+} from "../spawn/config.ts";
+import { createBackends } from "../spawn/host.ts";
+import {
+  cleanupSpawnToolingJobs,
+  createSpawnToolingSpawn,
+} from "../spawn/runner-adapter.ts";
 
 const KILL_GRACE_MS = 3000;
 
 /**
- * Real spawn adapter for the runner. Kills the child on abort with SIGTERM,
- * escalating to SIGKILL after a grace period.
+ * Local helper-process adapter used for unlabeled runner commands such as
+ * `git worktree add` and for short tmux probes. Labeled sub-agent children use
+ * the spawn-tooling adapter returned by createHostSpawn().
  */
 export const nodeSpawn: SpawnFn = (request) =>
   new Promise((resolve, reject) => {
@@ -216,24 +222,82 @@ export function createTmuxEffects(subdir: string): TmuxEffects {
   };
 }
 
-/**
- * Resolve the spawn function an extension should hand the runner: the plain
- * adapter, or — when tmux mirroring is enabled and tmux is installed — the
- * adapter wrapped so every sub-agent gets a live tmux window. Falls back to
- * the plain adapter (with a one-time console note) when tmux is missing;
- * mirror failures at runtime degrade the same way.
- */
-export function createHostSpawn(settings: TmuxSettings, tag: string): SpawnFn {
-  if (!settings.tmux) return nodeSpawn;
-  if (!isTmuxAvailable()) {
-    console.error(
-      `[${tag}] tmux mirroring is enabled but tmux is not installed; sub-agents run without live windows`,
-    );
-    return nodeSpawn;
+/** Settings accepted by createHostSpawn. Kept structurally compatible with
+ * the fleet/critic/orchestrator configs that already contain TmuxSettings. */
+export interface HostSpawnSettings extends TmuxSettings {
+  /** Optional override for the pi binary recorded in spawn config; the runner's
+   * prebuilt command still wins for sub-agent children. */
+  piBinary?: string;
+}
+
+function loadSpawnDefaults(tag: string): SpawnConfig {
+  try {
+    return loadSpawnConfig();
+  } catch (e: any) {
+    console.error(`[${tag}] ${e?.message ?? e}`);
+    console.error(`[${tag}] Using spawn defaults. Fix spawn config or SPAWN_* env vars, then /reload.`);
+    return defaultSpawnConfig();
   }
-  return createTmuxMirrorSpawn(nodeSpawn, createTmuxEffects(tag), {
-    sessionName: settings.tmuxSession,
-    closeWindows: settings.tmuxCloseWindows,
-    onError: (message) => console.error(`[${tag}] tmux mirror off: ${message}`),
+}
+
+/** Resolve the spawn-tooling configuration used by fleet/critic/orchestrator. */
+export function loadHostSpawnConfig(
+  settings: HostSpawnSettings,
+  tag: string,
+): SpawnConfig {
+  const spawnConfig = loadSpawnDefaults(tag);
+  // Keep the historical fleet/orchestrator/critic tmux-session knob useful for
+  // the spawn tmux backend; other spawn-specific backend fields still come from
+  // spawn.json / SPAWN_*.
+  spawnConfig.tmuxSession = settings.tmuxSession || spawnConfig.tmuxSession;
+  if (settings.piBinary) spawnConfig.piBinary = settings.piBinary;
+
+  if (!settings.tmux && spawnConfig.backend === "tmux") {
+    console.error(
+      `[${tag}] tmux=false no longer disables sub-agent windows when SPAWN_BACKEND=tmux; the spawn tmux backend is the runner. Set SPAWN_BACKEND=microsandbox or exedev to avoid local tmux windows.`,
+    );
+  }
+  if (spawnConfig.backend === "tmux" && !isTmuxAvailable()) {
+    console.error(
+      `[${tag}] SPAWN_BACKEND=tmux but tmux is not installed; sub-agent dispatch will report a backend availability error`,
+    );
+  }
+  return spawnConfig;
+}
+
+/**
+ * Resolve the spawn function an extension should hand the runner.
+ *
+ * Labeled pi sub-agent children now run through the spawn tooling backend
+ * registry (tmux/exe.dev/microsandbox). Unlabeled helper commands such as
+ * `git worktree add` still use the local node adapter because they are not
+ * sub-agent children and need synchronous local side effects.
+ */
+export async function cleanupHostSpawnJobs(
+  spawnConfig: SpawnConfig,
+  tag: string,
+): Promise<number> {
+  return cleanupSpawnToolingJobs({
+    config: spawnConfig,
+    backends: createBackends(spawnConfig),
+    jobNamePrefix: tag,
+    onRegistryError: (message) => console.error(`[${tag}] ${message}`),
+    onError: (message) => console.error(`[${tag}] ${message}`),
+  });
+}
+
+export function createHostSpawn(
+  settings: HostSpawnSettings,
+  tag: string,
+  resolvedConfig?: SpawnConfig,
+): SpawnFn {
+  const spawnConfig = resolvedConfig ?? loadHostSpawnConfig(settings, tag);
+
+  return createSpawnToolingSpawn({
+    config: spawnConfig,
+    backends: createBackends(spawnConfig),
+    fallback: nodeSpawn,
+    jobNamePrefix: tag,
+    onRegistryError: (message) => console.error(`[${tag}] ${message}`),
   });
 }

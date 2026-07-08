@@ -1,9 +1,11 @@
 # spawn — detached sub-agent jobs for pi, on tmux, exe.dev, or microsandbox
 
-**spawn** launches sub-agents (child `pi` processes) as *detached background
-jobs* that keep running after the tool call — and the pi session — ends.
-Where [fleet](../fleet/) runs a batch of sub-agents synchronously and mirrors
-them into tmux, spawn gives you a choice of **where** each sub-agent runs:
+**spawn** launches sub-agents (child `pi` processes) through reusable backend
+job machinery. The public `spawn_agent` tool starts *detached background jobs*
+that keep running after the tool call — and the pi session — ends. The fleet,
+critic, and orchestrator packages also reuse the same backends internally in a
+synchronous wait/poll mode, so their sub-agent children no longer bypass spawn.
+Spawn gives you a choice of **where** each sub-agent runs:
 
 | Backend        | Where the job runs                             | Requires |
 | -------------- | ---------------------------------------------- | -------- |
@@ -71,8 +73,11 @@ Notes:
   interactively to register your key and accept the host key
   (fingerprint `SHA256:JJOP/lwiBGOMilfONPWZCXUrfK154cnJFXcqlsi6lPo`). The
   backend uses `BatchMode=yes` and never answers prompts.
-- The job runs in the VM's `$HOME`, not your working tree. Write task
-  briefs accordingly (e.g. "clone repo X, then ...").
+- Public `spawn_agent` jobs run in the VM's `$HOME`, not your working tree.
+  Write task briefs accordingly (e.g. "clone repo X, then ..."). Internal
+  fleet/orchestrator runner jobs instead try to `cd` to the runner's `cwd` on
+  the VM before starting; ensure that path exists remotely (or use the default
+  tmux backend / microsandbox cwd mount for local-repo work).
 - Model access on the VM: either attach exe.dev's LLM integration to the
   VM, configure keys on the VM yourself, or set `exedevForwardEnv: true`
   to forward the `envPassthrough` API keys into the job's run script.
@@ -99,11 +104,14 @@ Linux with KVM, macOS on Apple Silicon, or Windows 11.
 ## spawn vs fleet
 
 - **fleet** (`fleet_run`): synchronous fan-out — you get all results back in
-  the same tool call, with concurrency limits, timeouts, and worktree
-  isolation. tmux is a read-only mirror.
+  the same tool call, with concurrency limits, timeouts, worktree isolation,
+  JSONL parsing, and critic/orchestrator gating. Internally, each labeled
+  sub-agent child is launched as a spawn job and waited on by
+  `spawn/runner-adapter.ts`; stale internal jobs are killed/stamped on the
+  next session start if the parent was interrupted.
 - **spawn** (`spawn_agent`): fire-and-forget — one job per call, results
-  polled later (even from a different session), and the backend decides
-  where the job runs. tmux is one of three runners.
+  polled later (even from a different session), and the backend decides where
+  the job runs. tmux is one of three runners.
 
 ## Installation
 
@@ -179,6 +187,7 @@ fakes (plus real temp directories for the file-backed pieces).
 - `backends/exedev.ts` — exe.dev cloud VM runner (SSH lifecycle, remote markers).
 - `backends/microsandbox.ts` — microsandbox microVM runner (mounted markers, detached `msb run`).
 - `host.ts` — real Node effects: helper-process exec, detached spawn, pid probes.
+- `runner-adapter.ts` — adapts spawn backends to fleet's synchronous `SpawnFn` contract; records jobs, polls logs/status, streams output, and kills/stamps jobs on abort.
 - `config.ts` — configuration loading.
 - `test.ts` — unit tests.
 

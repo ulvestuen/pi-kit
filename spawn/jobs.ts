@@ -155,6 +155,13 @@ export interface LaunchRequest {
   agent: AgentDefinition;
   task: string;
   cwd: string;
+  /**
+   * Optional prebuilt command for internal synchronous runner jobs.
+   * When omitted, backends build the normal spawn_agent `pi -p` invocation
+   * from agent + task.
+   */
+  command?: string;
+  args?: string[];
 }
 
 /**

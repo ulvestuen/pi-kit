@@ -2,15 +2,16 @@
 
 This document explains the internals of [`fleet/`](../fleet/): how agent
 definitions are discovered, how a batch of tasks flows through the runner, how
-concurrency, timeouts, isolation, and cancellation behave, and how the tmux
-mirror provides live visibility. For installation, configuration, and usage,
+concurrency, timeouts, isolation, and cancellation behave, and how spawn
+backends provide execution/live visibility. For installation, configuration, and usage,
 see the [fleet README](../fleet/README.md); for the original design rationale,
 see [multi-agent-orchestration.md](./multi-agent-orchestration.md).
 
 Fleet is the **fan-out primitive** of the pi-kit multi-agent stack: it runs N
-sub-agents as concurrent child `pi` processes, each with its own context
-window, role prompt, model, and tool restrictions. The critic and orchestrator
-extensions are built on top of its pure core.
+sub-agents through the shared spawn tooling, each with its own context window,
+role prompt, model, and tool restrictions, while preserving synchronous
+per-task results. The critic and orchestrator extensions are built on top of
+its pure core.
 
 ## Contents
 
@@ -25,7 +26,7 @@ extensions are built on top of its pure core.
 - [Worktree isolation](#worktree-isolation)
 - [Timeouts, aborts, and kill semantics](#timeouts-aborts-and-kill-semantics)
 - [Persistence and restart safety](#persistence-and-restart-safety)
-- [The tmux mirror](#the-tmux-mirror)
+- [Spawn tooling backend](#spawn-tooling-backend)
 - [Events and observability](#events-and-observability)
 
 ## Module architecture
@@ -39,14 +40,15 @@ never import `index.ts`.
 flowchart TB
     subgraph wiring["Wiring layer (pi + Node effects)"]
         index["index.ts<br/>fleet_run tool, /fleet command,<br/>persistence, system prompt"]
-        host["host.ts<br/>nodeSpawn (child_process),<br/>agent file walk, transcript saver,<br/>worktree root, tmux effects"]
+        host["host.ts<br/>agent file walk, transcript saver,<br/>worktree root, spawn-tooling adapter"]
         config["config.ts<br/>fleet.json + FLEET_* env"]
     end
 
     subgraph core["Pure core (injected effects, fully unit-testable)"]
         registry["registry.ts<br/>frontmatter parsing,<br/>layered registry merge"]
         runner["runner.ts<br/>concurrency pool, timeouts,<br/>output capping, isolation"]
-        tmux["tmux.ts<br/>spawn wrapper that mirrors<br/>each labeled child into a tmux window"]
+        tmux["tmux.ts<br/>legacy tmux formatting/mirror helpers"]
+        spawn["spawn/runner-adapter.ts + backends<br/>tmux / exe.dev / microsandbox jobs"]
     end
 
     subgraph consumers["Downstream consumers"]
@@ -58,8 +60,8 @@ flowchart TB
     index --> config
     index -->|"runTasks(registry, specs, opts)"| runner
     host -->|"parseAgentDefinition / mergeRegistries"| registry
-    host -->|"createTmuxMirrorSpawn(nodeSpawn, …)"| tmux
-    tmux -->|"wraps"| runner
+    host -->|"createSpawnToolingSpawn(createBackends(...))"| spawn
+    spawn -->|"implements SpawnFn"| runner
     critic -.->|"imports pure core + host"| core
     orch -.->|"imports pure core + host"| core
     critic -.-> host
@@ -131,7 +133,7 @@ sequenceDiagram
     participant T as fleet_run tool (index.ts)
     participant H as host.ts
     participant R as runner.ts (pure)
-    participant P as child pi processes
+    participant S as spawn backend job
 
     M->>T: fleet_run({ tasks })
     T->>H: discoverAgents(cwd)
@@ -141,8 +143,8 @@ sequenceDiagram
     R->>R: validate (batch cap, known agents, non-empty briefs)
 
     par up to maxConcurrent workers
-        R->>P: spawn pi --mode json --no-session …
-        P-->>R: JSONL event stream (stdout)
+        R->>S: launch labeled child via spawn tooling<br/>pi --mode json --no-session …
+        S-->>R: captured JSONL log/status while adapter polls
         R-->>T: onEvent task_start / task_update / task_end
         T-->>M: onUpdate: live per-task status lines
     end
@@ -201,8 +203,8 @@ flowchart TB
     wtok -- no --> failwt["TaskResult: error<br/>(git stderr as output)"]
     wtok -- yes --> cwd["cwd = worktree path"]
     iso -- no --> spawnNode
-    cwd --> spawnNode["spawn child:<br/>pi --mode json --no-session<br/>--system-prompt … [--model] [--thinking] [--tools] &lt;task&gt;"]
-    spawnNode --> stream["stream stdout:<br/>onEvent task_update chunks<br/>+ tmux mirror log"]
+    cwd --> spawnNode["launch spawn job:<br/>pi --mode json --no-session<br/>--system-prompt … [--model] [--thinking] [--tools] &lt;task&gt;"]
+    spawnNode --> stream["poll spawn log/status:<br/>onEvent task_update chunks<br/>+ backend live view when available"]
     stream --> done{"how did it end?"}
     done -- "timeout fired" --> to["TaskResult: timeout"]
     done -- "external abort" --> ab["TaskResult: aborted"]
@@ -326,36 +328,35 @@ Every task gets its own `AbortController`; two things can trip it:
 ```mermaid
 sequenceDiagram
     participant R as runner
-    participant S as host spawn adapter
-    participant C as child pi process
+    participant S as spawn runner adapter
+    participant B as spawn backend job
 
     R->>R: timeout fires or external signal aborts
     R->>S: controller.abort()
-    S->>C: SIGTERM
-    Note over S,C: 3-second grace period
-    alt child exits in time
-        C-->>S: exit
-    else still alive
-        S->>C: SIGKILL
-        C-->>S: killed
-    end
+    S->>B: backend.kill(job)
+    S->>S: stamp job status = killed in spawn registry
     S-->>R: outcome (exitCode = null when killed)
     R-->>R: TaskResult status = timeout | aborted<br/>partial transcript still saved
 ```
 
-Children never outlive the parent process — and whatever stdout was streamed
-before the kill is still captured and saved as the transcript.
+Fleet still treats aborted work as finished for the synchronous tool call: the
+spawn job is killed/stamped and whatever output was available before the kill
+is captured and saved as the transcript.
 
 ## Persistence and restart safety
 
 Dispatched batches are recorded as `fleet-state` entries in the session entry
-log (`{ batchId, status: running → done | aborted, tasks[] }`). Because
-children cannot survive the parent, a batch that is still marked `running`
-when a session starts is by definition dead:
+log (`{ batchId, status: running → done | aborted, tasks[] }`). Internal
+synchronous spawn jobs are named with the extension prefix (`pi-fleet`,
+`pi-orchestrator`, `pi-critic`) and recorded in the spawn registry. On session
+start, any still-running internal jobs for that prefix are killed/stamped, and
+a batch that is still marked `running` is treated as interrupted and reset just
+as before:
 
 ```mermaid
 flowchart LR
-    A["session_start"] --> B["scan entry log for the latest<br/>fleet-state entry"]
+    A["session_start"] --> K["kill/stamp stale internal<br/>spawn jobs for this extension prefix"]
+    K --> B["scan entry log for the latest<br/>fleet-state entry"]
     B --> C{"status ==<br/>'running'?"}
     C -- yes --> D["append corrected entry:<br/>status = aborted,<br/>unfinished tasks marked aborted"]
     C -- no --> E["nothing to do"]
@@ -365,43 +366,50 @@ This is the fleet half of crash recovery; the orchestrator layer (see the
 [orchestrator architecture](./orchestrator-architecture.md)) resets the plan's
 `running` tasks back to `ready` so the run can resume idempotently.
 
-## The tmux mirror
+## Spawn tooling backend
 
-When tmux is installed (and not disabled in config), every sub-agent gets a
-live, human-watchable window in one shared tmux session (default
-`pi-agents`, shared with the critic and orchestrator so a single
-`tmux attach -t pi-agents` shows all delegated work).
+Labeled sub-agent children are executed by `spawn/runner-adapter.ts`, which
+adapts spawn's backend/job API to fleet's synchronous `SpawnFn`. The adapter
+records each job in the spawn registry, polls backend status/output, streams
+log deltas into fleet progress events, and kills/stamps the job on abort.
 
-The mirror is implemented as a **spawn-function wrapper**
-(`createTmuxMirrorSpawn`) — the runner neither knows nor cares that it is
-being watched:
+With the default `tmux` backend, every sub-agent runs in a live,
+human-watchable window in one shared tmux session (default `pi-agents`, shared
+with the critic and orchestrator so a single `tmux attach -t pi-agents` shows
+all delegated work). With `exedev` or `microsandbox`, the same adapter waits on
+that backend instead.
+
+The legacy `createTmuxMirrorSpawn` helper remains in `tmux.ts` for formatting
+utilities and tests, but host wiring no longer uses it for sub-agent execution:
 
 ```mermaid
 flowchart TB
     runner["runner.ts calls spawn(request)"] --> label{"request has a<br/>label? (only the pi child<br/>is labeled, not git)"}
-    label -- no --> plain["inner nodeSpawn — no mirroring"]
-    label -- yes --> setup["serialized setup:<br/>create log file, then<br/>tmux has-session? new-window : new-session<br/>running: tail -f -n +1 &lt;log&gt;"]
-    setup --> wrap["wrap onOutput:<br/>split stream into lines →<br/>formatPiEventLine renders<br/>messages + tool calls, drops noise"]
-    wrap --> log[("log file<br/>$TMPDIR/&lt;tag&gt;/tmux/…")]
-    log --> win["tmux window '1-implementer'<br/>(tail follows the log live)"]
-    wrap --> inner["inner nodeSpawn runs the child<br/>(unchanged semantics)"]
-    inner --> exit["append exit-status line;<br/>kill window if tmuxCloseWindows"]
+    label -- no --> helper["fallback nodeSpawn<br/>(local helper command, e.g. git worktree)"]
+    label -- yes --> adapter["spawn/runner-adapter.ts<br/>create job name, record registry"]
+    adapter --> backend{"SPAWN_BACKEND"}
+    backend -- tmux --> win["tmux backend window<br/>runs job script + captures log"]
+    backend -- exedev --> vm["exe.dev VM job<br/>SSH launch/probe/tail"]
+    backend -- microsandbox --> msb["microsandbox job<br/>mounted /job log + done marker"]
+    win --> poll["poll output/status until terminal"]
+    vm --> poll
+    msb --> poll
+    poll --> result["return SpawnOutcome stdout/stderr/exitCode to runner"]
 ```
 
 Design properties worth knowing:
 
-- **Pure visualization** — the inner spawn still owns the process, parsing,
-  timeouts, and kills. Rendering happens on a *copy* of the stream.
-- **Serialized setup** — window creation is chained so concurrent tasks can't
-  race the initial `new-session`.
-- **Fail-open** — the first tmux failure disables mirroring for the rest of
-  the wrapper's lifetime, reports once via `onError`, and every task keeps
-  running exactly as before. Missing tmux degrades the same way at startup.
-- **Readable rendering** — `formatPiEventLine` shows assistant text and
-  `→ tool: <name>` lines, suppresses streaming deltas, and passes non-JSON
-  lines through untouched. Windows end with `[fleet] <label>: exited <code>`.
-- Windows stay open after a task ends for post-mortem reading unless
-  `tmuxCloseWindows: true`.
+- **Sub-agents through spawn** — the child `pi` command is no longer launched
+  directly by fleet/orchestrator/critic host wiring; it is handed to a spawn
+  backend as a prebuilt command.
+- **Helper commands stay local** — unlabeled commands such as `git worktree add`
+  keep using the local fallback because their side effects must happen in the
+  parent working tree.
+- **Synchronous contract preserved** — fleet still owns concurrency, timeouts,
+  JSONL parsing, output capping, and `TaskResult` construction.
+- **Backend caveat** — remote backends must be able to see the intended code
+  and credentials; exe.dev runner jobs `cd` to the requested cwd on the VM and
+  fail if it is absent, while microsandbox can mount the cwd.
 
 ## Events and observability
 

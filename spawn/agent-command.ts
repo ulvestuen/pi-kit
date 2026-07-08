@@ -26,13 +26,18 @@ export function buildJobPiArgs(def: AgentDefinition, task: string): string[] {
   return args;
 }
 
+/** Any argv vector as one POSIX-shell-safe command string. */
+export function buildShellCommand(command: string, args: string[] = []): string {
+  return [command, ...args].map(shellQuote).join(" ");
+}
+
 /** The full pi invocation as one POSIX-shell-safe command string. */
 export function buildPiShellCommand(
   piBinary: string,
   def: AgentDefinition,
   task: string,
 ): string {
-  return [piBinary, ...buildJobPiArgs(def, task)].map(shellQuote).join(" ");
+  return buildShellCommand(piBinary, buildJobPiArgs(def, task));
 }
 
 /**

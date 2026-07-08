@@ -3,14 +3,15 @@
 **orchestrator** wires the pi-kit multi-agent stack together (see
 [`docs/multi-agent-orchestration.md`](../docs/multi-agent-orchestration.md)):
 `/orchestrate <goal>` plans the goal as a task DAG (**planner**), dispatches
-waves of concurrent sub-agents (**fleet**), gates every completed task behind
+waves of concurrent sub-agents (**fleet**, using the shared **spawn** tooling
+for the actual child execution), gates every completed task behind
 an independent reviewer (**critic**), and drives the whole run inside a
 lykkja PDCA loop (**lykkja**) until an explicit, measurable bar is met — or
 stops honestly at a hard cap.
 
 The orchestrator owns *control flow only*. Planning intelligence lives in the
-model plus the planner skill; execution lives in fleet; judgment lives in the
-critic; the stopping rule lives in lykkja.
+model plus the planner skill; execution lives in fleet and spawn tooling;
+judgment lives in the critic; the stopping rule lives in lykkja.
 
 For a deep dive into the internals — the goal loop, wave anatomy, the
 scheduler state machine, the critic gate, retries, merges, and failure
@@ -64,8 +65,8 @@ merged back — serially, in DAG order, by the orchestrating session.
 
 The orchestrator imports only pure cores across packages —
 `planner/plan.ts`, `fleet/registry.ts` + `runner.ts`, `critic/review.ts`,
-`lykkja/loop.ts` — plus the `fleet/host.ts` spawn/discovery helpers; never
-another extension's `index.ts`. Plan updates flow back to the planner
+`lykkja/loop.ts` — plus the `fleet/host.ts` discovery/spawn-tooling helpers;
+never another extension's `index.ts`. Plan updates flow back to the planner
 extension via the shared event bus (`planner:set_plan`), and lykkja/planner
 tools are composed at the model level. `/orchestrate` checks that the
 `lykkja_*` and `plan_*` tools are installed and reports what is missing
@@ -90,7 +91,8 @@ pi -e lykkja/index.ts -e fleet/index.ts -e planner/index.ts \
 ```
 
 A standalone copy of `orchestrator/` must keep the `lykkja/`, `fleet/`,
-`planner/`, and `critic/` folders alongside it (or vendor their pure cores).
+`planner/`, `critic/`, and `spawn/` folders alongside it (or vendor their
+relevant pure cores/adapters).
 
 ## Configuration
 
@@ -109,9 +111,9 @@ orchestrator works with zero configuration. To change defaults, create
 | `criticModel`     | *(none)*        | Model override for reviews.                     |
 | `defaultAgent`    | `"implementer"` | Agent for plan tasks that name none.            |
 | `piBinary`        | `"pi"`          | Binary spawned for sub-agents.                  |
-| `tmux`            | `true`          | Mirror every dispatched sub-agent and critic review into live tmux windows (see the fleet README). |
-| `tmuxSession`     | `"pi-agents"`   | tmux session that collects the agent windows.   |
-| `tmuxCloseWindows`| `false`         | Kill each window when its task ends.            |
+| `tmux`            | `true`          | Historical live-window flag. With spawn's `tmux` backend, tmux is the sub-agent runner. |
+| `tmuxSession`     | `"pi-agents"`   | tmux session passed to the spawn tmux backend.  |
+| `tmuxCloseWindows`| `false`         | Historical mirror option; spawn tmux jobs remain inspectable after exit. |
 
 Environment overrides (used when no JSON config exists):
 `ORCHESTRATOR_CONFIG_PATH`, `ORCHESTRATOR_MAX_CONCURRENT`,

@@ -19,7 +19,11 @@
 
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
-import { buildEnvExports, buildPiShellCommand } from "../agent-command.ts";
+import {
+  buildEnvExports,
+  buildPiShellCommand,
+  buildShellCommand,
+} from "../agent-command.ts";
 import type { SpawnConfig } from "../config.ts";
 import {
   isTerminal,
@@ -135,11 +139,13 @@ export function createMicrosandboxBackend(
         runScript,
         buildGuestRunScript({
           jobName: job.name,
-          piCommand: buildPiShellCommand(
-            config.piBinary,
-            request.agent,
-            request.task,
-          ),
+          piCommand: request.command
+            ? buildShellCommand(request.command, request.args ?? [])
+            : buildPiShellCommand(
+                config.piBinary,
+                request.agent,
+                request.task,
+              ),
           envExports: config.msbForwardEnv
             ? buildEnvExports(config.envPassthrough, process.env)
             : [],

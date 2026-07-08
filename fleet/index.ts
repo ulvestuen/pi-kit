@@ -7,10 +7,12 @@ import { Type } from "@mariozechner/pi-ai";
 import { getConfigPath, loadConfig, type FleetConfig } from "./config.ts";
 import {
   createFullOutputSaver,
+  cleanupHostSpawnJobs,
   createHostSpawn,
   createWorktreeRoot,
   discoverAgents,
   isTmuxAvailable,
+  loadHostSpawnConfig,
 } from "./host.ts";
 import { DEFAULT_TMUX_SESSION } from "./tmux.ts";
 import type { AgentDefinition } from "./registry.ts";
@@ -26,15 +28,19 @@ interface FleetStateEntry {
   tasks: { agent: string; task: string; status?: string }[];
 }
 
-function buildSystemPrompt(config: FleetConfig, tmuxLive: boolean): string {
+function buildSystemPrompt(
+  config: FleetConfig,
+  spawnBackend: string,
+  tmuxLive: boolean,
+): string {
   return [
     "You have the fleet sub-agent runtime for delegating work.",
-    "The fleet_run tool dispatches tasks to sub-agents (child pi processes), each with an isolated context window; a batch of tasks runs concurrently.",
+    `The fleet_run tool dispatches tasks to sub-agents through the spawn runtime backend "${spawnBackend}"; a batch of tasks runs concurrently and returns results in this tool call.`,
     `Use it to fan out independent, well-scoped tasks — exploration (scout), implementation (implementer), or review (critic) — up to ${config.maxConcurrent} at a time.`,
     "Give each task a complete, self-contained brief: sub-agents share none of your context. Do not delegate trivial single-step work.",
     ...(tmuxLive
       ? [
-          `Every sub-agent's live progress is mirrored into a window of the tmux session "${config.tmuxSession}"; the user can watch with \`tmux attach -t ${config.tmuxSession}\`.`,
+          `Every sub-agent runs in a live tmux window in session "${config.tmuxSession}"; the user can watch with \`tmux attach -t ${config.tmuxSession}\`.`,
         ]
       : []),
     "Run /fleet to list the available agents.",
@@ -79,9 +85,10 @@ export default function (pi: ExtensionAPI) {
     };
   }
 
+  const spawnConfig = loadHostSpawnConfig(config, "pi-fleet");
   /** Whether sub-agents actually get live tmux windows on this host. */
-  const tmuxLive = config.tmux && isTmuxAvailable();
-  const spawn = createHostSpawn(config, "pi-fleet");
+  const tmuxLive = spawnConfig.backend === "tmux" && isTmuxAvailable();
+  const spawn = createHostSpawn(config, "pi-fleet", spawnConfig);
 
   /** In-flight batch info for /fleet pool status. */
   let activeBatch: FleetStateEntry | null = null;
@@ -92,7 +99,7 @@ export default function (pi: ExtensionAPI) {
       name: "fleet_run",
       label: "fleet: Run Sub-Agents",
       description:
-        "Dispatch one or more tasks to sub-agents that run concurrently as child pi processes, each with its own isolated context window. Each task names an agent from the registry (see /fleet) and carries a self-contained brief. Returns per-task results. Use worktree isolation when parallel tasks write to the same repository.",
+        "Dispatch one or more tasks to sub-agents that run concurrently through the configured spawn backend, each with its own isolated context window. Each task names an agent from the registry (see /fleet) and carries a self-contained brief. Returns per-task results. Use worktree isolation when parallel tasks write to the same repository.",
       promptSnippet:
         "fleet_run: dispatch tasks to concurrent sub-agents, each in its own context window.",
       promptGuidelines: [
@@ -219,8 +226,9 @@ export default function (pi: ExtensionAPI) {
   );
 
   pi.on("session_start", async (_event, ctx: ExtensionContext) => {
-    // Children do not survive the parent: mark any batch still recorded as
-    // "running" in the entry log as aborted.
+    await cleanupHostSpawnJobs(spawnConfig, "pi-fleet");
+    // Internal synchronous spawn jobs from an interrupted parent are killed
+    // above; mark any batch still recorded as "running" as aborted.
     let latest: FleetStateEntry | null = null;
     for (const entry of ctx.sessionManager.getEntries()) {
       if (entry.type === "custom" && entry.customType === STATE_ENTRY_TYPE) {
@@ -242,7 +250,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event) => {
     if (!config.injectSystemPrompt) return;
     return {
-      systemPrompt: `${event.systemPrompt}\n\n${buildSystemPrompt(config, tmuxLive)}`,
+      systemPrompt: `${event.systemPrompt}\n\n${buildSystemPrompt(config, spawnConfig.backend, tmuxLive)}`,
     };
   });
 
@@ -270,12 +278,13 @@ export default function (pi: ExtensionAPI) {
       lines.push(
         `  Pool: max ${config.maxConcurrent} concurrent, batch cap ${config.maxBatch}, timeout ${Math.round(config.defaultTimeoutMs / 1000)}s`,
       );
+      lines.push(`  spawn: backend ${spawnConfig.backend} (config: ${spawnConfig.configPath ?? "defaults / environment variables"})`);
       lines.push(
         tmuxLive
-          ? `  tmux: live windows in session "${config.tmuxSession}" — attach with: tmux attach -t ${config.tmuxSession}`
-          : config.tmux
-            ? "  tmux: enabled but tmux is not installed; no live windows"
-            : "  tmux: disabled",
+          ? `  tmux: sub-agent runner windows in session "${spawnConfig.tmuxSession}" — attach with: tmux attach -t ${spawnConfig.tmuxSession}`
+          : spawnConfig.backend === "tmux"
+            ? "  tmux: spawn backend selected but tmux is not installed"
+            : "  tmux: not used by the selected spawn backend",
       );
       if (activeBatch) {
         lines.push(

@@ -8,6 +8,7 @@ import {
   buildEnvExports,
   buildJobPiArgs,
   buildPiShellCommand,
+  buildShellCommand,
 } from "./agent-command.ts";
 import { defaultConfig, loadConfig, type SpawnConfig } from "./config.ts";
 import {
@@ -20,6 +21,8 @@ import {
   type ExecFn,
   type ExecOptions,
   type ExecOutcome,
+  type LaunchRequest,
+  type SpawnBackend,
   type SpawnJob,
 } from "./jobs.ts";
 import {
@@ -34,6 +37,7 @@ import {
   buildLaunchCommand,
   buildProbeCommand,
   buildRemoteRunScript,
+  buildTailCommand,
   createExedevBackend,
   parseVmList,
   remoteJobDir,
@@ -44,6 +48,10 @@ import {
   createMicrosandboxBackend,
   sandboxNameFor,
 } from "./backends/microsandbox.ts";
+import {
+  cleanupSpawnToolingJobs,
+  createSpawnToolingSpawn,
+} from "./runner-adapter.ts";
 
 function def(
   name: string,
@@ -257,6 +265,10 @@ describe("buildJobPiArgs", () => {
     const cmd = buildPiShellCommand("pi", d, "isn't it");
     assert.ok(cmd.startsWith("'pi' '-p' '--no-session'"));
     assert.ok(cmd.endsWith(`'isn'\\''t it'`));
+    assert.equal(
+      buildShellCommand("pi", ["--mode", "json", "task with spaces"]),
+      "'pi' '--mode' 'json' 'task with spaces'",
+    );
   });
 });
 
@@ -335,6 +347,30 @@ describe("tmux backend", () => {
     assert.ok(script.includes("'t1'"));
   });
 
+  it("uses a runner-provided command instead of building pi -p", async () => {
+    const config = testConfig();
+    const { exec } = fakeExec((call) => {
+      if (call.args[0] === "has-session") return { exitCode: 1 };
+      if (call.args[0] === "new-session") return { stdout: "@1\n" };
+      return {};
+    });
+    const backend = createTmuxBackend(exec, config);
+    const job = await backend.launch({
+      jobName: "j-json",
+      agent: def("scout"),
+      task: "display only",
+      cwd: "/tmp",
+      command: "pi",
+      args: ["--mode", "json", "task"],
+    });
+    const script = readFileSync(
+      path.join(localJobDir(job, config), "run.sh"),
+      "utf8",
+    );
+    assert.ok(script.includes("'pi' '--mode' 'json' 'task'"));
+    assert.doesNotMatch(script, /scout prompt/);
+  });
+
   it("refreshes from the pane and marker, and kills the window", async () => {
     const config = testConfig();
     let paneDead = false;
@@ -384,6 +420,12 @@ describe("exedev command builders", () => {
     assert.ok(kill.endsWith("true"));
   });
 
+  it("can read a full remote log when no output cap is requested", () => {
+    const tail = buildTailCommand(".pi-spawn/j1", Number.POSITIVE_INFINITY);
+    assert.ok(tail.includes('cat "$d/job.log"'));
+    assert.doesNotMatch(tail, /tail -c/);
+  });
+
   it("writes a run script that records its pid and exit code", () => {
     const script = buildRemoteRunScript({
       jobName: "j1",
@@ -393,9 +435,23 @@ describe("exedev command builders", () => {
     });
     assert.ok(script.includes('echo $$ > "$d/pid"'));
     assert.ok(script.includes("export A_KEY='x'"));
+    assert.ok(script.includes('cd "$HOME"'));
     assert.ok(
       script.includes(
         `{ 'pi' '-p' 'task'; echo $? > "$d/done"; } > "$d/job.log" 2>&1`,
+      ),
+    );
+
+    const runnerScript = buildRemoteRunScript({
+      jobName: "j2",
+      piCommand: "'pi' '--mode' 'json' 'task'",
+      remoteDir: ".pi-spawn/j2",
+      envExports: [],
+      cwd: "/remote/repo worktree",
+    });
+    assert.ok(
+      runnerScript.includes(
+        "cd '/remote/repo worktree' || { echo 127 > \"$d/done\"; exit 127; }",
       ),
     );
   });
@@ -437,7 +493,33 @@ describe("exedev backend", () => {
     const launchCall = calls.find((c) => c.args[2] === "pi-spawn.exe.xyz")!;
     assert.ok(launchCall.options?.stdin?.includes("'scout prompt'"));
     assert.ok(launchCall.options?.stdin?.includes('echo $$ > "$d/pid"'));
+    assert.ok(launchCall.options?.stdin?.includes('cd "$HOME"'));
     assert.deepEqual(launchCall.args.slice(0, 2), ["-o", "BatchMode=yes"]);
+  });
+
+  it("honors cwd for runner-provided commands on exe.dev", async () => {
+    const config = testConfig();
+    const { exec, calls } = fakeExec((call) => {
+      const [, , dest, command] = call.args;
+      if (dest === "exe.dev" && command === "ls --json") {
+        return { stdout: vmList };
+      }
+      if (dest === "pi-spawn.exe.xyz") return { stdout: "launched\n" };
+      return { exitCode: 1 };
+    });
+    const backend = createExedevBackend(exec, config);
+    await backend.launch({
+      jobName: "j-json",
+      agent: def("scout"),
+      task: "display",
+      cwd: "/remote/repo",
+      command: "pi",
+      args: ["--mode", "json", "task"],
+    });
+    const launchCall = calls.find((c) => c.args[2] === "pi-spawn.exe.xyz")!;
+    assert.ok(launchCall.options?.stdin?.includes("'pi' '--mode' 'json' 'task'"));
+    assert.ok(launchCall.options?.stdin?.includes("cd '/remote/repo'"));
+    assert.doesNotMatch(launchCall.options?.stdin ?? "", /scout prompt/);
   });
 
   it("creates the VM when missing and waits for SSH", async () => {
@@ -645,6 +727,161 @@ describe("microsandbox backend", () => {
         ["rm", "--force"],
       ],
     );
+  });
+});
+
+describe("spawn runner adapter", () => {
+  function backendForAdapter(config: SpawnConfig): {
+    backend: SpawnBackend;
+    launched: LaunchRequest[];
+    killed: string[];
+  } {
+    const launched: LaunchRequest[] = [];
+    const killed: string[] = [];
+    const backend: SpawnBackend = {
+      name: "tmux",
+      async available() {
+        return undefined;
+      },
+      async launch(request) {
+        launched.push(request);
+        const job = runningJob(config, {
+          name: request.jobName,
+          agent: request.agent.name,
+          task: request.task,
+          cwd: request.cwd,
+        });
+        writeFileSync(
+          job.logPath!,
+          [
+            JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "ok" }] } }),
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        return job;
+      },
+      async refresh(job) {
+        if (job.status !== "running") return false;
+        job.status = "done";
+        job.exitCode = 0;
+        job.updatedAt = Date.now();
+        return true;
+      },
+      async output(job, maxBytes) {
+        return readLogTail(job.logPath, maxBytes);
+      },
+      async kill(job) {
+        killed.push(job.name);
+      },
+    };
+    return { backend, launched, killed };
+  }
+
+  it("runs labeled pi children through a spawn backend and records the job", async () => {
+    const config = testConfig();
+    const { backend, launched } = backendForAdapter(config);
+    const chunks: string[] = [];
+    const spawn = createSpawnToolingSpawn({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      pollIntervalMs: 0,
+      jobNamePrefix: "pi-fleet-test",
+    });
+    const outcome = await spawn({
+      command: "pi",
+      args: ["--mode", "json", "--no-session", "task"],
+      cwd: "/repo",
+      signal: new AbortController().signal,
+      label: "1-scout",
+      onOutput: (chunk) => chunks.push(chunk),
+    });
+
+    assert.equal(outcome.exitCode, 0);
+    assert.match(outcome.stdout, /message_end/);
+    assert.equal(launched[0].command, "pi");
+    assert.deepEqual(launched[0].args, ["--mode", "json", "--no-session", "task"]);
+    assert.equal(launched[0].cwd, "/repo");
+    assert.equal(chunks.join(""), outcome.stdout);
+    const jobs = loadJobs(config.logDir);
+    assert.equal(jobs.length, 1);
+    assert.equal(jobs[0].status, "done");
+    assert.match(jobs[0].name, /^pi-fleet-test-1-scout-/);
+  });
+
+  it("delegates unlabeled helper commands to the fallback", async () => {
+    const config = testConfig();
+    const { backend } = backendForAdapter(config);
+    const seen: string[] = [];
+    const spawn = createSpawnToolingSpawn({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      fallback: async (request) => {
+        seen.push(request.command);
+        return { exitCode: 0, stdout: "helper", stderr: "" };
+      },
+    });
+    const outcome = await spawn({
+      command: "git",
+      args: ["status"],
+      cwd: "/repo",
+      signal: new AbortController().signal,
+    });
+    assert.deepEqual(seen, ["git"]);
+    assert.equal(outcome.stdout, "helper");
+    assert.deepEqual(loadJobs(config.logDir), []);
+  });
+
+  it("kills and stamps stale internal jobs during cleanup", async () => {
+    const config = testConfig();
+    const { backend, killed } = backendForAdapter(config);
+    const internal = runningJob(config, { name: "pi-fleet-1-scout-abc" });
+    const userJob = runningJob(config, { name: "scout-user-job" });
+    saveJobs(config.logDir, [internal, userJob]);
+
+    const cleaned = await cleanupSpawnToolingJobs({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      jobNamePrefix: "pi-fleet",
+      now: () => 1234,
+    });
+
+    assert.equal(cleaned, 1);
+    assert.deepEqual(killed, ["pi-fleet-1-scout-abc"]);
+    const jobs = loadJobs(config.logDir);
+    assert.equal(jobs[0].status, "killed");
+    assert.equal(jobs[0].updatedAt, 1234);
+    assert.equal(jobs[1].status, "running");
+  });
+
+  it("kills and stamps a running spawn job when aborted", async () => {
+    const config = testConfig();
+    const { backend, killed } = backendForAdapter(config);
+    backend.refresh = async () => false;
+    const controller = new AbortController();
+    let slept = false;
+    const spawn = createSpawnToolingSpawn({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      pollIntervalMs: 1,
+      sleep: async () => {
+        if (!slept) {
+          slept = true;
+          controller.abort();
+        }
+      },
+    });
+    const outcome = await spawn({
+      command: "pi",
+      args: ["--mode", "json", "task"],
+      cwd: "/repo",
+      signal: controller.signal,
+      label: "1-scout",
+    });
+    assert.equal(outcome.exitCode, null);
+    assert.equal(killed.length, 1);
+    const [job] = loadJobs(config.logDir);
+    assert.equal(job.status, "killed");
   });
 });
 

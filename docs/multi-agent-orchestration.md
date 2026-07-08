@@ -39,7 +39,8 @@ orchestration loop.
 
 - No long-lived daemon agents or background services (unlike `threema`'s
   webhook, everything here is request-scoped).
-- No cross-machine distribution — sub-agents are local child processes.
+- Cross-machine distribution is delegated to spawn backends; fleet/orchestrator
+  keep a synchronous result contract and do not manage remote machines directly.
 - No changes to pi core; everything uses the public `ExtensionAPI`.
 - No replacement of lykkja — it is composed with, not forked.
 
@@ -83,11 +84,12 @@ vocabulary for acceptance criteria and scoring across all four new extensions.
 ### Prior art
 
 pi-mono ships a `subagent` example extension (markdown agent definitions,
-one child `pi` process per sub-agent, parallel mode with concurrency caps,
+one `pi` run per sub-agent, parallel mode with concurrency caps,
 model-visible output capped with full results in tool `details`). We build our
 own runner rather than adopting it — we want worktree isolation, a structured
-result contract, and event-bus progress — but its mechanics validate the
-approach and inform defaults (concurrency 4, output caps).
+result contract, spawn-backend execution, and event-bus progress — but its
+mechanics validate the approach and inform defaults (concurrency 4, output
+caps).
 
 ---
 
@@ -140,8 +142,9 @@ installed (it checks for their tools/pure modules and reports what's missing).
 
 ## 4. `fleet/` (pi-fleet) — sub-agent runtime primitive
 
-The foundational capability: run N sub-agents as child `pi` processes, each
-with its own context window, role prompt, model, and tool restrictions.
+The foundational capability: run N sub-agents through spawn tooling, each with
+its own context window, role prompt, model, and tool restrictions, while
+returning synchronous per-task results.
 
 ### 4.1 Agent definitions — `registry.ts` (pure)
 
@@ -226,11 +229,11 @@ export async function runTasks(
 
 Mechanics:
 
-- **Child invocation**: each task spawns `pi` in non-interactive mode (print /
-  `--mode json`) with the agent's system prompt, model, and tool allowlist
-  passed via flags, and the task text as the prompt. Structured output (JSON
-  mode) is parsed into `TaskResult`; the exact flag set is confirmed against
-  the pinned pi version during Phase 1 and wrapped in one small
+- **Child invocation**: each task builds a `pi --mode json --no-session`
+  command with the agent's system prompt, model, and tool allowlist passed via
+  flags, then hands that prebuilt command to the spawn tooling backend selected
+  by `spawn.json` / `SPAWN_BACKEND`. Structured output (JSON mode) is parsed
+  into `TaskResult`; the exact flag set is wrapped in one small
   `buildPiArgs(def, spec)` function so version drift is contained.
 - **Concurrency pool**: FIFO queue, `maxConcurrent` slots (default 4, hard cap
   in config). Batch size itself is capped (default 8) to keep result payloads
@@ -243,15 +246,13 @@ Mechanics:
 - **Output discipline**: model-visible `output` is capped; the full transcript
   is written to a scratch file referenced by `fullOutputPath` and included in
   the tool result's `details` for UI expansion.
-- **Cancellation**: `signal` aborts queued tasks immediately and kills running
-  children (SIGTERM, then SIGKILL after a grace period).
-- **Live visibility** (`tmux.ts`, pure with injected effects): the spawn
-  function handed to the runner can be wrapped so every labeled sub-agent
-  child gets its own window in a shared tmux session (default `pi-agents`),
-  streaming a human-readable rendering of its JSONL output. fleet, critic,
-  and orchestrator all enable this by default via `host.ts`'s
-  `createHostSpawn`; execution is unaffected and everything degrades to
-  plain runs when tmux is absent or fails.
+- **Cancellation**: `signal` aborts queued tasks immediately and asks the
+  spawn adapter to kill/stamp running spawn jobs.
+- **Execution backend** (`spawn/runner-adapter.ts`): `host.ts` hands labeled
+  sub-agent children to spawn backends (`tmux`, `exedev`, or `microsandbox`) and
+  waits/polls for completion while preserving fleet's synchronous `SpawnFn`
+  contract. Unlabeled helper commands such as `git worktree add` stay local
+  because their side effects must happen in the parent working tree.
 
 ### 4.3 Wiring — `index.ts`
 
@@ -262,14 +263,14 @@ Mechanics:
 - Command **`/fleet`**: lists discovered agents (name, description, source) and
   current pool status.
 - **Persistence**: `appendEntry("fleet-state", …)` records dispatched batches
-  so a restarted session can report what was in flight (children do not survive
-  the parent; on `session_start` any stale "running" entries are marked
-  `aborted`).
+  so a restarted session can report what was in flight (an interrupted
+  synchronous wave is treated as aborted; on `session_start` any stale
+  "running" entries are marked `aborted`).
 - **System prompt** (`before_agent_start`, config-gated like lykkja): one short
   paragraph advertising delegation and when to use it.
 - Config: `maxConcurrent`, `maxBatch`, `defaultTimeoutMs`, `outputCapBytes`,
-  `piBinary` (default `"pi"`), `injectSystemPrompt`, `tmux`, `tmuxSession`,
-  `tmuxCloseWindows`.
+  `piBinary` (default `"pi"`), `injectSystemPrompt`, historical tmux fields,
+  plus backend selection from the spawn extension's `spawn.json` / `SPAWN_*`.
 
 ---
 
@@ -536,8 +537,8 @@ package a dependency — decided per package in its README.
 | Critic output unparseable | Review = failed with "unscorable output" weakness; one automatic critic re-run before counting an attempt |
 | Critic disagreement (scores vs. sub-agent claim) | The critic wins by construction — it is the only source of CHECK scores; sub-agent self-reports are informational (`details`) only |
 | lykkja `STOPPED` | Orchestrator halts, reports per-task state, remaining weaknesses, and branches left unmerged; nothing is silently discarded |
-| Session restart mid-run | Children don't survive the parent. On `session_start`: fleet marks in-flight entries `aborted`, planner state restores, and the plan's `running` tasks reset to `ready` — the next `orchestrate_step` resumes the run idempotently |
-| User abort (`ctx.signal`) | Runner kills children (SIGTERM→SIGKILL), queue drains, state entries record the abort |
+| Session restart mid-run | On `session_start`, fleet/critic/orchestrator kill/stamp stale internal spawn jobs, fleet marks in-flight entries `aborted`, planner state restores, and the plan's `running` tasks reset to `ready` — the next `orchestrate_step` resumes the run idempotently |
+| User abort (`ctx.signal`) | Runner aborts queued tasks, asks the spawn adapter to kill/stamp running jobs, queue drains, state entries record the abort |
 
 ---
 
