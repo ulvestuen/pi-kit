@@ -274,7 +274,21 @@ export default function (pi: ExtensionAPI) {
             512 * 1024,
           );
           const output = await backends[job.backend].output(job, maxBytes);
-          const text = [jobLine(job, Date.now()), "", output].join("\n");
+          const sections = [jobLine(job, Date.now()), "", output];
+          // A job that did not end cleanly explains itself through its
+          // captured stderr; surface it next to the log tail.
+          if (isTerminal(job.status) && job.status !== "done") {
+            let err = "";
+            try {
+              err = (
+                await backends[job.backend].errorOutput(job, maxBytes)
+              ).trim();
+            } catch {
+              // Best-effort; the log tail alone still stands.
+            }
+            if (err) sections.push("", "--- captured stderr ---", err);
+          }
+          const text = sections.join("\n");
           return {
             result: {
               content: [{ type: "text" as const, text }],

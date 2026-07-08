@@ -55,6 +55,8 @@ export interface SpawnJob {
   logPath?: string;
   /** Local done marker (tmux and microsandbox backends). */
   donePath?: string;
+  /** Local stderr file (tmux and microsandbox backends). */
+  errPath?: string;
   /** tmux window id (e.g. "@42") holding the job (tmux backend). */
   tmuxWindowId?: string;
   /** Host pid of the detached `msb run` process (microsandbox backend). */
@@ -169,8 +171,9 @@ export interface LaunchRequest {
  *
  * launch() starts the job and returns its initial record; refresh() updates
  * status/exitCode from the backend's markers and returns whether anything
- * changed (callers skip terminal jobs); output() reads a log tail; kill()
- * best-effort stops the runner — the caller stamps status "killed".
+ * changed (callers skip terminal jobs); output() reads a log tail;
+ * errorOutput() reads the job's captured stderr ("" when there is none);
+ * kill() best-effort stops the runner — the caller stamps status "killed".
  */
 export interface SpawnBackend {
   readonly name: SpawnBackendName;
@@ -179,6 +182,7 @@ export interface SpawnBackend {
   launch(request: LaunchRequest): Promise<SpawnJob>;
   refresh(job: SpawnJob): Promise<boolean>;
   output(job: SpawnJob, maxBytes: number): Promise<string>;
+  errorOutput(job: SpawnJob, maxBytes: number): Promise<string>;
   kill(job: SpawnJob): Promise<void>;
 }
 

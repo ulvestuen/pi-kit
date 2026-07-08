@@ -44,6 +44,10 @@ export interface SpawnConfig {
   sshBinary: string;
   /** tmux session that collects job windows (shared kit default). */
   tmuxSession: string;
+  /** Forward envPassthrough variables into tmux run scripts. The window
+   * inherits the tmux *server's* environment, not the launching pi
+   * session's, so API keys are forwarded explicitly by default. */
+  tmuxForwardEnv: boolean;
   /** exe.dev VM that hosts exedev jobs; created on demand. */
   exedevVm: string;
   /** Domain suffix of VM SSH destinations. */
@@ -79,6 +83,7 @@ interface RawSpawnConfig {
   envPassthrough?: string[] | string;
   sshBinary?: string;
   tmuxSession?: string;
+  tmuxForwardEnv?: boolean | string;
   exedevVm?: string;
   exedevDomain?: string;
   exedevAutoCreate?: boolean | string;
@@ -174,6 +179,7 @@ function loadRawConfig(): { raw: RawSpawnConfig; configPath?: string } {
       envPassthrough: process.env.SPAWN_ENV_PASSTHROUGH,
       sshBinary: process.env.SPAWN_SSH_BINARY,
       tmuxSession: process.env.SPAWN_TMUX_SESSION,
+      tmuxForwardEnv: process.env.SPAWN_TMUX_FORWARD_ENV,
       exedevVm: process.env.SPAWN_EXEDEV_VM,
       exedevDomain: process.env.SPAWN_EXEDEV_DOMAIN,
       exedevAutoCreate: process.env.SPAWN_EXEDEV_AUTO_CREATE,
@@ -199,6 +205,7 @@ export function defaultConfig(): SpawnConfig {
     envPassthrough: [...DEFAULT_ENV_PASSTHROUGH],
     sshBinary: "ssh",
     tmuxSession: DEFAULT_TMUX_SESSION,
+    tmuxForwardEnv: true,
     exedevVm: DEFAULT_EXEDEV_VM,
     exedevDomain: DEFAULT_EXEDEV_DOMAIN,
     exedevAutoCreate: true,
@@ -246,6 +253,7 @@ export function loadConfig(): SpawnConfig {
     ),
     sshBinary: raw.sshBinary?.trim() || defaults.sshBinary,
     tmuxSession: raw.tmuxSession?.trim() || defaults.tmuxSession,
+    tmuxForwardEnv: parseBoolean(raw.tmuxForwardEnv, true),
     exedevVm: raw.exedevVm?.trim() || defaults.exedevVm,
     exedevDomain: raw.exedevDomain?.trim() || defaults.exedevDomain,
     exedevAutoCreate: parseBoolean(raw.exedevAutoCreate, true),

@@ -52,6 +52,12 @@ function remoteDirExpr(remoteDir: string): string {
  * it a session leader, so that pid also names the process group), runs pi
  * from $HOME with output captured to the job log, and writes the exit code
  * to the done marker.
+ *
+ * Like the other backends' scripts: stderr is captured to its own err.log
+ * so it never pollutes the parsed output stream, a cd failure explains
+ * itself in err.log before the done marker lands, and the exit code is
+ * staged and only published as the done marker after the log is fully
+ * written — a probe that sees the marker sees the complete log.
  */
 export function buildRemoteRunScript(options: {
   jobName: string;
@@ -63,14 +69,20 @@ export function buildRemoteRunScript(options: {
 }): string {
   const d = remoteDirExpr(options.remoteDir);
   const cwd = options.cwd ? shellQuote(options.cwd) : '"$HOME"';
+  const cdFailed = options.cwd
+    ? shellQuote(
+        `[pi-spawn] could not cd to ${options.cwd} on the VM — the parent's working directory must exist there (see the spawn README's exe.dev notes)`,
+      )
+    : `'[pi-spawn] could not cd to $HOME on the VM'`;
   return [
     "#!/bin/sh",
     `# pi-spawn job ${options.jobName}: one detached sub-agent on this VM.`,
     `d=${d}`,
     'echo $$ > "$d/pid"',
     ...options.envExports,
-    `cd ${cwd} || { echo 127 > "$d/done"; exit 127; }`,
-    `{ ${options.piCommand}; echo $? > "$d/done"; } > "$d/job.log" 2>&1`,
+    `cd ${cwd} || { echo ${cdFailed} > "$d/err.log"; echo 127 > "$d/done"; exit 127; }`,
+    `{ ${options.piCommand}; echo $? > "$d/done.exit"; } > "$d/job.log" 2> "$d/err.log"`,
+    'mv "$d/done.exit" "$d/done"',
     "",
   ].join("\n");
 }
@@ -114,6 +126,18 @@ export function buildTailCommand(remoteDir: string, maxBytes: number): string {
     return `d=${d}; cat "$d/job.log" 2>/dev/null || echo "(no output yet)"`;
   }
   return `d=${d}; tail -c ${Math.max(1, Math.floor(maxBytes))} "$d/job.log" 2>/dev/null || echo "(no output yet)"`;
+}
+
+/** Tail the remote stderr file; prints nothing when there is none. */
+export function buildErrTailCommand(
+  remoteDir: string,
+  maxBytes: number,
+): string {
+  const d = remoteDirExpr(remoteDir);
+  const read = Number.isFinite(maxBytes)
+    ? `tail -c ${Math.max(1, Math.floor(maxBytes))} "$d/err.log"`
+    : `cat "$d/err.log"`;
+  return `d=${d}; ${read} 2>/dev/null; true`;
 }
 
 /** SIGTERM the job's process group (setsid made pid == pgid). */
@@ -295,6 +319,16 @@ export function createExedevBackend(
         return `(could not read remote log: ${tail.stderr.trim() || "ssh failed"})`;
       }
       return tail.stdout === "" ? "(no output yet)" : tail.stdout;
+    },
+
+    async errorOutput(job: SpawnJob, maxBytes: number): Promise<string> {
+      if (!job.sshDest || !job.remoteDir) return "";
+      const tail = await ssh(
+        job.sshDest,
+        buildErrTailCommand(job.remoteDir, maxBytes),
+      );
+      // Best-effort error channel: an unreachable VM reads as no stderr.
+      return tail.exitCode === 0 ? tail.stdout : "";
     },
 
     async kill(job: SpawnJob): Promise<void> {

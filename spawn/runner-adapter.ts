@@ -30,6 +30,7 @@ import {
 
 const DEFAULT_POLL_INTERVAL_MS = 250;
 const DEFAULT_OUTPUT_MAX_BYTES = Number.POSITIVE_INFINITY;
+const ERROR_TAIL_BYTES = 16 * 1024;
 const NO_OUTPUT = "(no output yet)";
 
 export interface SpawnToolingSpawnOptions {
@@ -92,6 +93,26 @@ function statusStderr(job: SpawnJob): string {
   if (job.status === "done") return "";
   const code = job.exitCode === undefined ? "" : ` (exit ${job.exitCode})`;
   return `spawn job ${job.name} ended with status ${job.status}${code}`;
+}
+
+/**
+ * The stderr reported back to the runner for a finished job: the status
+ * line plus the child's captured stderr, so a failed sub-agent explains
+ * itself instead of surfacing as a bare exit code.
+ */
+async function reportStderr(
+  backend: SpawnBackend,
+  job: SpawnJob,
+): Promise<string> {
+  const base = statusStderr(job);
+  if (job.status === "done") return base;
+  let detail = "";
+  try {
+    detail = (await backend.errorOutput(job, ERROR_TAIL_BYTES)).trim();
+  } catch {
+    // Best-effort: the status line alone still reports the failure.
+  }
+  return detail ? `${base}\n${detail}` : base;
 }
 
 /** Kill/stamp stale internal synchronous jobs after a parent session restart. */
@@ -249,7 +270,11 @@ export function createSpawnToolingSpawn(
         if (request.signal.aborted) {
           await killAndStamp(job);
           await streamOutput();
-          return { exitCode: null, stdout, stderr: statusStderr(job) };
+          return {
+            exitCode: null,
+            stdout,
+            stderr: await reportStderr(backend, job),
+          };
         }
 
         const changed = await backend.refresh(job);
@@ -261,7 +286,7 @@ export function createSpawnToolingSpawn(
           return {
             exitCode: statusExit(job),
             stdout,
-            stderr: statusStderr(job),
+            stderr: await reportStderr(backend, job),
           };
         }
 

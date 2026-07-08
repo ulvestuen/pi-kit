@@ -47,6 +47,19 @@ export async function refreshFromLocalMarkers(
   return true;
 }
 
+/**
+ * Read up to maxBytes from the end of a job's stderr file. Unlike the log
+ * tail there is no placeholder: a missing or empty file reads as "".
+ */
+export function readErrTail(
+  errPath: string | undefined,
+  maxBytes: number,
+): string {
+  if (!errPath || !existsSync(errPath)) return "";
+  const tail = readLogTail(errPath, maxBytes);
+  return tail === "(no output yet)" ? "" : tail;
+}
+
 /** Read up to maxBytes from the end of a local log file. */
 export function readLogTail(
   logPath: string | undefined,

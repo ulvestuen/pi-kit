@@ -395,8 +395,13 @@ async function runOneTask(
 
     const parsed = parsePiJsonOutput(outcome.stdout);
     if (outcome.exitCode !== 0 || parsed.errorMessage) {
+      // On a non-zero exit the child's stderr is the primary evidence; the
+      // parse complaint ("no assistant message ...") is just its shadow.
       const detail =
-        parsed.errorMessage || outcome.stderr.trim() || "child process failed";
+        (outcome.exitCode !== 0
+          ? outcome.stderr.trim() || parsed.errorMessage
+          : parsed.errorMessage || outcome.stderr.trim()) ||
+        "child process failed";
       return finish(
         {
           status: "error",
