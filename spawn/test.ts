@@ -225,6 +225,20 @@ describe("local markers", () => {
     assert.equal(job.status, "lost");
   });
 
+  it("prefers a marker published during the aliveness probe over lost", async () => {
+    const config = testConfig();
+    const job = runningJob(config);
+    const changed = await refreshFromLocalMarkers(job, () => {
+      // The runner finishes between the marker read and the probe: it
+      // publishes the marker and exits.
+      writeFileSync(job.donePath!, "0\n", "utf8");
+      return false;
+    });
+    assert.equal(changed, true);
+    assert.equal(job.status, "done");
+    assert.equal(job.exitCode, 0);
+  });
+
   it("reads missing and empty stderr files as empty, tails the rest", () => {
     const config = testConfig();
     const job = runningJob(config);
@@ -913,6 +927,27 @@ describe("spawn runner adapter", () => {
     assert.match(jobs[0].name, /^pi-fleet-test-1-scout-/);
   });
 
+  it("records this process as the internal job's parent", async () => {
+    const config = testConfig();
+    const { backend } = backendForAdapter(config);
+    const spawn = createSpawnToolingSpawn({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      pollIntervalMs: 0,
+      jobNamePrefix: "pi-fleet-test",
+      parentPid: 777,
+    });
+    await spawn({
+      command: "pi",
+      args: ["--mode", "json", "task"],
+      cwd: "/repo",
+      signal: new AbortController().signal,
+      label: "1-scout",
+    });
+    const [job] = loadJobs(config.logDir);
+    assert.equal(job.parentPid, 777);
+  });
+
   it("reports a failed child's captured stderr back to the runner", async () => {
     const config = testConfig();
     const { backend } = backendForAdapter(config);
@@ -977,23 +1012,41 @@ describe("spawn runner adapter", () => {
   it("kills and stamps stale internal jobs during cleanup", async () => {
     const config = testConfig();
     const { backend, killed } = backendForAdapter(config);
-    const internal = runningJob(config, { name: "pi-fleet-1-scout-abc" });
+    // A dead recorded parent and a pre-ownership record without a parentPid
+    // are both stale; a job whose parent still runs is someone's live
+    // sub-agent (session_start also fires inside spawned children and in
+    // concurrent sessions) and must survive cleanup.
+    const orphaned = runningJob(config, {
+      name: "pi-fleet-1-scout-abc",
+      parentPid: 4001,
+    });
+    const legacy = runningJob(config, { name: "pi-fleet-2-critic-def" });
+    const liveParent = runningJob(config, {
+      name: "pi-fleet-3-implementer-ghi",
+      parentPid: 4002,
+    });
     const userJob = runningJob(config, { name: "scout-user-job" });
-    saveJobs(config.logDir, [internal, userJob]);
+    saveJobs(config.logDir, [orphaned, legacy, liveParent, userJob]);
 
     const cleaned = await cleanupSpawnToolingJobs({
       config,
       backends: { tmux: backend, exedev: backend, microsandbox: backend },
       jobNamePrefix: "pi-fleet",
+      isParentAlive: (pid) => pid === 4002,
       now: () => 1234,
     });
 
-    assert.equal(cleaned, 1);
-    assert.deepEqual(killed, ["pi-fleet-1-scout-abc"]);
+    assert.equal(cleaned, 2);
+    assert.deepEqual(killed, [
+      "pi-fleet-1-scout-abc",
+      "pi-fleet-2-critic-def",
+    ]);
     const jobs = loadJobs(config.logDir);
     assert.equal(jobs[0].status, "killed");
     assert.equal(jobs[0].updatedAt, 1234);
-    assert.equal(jobs[1].status, "running");
+    assert.equal(jobs[1].status, "killed");
+    assert.equal(jobs[2].status, "running");
+    assert.equal(jobs[3].status, "running");
   });
 
   it("kills and stamps a running spawn job when aborted", async () => {

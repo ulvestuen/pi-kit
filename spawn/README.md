@@ -120,8 +120,12 @@ Linux with KVM, macOS on Apple Silicon, or Windows 11.
   the same tool call, with concurrency limits, timeouts, worktree isolation,
   JSONL parsing, and critic/orchestrator gating. Internally, each labeled
   sub-agent child is launched as a spawn job and waited on by
-  `spawn/runner-adapter.ts`; stale internal jobs are killed/stamped on the
-  next session start if the parent was interrupted.
+  `spawn/runner-adapter.ts`. Internal jobs record their parent session's
+  pid; on session start, jobs whose recorded parent is gone are killed and
+  stamped, while jobs of a still-live parent are left alone — the check
+  matters because the spawned children are pi processes that load these same
+  extensions, and a concurrently started session must not kill another
+  session's in-flight sub-agents.
 - **spawn** (`spawn_agent`): fire-and-forget — one job per call, results
   polled later (even from a different session), and the backend decides where
   the job runs. tmux is one of three runners.

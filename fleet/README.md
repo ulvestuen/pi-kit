@@ -67,6 +67,9 @@ details.
 - **Restart safety**: dispatched batches are recorded in the session entry
   log; on session start, stale internal spawn jobs for interrupted synchronous
   batches are killed/stamped and stale "running" batches are marked aborted.
+  A job counts as stale only when its recorded parent session process is
+  gone, so a spawned child pi (which loads these same extensions) or a
+  concurrently started session never kills a live parent's sub-agents.
 - **Spawn backend**: sub-agent children use spawn tooling. With the default
   `tmux` backend, every sub-agent runs in a shared tmux session. With
   `exedev` or `microsandbox`, the job runs in that backend and fleet polls it

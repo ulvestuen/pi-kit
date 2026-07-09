@@ -48,6 +48,12 @@ export interface SpawnToolingSpawnOptions {
   pollIntervalMs?: number;
   /** Maximum log bytes to read back into fleet's stdout transcript. */
   outputMaxBytes?: number;
+  /**
+   * Pid recorded as the launched jobs' owner (SpawnJob.parentPid), so
+   * session-start cleanup in *other* pi processes can tell these jobs are
+   * not stale while this process lives. Defaults to process.pid.
+   */
+  parentPid?: number;
   /** Test hooks. */
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -59,9 +65,22 @@ export interface CleanupSpawnToolingJobsOptions {
   backends: Record<SpawnBackendName, SpawnBackend>;
   /** Prefix originally passed as jobNamePrefix. */
   jobNamePrefix: string;
+  /** Liveness probe for a job's recorded parentPid. Defaults to a signal-0
+   * check on this host. Injectable for tests. */
+  isParentAlive?: (pid: number) => boolean;
   now?: () => number;
   onRegistryError?: (message: string) => void;
   onError?: (message: string) => void;
+}
+
+/** Whether a pid exists on this host (EPERM still means "exists"). */
+function defaultIsParentAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e: any) {
+    return e?.code === "EPERM";
+  }
 }
 
 function pseudoAgent(label: string | undefined): AgentDefinition {
@@ -115,17 +134,28 @@ async function reportStderr(
   return detail ? `${base}\n${detail}` : base;
 }
 
-/** Kill/stamp stale internal synchronous jobs after a parent session restart. */
+/**
+ * Kill/stamp stale internal synchronous jobs after a parent session restart.
+ *
+ * "Stale" means the recorded parent process is gone: this runs on every
+ * session_start, including inside spawned child pi processes (which load the
+ * same extensions) and in concurrently started sessions, so a running job
+ * whose parentPid is still alive is someone's live sub-agent — leave it
+ * alone. Jobs without a parentPid predate ownership tracking and are
+ * treated as stale, matching the old behavior.
+ */
 export async function cleanupSpawnToolingJobs(
   options: CleanupSpawnToolingJobsOptions,
 ): Promise<number> {
   const now = options.now ?? Date.now;
+  const isParentAlive = options.isParentAlive ?? defaultIsParentAlive;
   const prefix = `${options.jobNamePrefix}-`;
   const jobs = loadJobs(options.config.logDir, options.onRegistryError);
   let cleaned = 0;
   let dirty = false;
   for (const job of jobs) {
     if (job.status !== "running" || !job.name.startsWith(prefix)) continue;
+    if (job.parentPid !== undefined && isParentAlive(job.parentPid)) continue;
     const backend = options.backends[job.backend];
     if (!backend) {
       options.onError?.(
@@ -163,6 +193,7 @@ export function createSpawnToolingSpawn(
   }
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const outputMaxBytes = options.outputMaxBytes ?? DEFAULT_OUTPUT_MAX_BYTES;
+  const parentPid = options.parentPid ?? process.pid;
   const now = options.now ?? Date.now;
   const sleep =
     options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
@@ -237,6 +268,7 @@ export function createSpawnToolingSpawn(
         command: request.command,
         args: request.args,
       });
+      launched.parentPid = parentPid;
       jobs.push(launched);
       return { result: launched, dirty: true };
     });

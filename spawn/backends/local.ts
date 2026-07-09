@@ -37,8 +37,13 @@ export async function refreshFromLocalMarkers(
   job: SpawnJob,
   runnerAlive: () => Promise<boolean> | boolean,
 ): Promise<boolean> {
-  const doneContent = readDoneMarker(job.donePath);
+  let doneContent = readDoneMarker(job.donePath);
   const alive = doneContent === undefined ? await runnerAlive() : false;
+  if (doneContent === undefined && !alive) {
+    // The runner may have published the marker and exited between the two
+    // probes; re-read before concluding "lost", which is terminal.
+    doneContent = readDoneMarker(job.donePath);
+  }
   const { status, exitCode } = resolveStatus(doneContent, alive);
   if (status === job.status && exitCode === job.exitCode) return false;
   job.status = status;
