@@ -51,6 +51,14 @@ export interface SpawnJob {
   exitCode?: number;
   createdAt: number;
   updatedAt: number;
+  /**
+   * Pid of the pi session process that launched this job, recorded only for
+   * internal synchronous runner jobs (fleet/critic/orchestrator children).
+   * Session-start cleanup treats a running internal job as stale only when
+   * this process is gone — a spawned child pi loads the same extensions and
+   * must not kill the jobs of a parent that is still alive (itself included).
+   */
+  parentPid?: number;
   /** Local log file (tmux and microsandbox backends). */
   logPath?: string;
   /** Local done marker (tmux and microsandbox backends). */

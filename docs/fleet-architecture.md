@@ -355,7 +355,7 @@ as before:
 
 ```mermaid
 flowchart LR
-    A["session_start"] --> K["kill/stamp stale internal<br/>spawn jobs for this extension prefix"]
+    A["session_start"] --> K["kill/stamp stale internal<br/>spawn jobs for this extension prefix<br/>(only jobs whose recorded parent pid is gone)"]
     K --> B["scan entry log for the latest<br/>fleet-state entry"]
     B --> C{"status ==<br/>'running'?"}
     C -- yes --> D["append corrected entry:<br/>status = aborted,<br/>unfinished tasks marked aborted"]

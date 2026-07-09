@@ -396,7 +396,7 @@ state from the session entry log:
 
 ```mermaid
 flowchart LR
-    restart["session_start"] --> c["fleet/critic/orchestrator:<br/>stale internal spawn jobs killed/stamped"]
+    restart["session_start"] --> c["fleet/critic/orchestrator:<br/>stale internal spawn jobs killed/stamped<br/>(only jobs whose recorded parent pid is gone)"]
     c --> f["fleet: stale 'running' batch<br/>entries marked aborted<br/>(interrupted synchronous wave)"]
     restart --> p["planner: plan restored;<br/>'running' tasks reset to 'ready'"]
     restart --> o["orchestrator: wave counter and<br/>stopped flag restored"]

@@ -537,7 +537,7 @@ package a dependency — decided per package in its README.
 | Critic output unparseable | Review = failed with "unscorable output" weakness; one automatic critic re-run before counting an attempt |
 | Critic disagreement (scores vs. sub-agent claim) | The critic wins by construction — it is the only source of CHECK scores; sub-agent self-reports are informational (`details`) only |
 | lykkja `STOPPED` | Orchestrator halts, reports per-task state, remaining weaknesses, and branches left unmerged; nothing is silently discarded |
-| Session restart mid-run | On `session_start`, fleet/critic/orchestrator kill/stamp stale internal spawn jobs, fleet marks in-flight entries `aborted`, planner state restores, and the plan's `running` tasks reset to `ready` — the next `orchestrate_step` resumes the run idempotently |
+| Session restart mid-run | On `session_start`, fleet/critic/orchestrator kill/stamp stale internal spawn jobs (only those whose recorded parent process is gone — a spawned child or concurrent session leaves a live parent's jobs alone), fleet marks in-flight entries `aborted`, planner state restores, and the plan's `running` tasks reset to `ready` — the next `orchestrate_step` resumes the run idempotently |
 | User abort (`ctx.signal`) | Runner aborts queued tasks, asks the spawn adapter to kill/stamp running jobs, queue drains, state entries record the abort |
 
 ---
