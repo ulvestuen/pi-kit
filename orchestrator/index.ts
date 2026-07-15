@@ -24,6 +24,7 @@ import {
 } from "../critic/review.ts";
 import { DEFAULT_SCALE_MAX } from "../lykkja/loop.ts";
 import {
+  coverageByCriterion,
   getTask,
   setTaskStatus,
   summarizePlan,
@@ -44,6 +45,7 @@ import {
   type SchedulerPolicy,
 } from "./scheduler.ts";
 import {
+  DEFAULT_EVIDENCE_AGENT,
   getConfigPath,
   loadConfig,
   type OrchestratorConfig,
@@ -65,7 +67,32 @@ interface OrchestratorState {
   wave: number;
 }
 
-function buildRunPrompt(goal: string): string {
+interface RunPromptOptions {
+  /** critic_advise is registered, so the plan review gate can run. */
+  planReviewGate: boolean;
+  /** The configured integration-gate command, if any. */
+  integrationCheck?: string;
+}
+
+function buildRunPrompt(goal: string, options: RunPromptOptions): string {
+  let step = 1;
+  const steps = [
+    "1. Open the goal loop: derive strict goal-level success criteria (use the `success-criteria` skill; typically \"all plan tasks done\", \"end-to-end verification passes\", plus goal-specific bars) and call `lykkja_start` with the goal and those criteria. Do NOT run the returned automated prompt's single-agent loop — the orchestration below is the loop body.",
+    `${++step}. Plan: decompose the goal into a task DAG with \`plan_create\`, following the \`plan-decomposition\` skill. Every task needs a self-contained brief, an agent, dependencies, strict acceptance criteria, and a \`covers\` list naming the exact goal-level criteria it helps satisfy — every goal criterion that tasks can advance should be covered by at least one task.`,
+  ];
+  if (options.planReviewGate) {
+    steps.push(
+      `${++step}. Plan review gate: before dispatching anything, call \`critic_advise\` with the plan as the subject (goal, the task DAG with dependencies and file scopes, per-task criteria) and the goal-level criteria as context. Act on the prioritized concerns — revise the plan with \`plan_update\` until no remaining concern would change the decomposition. Only then dispatch.`,
+    );
+  }
+  steps.push(
+    `${++step}. Dispatch: call \`orchestrate_step\`. It dispatches the ready wave to fleet sub-agents, gathers independent verification evidence, has an independent critic review each completed task against its own criteria, applies retries with critic feedback, and returns the wave report.`,
+    `${++step}. Checkpoint: after each wave, follow the AUTOMATED NEXT STEP in the \`orchestrate_step\` result — ` +
+      (options.integrationCheck
+        ? `merge the wave's passed branches, run the integration gate with \`orchestrate_verify\`, then call \`lykkja_checkpoint\` scoring the goal-level criteria honestly from the critic verdicts and the integration-gate verdict. `
+        : `call \`lykkja_checkpoint\` scoring the goal-level criteria honestly from the critic-derived evidence in the wave report. `) +
+      "On ITERATING, call `orchestrate_step` again (repairing the plan first with `plan_update` if the report says so). On FINAL, finish and summarize. On STOPPED, report honestly what still fails.",
+  );
   return [
     "Run a **multi-agent orchestration** on the following goal, following the `orchestration` skill.",
     "",
@@ -74,10 +101,7 @@ function buildRunPrompt(goal: string): string {
     "",
     "Proceed exactly like this, without waiting for user input between steps:",
     "",
-    "1. Open the goal loop: derive strict goal-level success criteria (use the `success-criteria` skill; typically \"all plan tasks done\", \"end-to-end verification passes\", plus goal-specific bars) and call `lykkja_start` with the goal and those criteria. Do NOT run the returned automated prompt's single-agent loop — the orchestration below is the loop body.",
-    "2. Plan: decompose the goal into a task DAG with `plan_create`, following the `plan-decomposition` skill. Every task needs a self-contained brief, an agent, dependencies, and strict acceptance criteria.",
-    "3. Dispatch: call `orchestrate_step`. It dispatches the ready wave to fleet sub-agents, has an independent critic review each completed task against its own criteria, applies retries with critic feedback, and returns the wave report.",
-    "4. Checkpoint: after each wave, follow the AUTOMATED NEXT STEP in the `orchestrate_step` result — call `lykkja_checkpoint` scoring the goal-level criteria honestly from the critic-derived evidence in the wave report. On ITERATING, call `orchestrate_step` again (repairing the plan first with `plan_update` if the report says so). On FINAL, finish and summarize. On STOPPED, report honestly what still fails.",
+    ...steps,
     "",
     "Do not implement plan tasks yourself — the sub-agents do the work. Do not inflate checkpoint scores to end the run.",
   ].join("\n");
@@ -121,12 +145,57 @@ function requireSuccessfulCommand(
   throw new Error(`${label} failed (exit ${outcome.exitCode ?? "signal"}): ${detail}`);
 }
 
-function buildReviewSubject(task: PlanTask, result?: TaskResult): string {
+/** Outcome of the pre-review evidence run attached to a review subject. */
+interface VerificationEvidence {
+  agent: string;
+  status: TaskResult["status"];
+  output: string;
+}
+
+function buildEvidenceBrief(task: PlanTask, result?: TaskResult): string {
+  const criteria = task.criteria.map((c) => `- ${c.name}`).join("\n");
+  return [
+    "You are gathering independent verification evidence for a completed task, before an independent critic scores it. Do not score anything yourself.",
+    "",
+    `TASK (${task.id}): ${task.title}`,
+    task.description,
+    "",
+    "ACCEPTANCE CRITERIA the critic will score:",
+    criteria,
+    ...(result?.output.trim()
+      ? ["", "IMPLEMENTER'S REPORT (claims to re-check):", result.output.trim()]
+      : ["", "No implementer report is available; derive the checks from the criteria alone."]),
+    "",
+    "Re-run the verification the criteria imply and the report claims — test suites, type checks, builds, lints — using only non-mutating commands in the current working tree. For each check paste the exact command, its exit status, and the relevant output tail. If a claimed verification cannot be re-run, paste the exact error and say so.",
+    "",
+    "End with exactly one line: EVIDENCE VERDICT: all checks passed | failures observed | could not verify.",
+  ].join("\n");
+}
+
+function buildReviewSubject(
+  task: PlanTask,
+  result?: TaskResult,
+  evidence?: VerificationEvidence,
+): string {
   const lines = [`Task ${task.id}: ${task.title}`];
   if (result?.output.trim()) {
     lines.push("", "Implementer's report:", result.output.trim());
   } else {
     lines.push("", "No implementer report is available; verify from the tree alone.");
+  }
+  if (evidence) {
+    if (evidence.status === "ok" && evidence.output.trim()) {
+      lines.push(
+        "",
+        `INDEPENDENT VERIFICATION EVIDENCE (agent "${evidence.agent}" re-ran the checks; weigh this over the implementer's claims):`,
+        evidence.output.trim(),
+      );
+    } else {
+      lines.push(
+        "",
+        `Independent verification evidence is unavailable (agent "${evidence.agent}" run ${evidence.status}); verify claims yourself from the tree.`,
+      );
+    }
   }
   if (result?.branch) {
     lines.push(
@@ -164,6 +233,8 @@ export default function (pi: ExtensionAPI) {
       isolation: "none",
       taskTimeoutMs: 10 * 60 * 1000,
       reviewTimeoutMs: 5 * 60 * 1000,
+      integrationTimeoutMs: 5 * 60 * 1000,
+      evidenceAgent: DEFAULT_EVIDENCE_AGENT,
       outputCapBytes: 50 * 1024,
       defaultAgent: "implementer",
       piBinary: "pi",
@@ -256,7 +327,9 @@ export default function (pi: ExtensionAPI) {
                   "",
                   "AUTOMATED NEXT STEP:",
                   "1. Merge any unmerged task branches serially in DAG order (resolve trivial conflicts yourself; dispatch a fleet task for messy ones).",
-                  "2. Run the goal-level end-to-end verification.",
+                  config.integrationCheck
+                    ? `2. Run the goal-level end-to-end verification: call orchestrate_verify (configured integration check: ${config.integrationCheck}).`
+                    : "2. Run the goal-level end-to-end verification.",
                   "3. Call lykkja_checkpoint scoring every goal-level criterion honestly from that evidence.",
                 ].join("\n"),
               },
@@ -392,7 +465,57 @@ export default function (pi: ExtensionAPI) {
         // --- Review everything now awaiting the critic --------------------
         const reviewTargets = plan.tasks.filter((t) => t.status === "review");
         const reviewsById = new Map<string, ReviewResult>();
+        const evidenceById = new Map<string, VerificationEvidence>();
+        const evidenceNotes: string[] = [];
         if (reviewTargets.length > 0 && !signal?.aborted) {
+          // Independent verification evidence: an execution-capable agent
+          // re-runs the checks the criteria imply, so the critic scores from
+          // observed command output instead of the implementer's claims.
+          const evidenceAgentDef = config.evidenceAgent
+            ? getAgent(registry, config.evidenceAgent)
+            : undefined;
+          if (config.evidenceAgent && !evidenceAgentDef) {
+            evidenceNotes.push(
+              `Evidence agent "${config.evidenceAgent}" was not found in the registry; reviews ran without independently executed verification evidence.`,
+            );
+          }
+          if (evidenceAgentDef) {
+            progress(
+              `gathering verification evidence for ${reviewTargets.length} task(s) via ${evidenceAgentDef.name}`,
+            );
+            const evidenceRegistry = new Map([
+              [evidenceAgentDef.name.toLowerCase(), evidenceAgentDef],
+            ]);
+            const evidenceSpecs: TaskSpec[] = reviewTargets.map((task) => ({
+              agent: evidenceAgentDef.name,
+              task: buildEvidenceBrief(task, resultsById.get(task.id)),
+              cwd: resultsById.get(task.id)?.worktreePath,
+              timeoutMs: config.reviewTimeoutMs,
+              runId: {
+                runId: `evidence-${task.id}-w${wave}-a${task.attempts}`,
+                taskId: task.id,
+                attempt: task.attempts,
+                wave,
+              },
+            }));
+            const evidenceOutcomes = await runTasks(
+              evidenceRegistry,
+              evidenceSpecs,
+              {
+                ...runnerBase,
+                maxBatch: Math.max(evidenceSpecs.length, 1),
+                onEvent: (event) => pi.events.emit(`fleet:${event.type}`, event),
+              },
+            );
+            evidenceOutcomes.forEach((outcome, i) => {
+              evidenceById.set(reviewTargets[i].id, {
+                agent: evidenceAgentDef.name,
+                status: outcome.status,
+                output: outcome.output,
+              });
+            });
+          }
+
           progress(
             `reviewing ${reviewTargets.length} task(s): ${reviewTargets.map((t) => t.id).join(", ")}`,
           );
@@ -419,7 +542,7 @@ export default function (pi: ExtensionAPI) {
               }
             }
             const request: ReviewRequest = {
-              subject: buildReviewSubject(task, result),
+              subject: buildReviewSubject(task, result, evidenceById.get(task.id)),
               context: `Goal: ${plan!.goal}\n\nTask brief:\n${task.description}`,
               criteria: task.criteria,
               scaleMax,
@@ -609,6 +732,11 @@ export default function (pi: ExtensionAPI) {
           for (const warning of artifactWarnings) lines.push(`  - ${warning}`);
         }
 
+        if (evidenceNotes.length > 0) {
+          lines.push("", "Verification evidence notes:");
+          for (const note of evidenceNotes) lines.push(`  - ${note}`);
+        }
+
         const branches = [...new Set([...resultsById.keys(), ...reviewsById.keys()])]
           .flatMap((id) => {
             const task = plan!.tasks.find((candidate) => candidate.id === id);
@@ -624,18 +752,43 @@ export default function (pi: ExtensionAPI) {
           );
         }
 
+        const coverage = coverageByCriterion(plan);
+        if (coverage.length > 0) {
+          lines.push("", "Goal-criterion coverage (from task `covers` tags):");
+          for (const entry of coverage) {
+            const failedText =
+              entry.failed.length > 0 ? `; failed: ${entry.failed.join(", ")}` : "";
+            lines.push(
+              `  ${entry.criterion}: ${entry.done.length}/${entry.tasks.length} covering task(s) done (${entry.tasks.join(", ")})${failedText}`,
+            );
+          }
+        }
+
         lines.push(
           "",
           `Plan: ${summary.counts.done}/${summary.total} done, ${summary.counts.ready + summary.counts.pending} waiting, ${summary.counts.review} in review, ${summary.counts.failed} failed.` +
             (summary.ready.length > 0 ? ` Ready next: ${summary.ready.join(", ")}.` : ""),
           "",
           "AUTOMATED NEXT STEP:",
-          `1. Call lykkja_checkpoint for this wave now: plan = "wave ${wave}: dispatch ${dispatched.map((t) => t.id).join(", ") || "(reviews only)"}", changes = a one-line wave summary, scores = every goal-level criterion scored honestly using the critic verdicts above as evidence — do not inflate.`,
-          "2. On ITERATING: call orchestrate_step again immediately" +
+        );
+        let nextStep = 0;
+        const tasksLandedThisWave =
+          reviewsById.size > 0 &&
+          [...reviewsById.keys()].some(
+            (id) => plan!.tasks.find((t) => t.id === id)?.status === "done",
+          );
+        if (config.integrationCheck && tasksLandedThisWave) {
+          lines.push(
+            `${++nextStep}. Integration gate: ${branches.length > 0 ? "merge the listed passed branches serially in DAG order, then " : ""}call orchestrate_verify to run the configured integration check (${config.integrationCheck}). Do not skip it — tasks landed this wave, and its verdict is the integration-level CHECK evidence.`,
+          );
+        }
+        lines.push(
+          `${++nextStep}. Call lykkja_checkpoint for this wave now: plan = "wave ${wave}: dispatch ${dispatched.map((t) => t.id).join(", ") || "(reviews only)"}", changes = a one-line wave summary, scores = every goal-level criterion scored honestly using the critic verdicts${config.integrationCheck && tasksLandedThisWave ? ", the integration-gate verdict," : ""} and the goal-criterion coverage above as evidence — do not inflate.`,
+          `${++nextStep}. On ITERATING: call orchestrate_step again immediately` +
             (summary.counts.failed > 0
               ? " — but first repair the plan with plan_update (follow-up tasks addressing the recorded weaknesses, or explicit descoping) since tasks have failed."
               : "."),
-          "3. On FINAL: merge any listed branches, then summarize the run. On STOPPED: report honestly which criteria still fail.",
+          `${++nextStep}. On FINAL: merge any listed branches, then summarize the run. On STOPPED: report honestly which criteria still fail.`,
         );
 
         return {
@@ -646,9 +799,107 @@ export default function (pi: ExtensionAPI) {
             dispatched: dispatched.map((t) => t.id),
             results: Object.fromEntries(resultsById),
             reviews: Object.fromEntries(reviewsById),
+            evidence: Object.fromEntries(evidenceById),
+            coverage,
             summary,
             artifactWarnings,
             runLog,
+          },
+        };
+      },
+    }),
+  );
+
+  pi.registerTool(
+    defineTool({
+      name: "orchestrate_verify",
+      label: "orchestrator: Integration Gate",
+      description:
+        "Run the configured integration check (orchestrator config integrationCheck, e.g. \"npm test\") in the working tree and report PASSED or FAILED with the command output. Call it after merging a wave's passed branches — and before lykkja_checkpoint — so integration-level verification is observed, not assumed.",
+      promptSnippet:
+        "orchestrate_verify: run the configured integration check in the working tree and report PASSED/FAILED.",
+      promptGuidelines: [
+        "During an orchestration run with an integrationCheck configured, call orchestrate_verify after each wave's merges and use its verdict as checkpoint evidence.",
+      ],
+      parameters: Type.Object({}),
+      async execute(_id, _params, signal, _onUpdate, ctx) {
+        const command = config.integrationCheck;
+        if (!command) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: 'No integration check is configured. Set "integrationCheck" (e.g. "npm test") in the orchestrator config to enable the gate. Until then, run the goal-level verification yourself and score the checkpoint from what you actually observed.',
+              },
+            ],
+            details: { configured: false },
+          };
+        }
+
+        const controller = new AbortController();
+        const onAbort = () => controller.abort();
+        signal?.addEventListener("abort", onAbort, { once: true });
+        const timer = setTimeout(
+          () => controller.abort(),
+          config.integrationTimeoutMs,
+        );
+        const started = Date.now();
+        let outcome: { exitCode: number | null; stdout: string; stderr: string };
+        try {
+          outcome = await spawn({
+            command: "sh",
+            args: ["-c", command],
+            cwd: ctx.cwd,
+            signal: controller.signal,
+          });
+        } finally {
+          clearTimeout(timer);
+          signal?.removeEventListener("abort", onAbort);
+        }
+
+        const durationMs = Date.now() - started;
+        const passed = outcome.exitCode === 0;
+        const timedOut =
+          !passed && controller.signal.aborted && !signal?.aborted;
+        const combined = [outcome.stdout.trim(), outcome.stderr.trim()]
+          .filter(Boolean)
+          .join("\n");
+        const cap = 8 * 1024;
+        const outputTail =
+          combined.length > cap ? `…${combined.slice(-cap)}` : combined;
+        const verdict = passed
+          ? "PASSED"
+          : timedOut
+            ? `FAILED (timed out after ${config.integrationTimeoutMs} ms)`
+            : `FAILED (exit ${outcome.exitCode ?? "signal"})`;
+
+        const lines = [
+          `Integration gate ${verdict} in ${Math.round(durationMs / 1000)}s — command: ${command}`,
+          "",
+          "Output tail:",
+          outputTail || "(no output)",
+          "",
+          "AUTOMATED NEXT STEP:",
+        ];
+        if (passed) {
+          lines.push(
+            "Use this pass as the integration-level evidence when scoring the next lykkja_checkpoint.",
+          );
+        } else {
+          lines.push(
+            "1. This failure is integration-level CHECK evidence: the affected goal-level criteria cannot pass at the next lykkja_checkpoint while the gate fails — score them honestly.",
+            "2. Repair through the plan, never silently: use plan_update to re-queue the merged task(s) whose changes broke the gate (append the failing output to their briefs) or append a dedicated fix task, then call orchestrate_step again.",
+          );
+        }
+        return {
+          content: [{ type: "text" as const, text: lines.join("\n") }],
+          details: {
+            configured: true,
+            passed,
+            timedOut,
+            exitCode: outcome.exitCode,
+            durationMs,
+            command,
           },
         };
       },
@@ -691,6 +942,7 @@ export default function (pi: ExtensionAPI) {
           "orchestrator — thin composition layer",
           `  Wave:        ${state.wave}${state.stopped ? " (stopped)" : ""}`,
           `  Policy:      ${config.maxConcurrent} concurrent, ${config.maxAttempts} attempt(s) per task, isolation ${config.isolation}`,
+          `  Gates:       evidence agent ${config.evidenceAgent ?? "(disabled)"}, integration check ${config.integrationCheck ?? "(none configured)"}`,
           `  spawn:       backend ${spawnConfig.backend} (config: ${spawnConfig.configPath ?? "defaults / environment variables"})`,
           `  tmux:        ${spawnTmuxLive ? `sub-agent runner windows in session "${spawnConfig.tmuxSession}" (tmux attach -t ${spawnConfig.tmuxSession})` : spawnConfig.backend === "tmux" ? "spawn backend selected but tmux is not installed" : "not used by selected spawn backend"}`,
           `  Plan:        ${plan ? `${summarizePlan(plan).counts.done}/${plan.tasks.length} done — "${plan.goal}"` : "(none)"}`,
@@ -726,7 +978,14 @@ export default function (pi: ExtensionAPI) {
 
       state = { stopped: false, wave: 0 };
       persistState();
-      pi.sendUserMessage(buildRunPrompt(raw));
+      pi.sendUserMessage(
+        buildRunPrompt(raw, {
+          planReviewGate: pi
+            .getAllTools()
+            .some((t) => t.name === "critic_advise"),
+          integrationCheck: config.integrationCheck,
+        }),
+      );
     },
   });
 }

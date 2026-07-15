@@ -35,6 +35,13 @@ the DAG (unique ids, no dangling dependencies, no cycles) and persists it;
    skill (from lykkja): measurable, evidence-scoreable, with thresholds.
    These same criteria are later handed to an independent critic — write them
    so a reviewer who did not do the work can score them.
+8. **Tag each task with the goal criteria it covers.** When the plan serves a
+   lykkja goal loop, set each task's `covers` to the exact goal-level
+   criterion names it helps satisfy. Coverage is then mechanical: every goal
+   criterion that tasks can advance should be covered by at least one task,
+   and the checkpoint can read per-criterion progress straight off the plan.
+   A goal criterion nothing covers is a decomposition gap — fix it before
+   dispatching.
 
 ## Choosing agents
 

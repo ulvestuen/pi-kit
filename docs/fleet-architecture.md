@@ -5,7 +5,11 @@ definitions are discovered, how a batch of tasks flows through the runner, how
 concurrency, timeouts, isolation, and cancellation behave, and how spawn
 backends provide execution/live visibility. For installation, configuration, and usage,
 see the [fleet README](../fleet/README.md); for the original design rationale,
-see [multi-agent-orchestration.md](./multi-agent-orchestration.md).
+see [multi-agent-orchestration.md](./multi-agent-orchestration.md). In the
+[Micro-V'ave execution model](./micro-vave-execution-model.md), fleet is the
+vertex of every micro-V — the implementation step between the descending
+specification leg and the ascending verification leg — and its concurrency
+pool is the model's granularity axis (the stack of parallel micro-Vs).
 
 Fleet is the **fan-out primitive** of the pi-kit multi-agent stack: it runs N
 sub-agents through the shared spawn tooling, each with its own context window,

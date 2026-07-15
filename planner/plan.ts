@@ -46,6 +46,12 @@ export interface PlanTask {
   agent?: string;
   /** lykkja-shaped acceptance criteria. */
   criteria: Criterion[];
+  /**
+   * Names of goal-level criteria this task helps satisfy (exact names from
+   * the lykkja goal loop). Optional: plans persisted before this field
+   * existed lack it entirely.
+   */
+  covers?: string[];
   status: TaskStatus;
   /** Number of times the task has been dispatched. */
   attempts: number;
@@ -67,6 +73,7 @@ export interface PlanTaskInput {
   dependsOn?: string[];
   agent?: string;
   criteria: CriterionInput[];
+  covers?: string[];
 }
 
 export interface CreatePlanOptions {
@@ -111,10 +118,16 @@ function buildTask(
     dependsOn: (input.dependsOn ?? []).map(normalizeId).filter(Boolean),
     agent: input.agent?.trim() || undefined,
     criteria,
+    covers: normalizeCovers(input.covers),
     status: "pending",
     attempts: 0,
     artifacts: [],
   };
+}
+
+function normalizeCovers(covers: string[] | undefined): string[] | undefined {
+  const normalized = (covers ?? []).map((name) => name.trim()).filter(Boolean);
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 /** Validate the task list as a DAG: unique ids, no dangling deps, no cycles. */
@@ -280,6 +293,8 @@ export interface PlanTaskPatch {
   description?: string;
   agent?: string;
   criteria?: CriterionInput[];
+  /** Goal-level criterion names this task helps satisfy. */
+  covers?: string[];
   /** Artifacts produced by the task (set on passing review). */
   artifacts?: ArtifactRef[];
 }
@@ -315,6 +330,9 @@ export function updateTask(
       options.scaleMax ?? DEFAULT_SCALE_MAX,
     );
   }
+  if (patch.covers !== undefined) {
+    updated.covers = normalizeCovers(patch.covers);
+  }
   if (patch.artifacts !== undefined) {
     updated.artifacts = patch.artifacts;
   }
@@ -338,6 +356,46 @@ export function addTasks(
   const all = [...plan.tasks, ...built];
   validateDag(all);
   return { ...plan, updatedAt: options.now ?? Date.now(), tasks: all };
+}
+
+/** Coverage of one goal-level criterion by the tasks that declare it. */
+export interface CriterionCoverage {
+  /** Goal-level criterion name, as first declared by a task's `covers`. */
+  criterion: string;
+  /** Ids of every task covering this criterion, in plan order. */
+  tasks: string[];
+  /** Subset of `tasks` that are done. */
+  done: string[];
+  /** Subset of `tasks` that are failed. */
+  failed: string[];
+}
+
+/**
+ * Group tasks by the goal-level criterion names they declare via `covers`,
+ * so goal-criterion progress can be read mechanically off the plan
+ * (System Requirements ↔ System Testing traceability). Criterion names are
+ * matched case-insensitively; the first-seen spelling is reported.
+ */
+export function coverageByCriterion(plan: Plan): CriterionCoverage[] {
+  const byKey = new Map<string, CriterionCoverage>();
+  for (const task of plan.tasks) {
+    for (const name of task.covers ?? []) {
+      const key = nameKeyOf(name);
+      let entry = byKey.get(key);
+      if (!entry) {
+        entry = { criterion: name, tasks: [], done: [], failed: [] };
+        byKey.set(key, entry);
+      }
+      entry.tasks.push(task.id);
+      if (task.status === "done") entry.done.push(task.id);
+      if (task.status === "failed") entry.failed.push(task.id);
+    }
+  }
+  return [...byKey.values()];
+}
+
+function nameKeyOf(name: string): string {
+  return name.trim().toLowerCase();
 }
 
 export interface PlanSummary {

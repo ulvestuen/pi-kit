@@ -29,6 +29,10 @@ Each task carries:
   (name + threshold), normalized with lykkja's own `normalizeCriteria`, so
   every task's bar is by construction something lykkja and the critic can
   score;
+- `covers` — optional goal-level criterion names (the exact names from the
+  lykkja goal loop) this task helps satisfy; `coverageByCriterion` and the
+  `/plan` dashboard then report per-goal-criterion progress mechanically,
+  and a goal criterion nothing covers is visible as a decomposition gap;
 - `status` — `pending → ready → running → review → done` (or `failed`) — and
   `attempts`, counted per dispatch.
 
