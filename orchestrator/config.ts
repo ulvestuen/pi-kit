@@ -11,6 +11,8 @@ import { DEFAULT_TMUX_SESSION, type TmuxSettings } from "../fleet/tmux.ts";
 import { DEFAULT_MAX_ATTEMPTS } from "./scheduler.ts";
 
 const DEFAULT_REVIEW_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_INTEGRATION_TIMEOUT_MS = 5 * 60 * 1000;
+export const DEFAULT_EVIDENCE_AGENT = "auditor";
 
 /**
  * orchestrator configuration. All fields are optional with sensible
@@ -27,6 +29,19 @@ export interface OrchestratorConfig extends TmuxSettings {
   taskTimeoutMs: number;
   /** Timeout for one critic review in milliseconds. */
   reviewTimeoutMs: number;
+  /**
+   * Shell command run by orchestrate_verify as the integration gate after a
+   * wave's merges (e.g. "npm test"). Unset = no integration gate.
+   */
+  integrationCheck?: string;
+  /** Timeout for one integration-gate run in milliseconds. */
+  integrationTimeoutMs: number;
+  /**
+   * Agent dispatched before each critic review to independently re-run the
+   * task's verification commands and attach the evidence to the review
+   * subject. "none" disables the evidence step.
+   */
+  evidenceAgent?: string;
   /** Cap on model-visible output per sub-agent task, in bytes. */
   outputCapBytes: number;
   /** Model override for critic reviews; empty = the agent definition's model. */
@@ -45,6 +60,9 @@ interface RawOrchestratorConfig {
   isolation?: string;
   taskTimeoutMs?: number | string;
   reviewTimeoutMs?: number | string;
+  integrationCheck?: string;
+  integrationTimeoutMs?: number | string;
+  evidenceAgent?: string;
   outputCapBytes?: number | string;
   criticModel?: string;
   defaultAgent?: string;
@@ -115,6 +133,9 @@ function loadRawConfig(): { raw: RawOrchestratorConfig; configPath?: string } {
       isolation: process.env.ORCHESTRATOR_ISOLATION,
       taskTimeoutMs: process.env.ORCHESTRATOR_TASK_TIMEOUT_MS,
       reviewTimeoutMs: process.env.ORCHESTRATOR_REVIEW_TIMEOUT_MS,
+      integrationCheck: process.env.ORCHESTRATOR_INTEGRATION_CHECK,
+      integrationTimeoutMs: process.env.ORCHESTRATOR_INTEGRATION_TIMEOUT_MS,
+      evidenceAgent: process.env.ORCHESTRATOR_EVIDENCE_AGENT,
       outputCapBytes: process.env.ORCHESTRATOR_OUTPUT_CAP_BYTES,
       criticModel: process.env.ORCHESTRATOR_CRITIC_MODEL,
       defaultAgent: process.env.ORCHESTRATOR_DEFAULT_AGENT,
@@ -164,9 +185,24 @@ export function loadConfig(): OrchestratorConfig {
     DEFAULT_REVIEW_TIMEOUT_MS,
     "reviewTimeoutMs",
   );
-  if (taskTimeoutMs < 1000 || reviewTimeoutMs < 1000) {
+  const integrationTimeoutMs = parseNumber(
+    raw.integrationTimeoutMs,
+    DEFAULT_INTEGRATION_TIMEOUT_MS,
+    "integrationTimeoutMs",
+  );
+  if (taskTimeoutMs < 1000 || reviewTimeoutMs < 1000 || integrationTimeoutMs < 1000) {
     throw new Error("timeouts must be at least 1000 ms");
   }
+
+  // "none"/"off" (or empty) disables the pre-review evidence step; unset
+  // keeps the default evidence agent.
+  const rawEvidence = raw.evidenceAgent?.trim();
+  const evidenceAgent =
+    rawEvidence === undefined
+      ? DEFAULT_EVIDENCE_AGENT
+      : ["", "none", "off"].includes(rawEvidence.toLowerCase())
+        ? undefined
+        : rawEvidence;
 
   const outputCapBytes = parseNumber(
     raw.outputCapBytes,
@@ -185,6 +221,9 @@ export function loadConfig(): OrchestratorConfig {
     isolation,
     taskTimeoutMs: Math.round(taskTimeoutMs),
     reviewTimeoutMs: Math.round(reviewTimeoutMs),
+    integrationCheck: raw.integrationCheck?.trim() || undefined,
+    integrationTimeoutMs: Math.round(integrationTimeoutMs),
+    evidenceAgent,
     outputCapBytes: Math.round(outputCapBytes),
     criticModel: raw.criticModel?.trim() || undefined,
     defaultAgent: raw.defaultAgent?.trim() || "implementer",

@@ -22,27 +22,39 @@ recovery, with diagrams — see
 
 | Kind        | Name               | What it does                                                         |
 | ----------- | ------------------ | --------------------------------------------------------------------- |
-| **Tool**    | `orchestrate_step` | One dispatch wave: run the ready set through fleet, critic-review completions, apply retries with feedback, report. |
+| **Tool**    | `orchestrate_step` | One dispatch wave: run the ready set through fleet, gather independent verification evidence, critic-review completions, apply retries with feedback, report. |
+| **Tool**    | `orchestrate_verify` | The integration gate: run the configured `integrationCheck` command in the working tree and report PASSED/FAILED with the output. |
 | **Command** | `/orchestrate`     | `<goal>` runs a full orchestration; `status` shows run state; `stop` halts after the current wave. |
-| **Skill**   | `orchestration`    | The run protocol: goal loop, waves, checkpoints, plan repair, worktree merges. |
+| **Skill**   | `orchestration`    | The run protocol: goal loop, plan review gate, waves, integration gate, checkpoints, plan repair, worktree merges. |
 
 ## How a run works
 
 1. **Goal loop** — the model opens a lykkja loop with goal-level criteria.
    The orchestration run *is* that loop; every dispatch wave is one PDCA pass.
 2. **Plan** — the model decomposes the goal via `plan_create`
-   (`plan-decomposition` skill), assigning each task an agent and criteria.
-3. **Wave** — `orchestrate_step` computes `nextActions(plan, policy)`
+   (`plan-decomposition` skill), assigning each task an agent, criteria, and
+   a `covers` tag naming the goal-level criteria the task helps satisfy.
+3. **Plan review gate** — before the first wave, the model has `critic_advise`
+   (when installed) critique the decomposition against the goal criteria and
+   repairs the plan before anything is dispatched.
+4. **Wave** — `orchestrate_step` computes `nextActions(plan, policy)`
    (a pure, deterministic scheduler in `scheduler.ts`) and runs the ready set
    through the fleet runner in parallel.
-4. **Review** — each completed task is scored by the critic agent against
-   *its own* criteria; failures are re-dispatched with the critic's
-   weaknesses appended to the brief, up to `maxAttempts`. The critic wins by
-   construction; sub-agent self-reports are informational only.
-5. **Checkpoint** — after each wave the model calls `lykkja_checkpoint` with
-   critic-derived goal scores. `ITERATING` → next wave (or plan repair via
-   `plan_update`); `FINAL` → done; `STOPPED` → honest failure report at the
-   `maxIterations` runaway guard.
+5. **Review** — the evidence agent (default `auditor`) independently re-runs
+   each completed task's verification commands, then the critic scores the
+   task against *its own* criteria with that executed evidence in the review
+   subject; failures are re-dispatched with the critic's weaknesses appended
+   to the brief, up to `maxAttempts`. The critic wins by construction;
+   sub-agent self-reports are informational only.
+6. **Integration gate** — when tasks landed and an `integrationCheck` command
+   is configured, the model merges the passed branches and calls
+   `orchestrate_verify`; a failed gate is CHECK evidence and a plan-repair
+   trigger, exactly like a failed review.
+7. **Checkpoint** — after each wave the model calls `lykkja_checkpoint` with
+   critic-derived goal scores (plus the integration-gate verdict and the
+   per-goal-criterion coverage from the wave report). `ITERATING` → next wave
+   (or plan repair via `plan_update`); `FINAL` → done; `STOPPED` → honest
+   failure report at the `maxIterations` runaway guard.
 
 Forward motion is self-prompting: every `orchestrate_step` result ends with
 an explicit AUTOMATED NEXT STEP, so a run needs no user turns between waves.
@@ -107,6 +119,9 @@ orchestrator works with zero configuration. To change defaults, create
 | `isolation`       | `"none"`        | `"worktree"` gives each task its own branch/worktree. |
 | `taskTimeoutMs`   | `600000`        | Per implementation task.                        |
 | `reviewTimeoutMs` | `300000`        | Per critic review.                              |
+| `integrationCheck`| *(none)*        | Shell command run by `orchestrate_verify` as the integration gate (e.g. `"npm test"`). Unset disables the gate. |
+| `integrationTimeoutMs` | `300000`   | Per integration-gate run.                       |
+| `evidenceAgent`   | `"auditor"`     | Agent that re-runs each task's verification commands before the critic review; `"none"` disables the evidence step. |
 | `outputCapBytes`  | `51200`         | Model-visible output cap per sub-agent task.    |
 | `criticModel`     | *(none)*        | Model override for reviews.                     |
 | `defaultAgent`    | `"implementer"` | Agent for plan tasks that name none.            |
@@ -119,6 +134,8 @@ Environment overrides (used when no JSON config exists):
 `ORCHESTRATOR_CONFIG_PATH`, `ORCHESTRATOR_MAX_CONCURRENT`,
 `ORCHESTRATOR_MAX_ATTEMPTS`, `ORCHESTRATOR_ISOLATION`,
 `ORCHESTRATOR_TASK_TIMEOUT_MS`, `ORCHESTRATOR_REVIEW_TIMEOUT_MS`,
+`ORCHESTRATOR_INTEGRATION_CHECK`, `ORCHESTRATOR_INTEGRATION_TIMEOUT_MS`,
+`ORCHESTRATOR_EVIDENCE_AGENT`,
 `ORCHESTRATOR_OUTPUT_CAP_BYTES`, `ORCHESTRATOR_CRITIC_MODEL`,
 `ORCHESTRATOR_DEFAULT_AGENT`, `ORCHESTRATOR_PI_BINARY`,
 `ORCHESTRATOR_TMUX`, `ORCHESTRATOR_TMUX_SESSION`,

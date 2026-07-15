@@ -881,3 +881,64 @@ describe("end-to-end: legacy plain-text task → structured artifact handoff to 
     assert.match(handoff, /not merged into this workspace: fleet\/two/);
   });
 });
+
+describe("config: integration gate and evidence agent", () => {
+  const withConfig = async (raw: object) => {
+    const { mkdtempSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { loadConfig } = await import("./config.ts");
+    const dir = mkdtempSync(join(tmpdir(), "orch-config-"));
+    const configPath = join(dir, "orchestrator.json");
+    writeFileSync(configPath, JSON.stringify(raw));
+    const prev = process.env.ORCHESTRATOR_CONFIG_PATH;
+    process.env.ORCHESTRATOR_CONFIG_PATH = configPath;
+    try {
+      return loadConfig();
+    } finally {
+      if (prev === undefined) delete process.env.ORCHESTRATOR_CONFIG_PATH;
+      else process.env.ORCHESTRATOR_CONFIG_PATH = prev;
+    }
+  };
+
+  it("defaults to no integration check and the auditor evidence agent", async () => {
+    const { DEFAULT_EVIDENCE_AGENT } = await import("./config.ts");
+    const config = await withConfig({});
+    assert.strictEqual(config.integrationCheck, undefined);
+    assert.strictEqual(config.integrationTimeoutMs, 5 * 60 * 1000);
+    assert.strictEqual(config.evidenceAgent, DEFAULT_EVIDENCE_AGENT);
+  });
+
+  it("parses the integration check command and timeout", async () => {
+    const config = await withConfig({
+      integrationCheck: "  npm test  ",
+      integrationTimeoutMs: 120000,
+    });
+    assert.strictEqual(config.integrationCheck, "npm test");
+    assert.strictEqual(config.integrationTimeoutMs, 120000);
+  });
+
+  it("treats a blank integration check as unset", async () => {
+    const config = await withConfig({ integrationCheck: "   " });
+    assert.strictEqual(config.integrationCheck, undefined);
+  });
+
+  it('disables the evidence step for "none", "off", and blank values', async () => {
+    for (const value of ["none", "OFF", "  "]) {
+      const config = await withConfig({ evidenceAgent: value });
+      assert.strictEqual(config.evidenceAgent, undefined, `value: "${value}"`);
+    }
+  });
+
+  it("accepts a custom evidence agent name", async () => {
+    const config = await withConfig({ evidenceAgent: "verifier" });
+    assert.strictEqual(config.evidenceAgent, "verifier");
+  });
+
+  it("rejects sub-second integration timeouts", async () => {
+    await assert.rejects(
+      () => withConfig({ integrationTimeoutMs: 500 }),
+      /timeouts must be at least 1000 ms/,
+    );
+  });
+});

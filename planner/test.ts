@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import * as assert from "node:assert/strict";
 import {
   addTasks,
+  coverageByCriterion,
   createPlan,
   getTask,
   readySet,
@@ -9,6 +10,7 @@ import {
   statusLine,
   summarizePlan,
   updateTask,
+  type Plan,
   type PlanTaskInput,
 } from "./plan.ts";
 import type { ArtifactRef } from "@pi-kit/agent-types";
@@ -401,5 +403,76 @@ describe("setTaskStatus transition soft-check", () => {
     } finally {
       console.warn = origWarn;
     }
+  });
+});
+
+describe("goal-criterion coverage (covers)", () => {
+  it("normalizes covers on create and drops empty entries", () => {
+    const plan = createPlan("g", [
+      task("t1", { covers: [" e2e passes ", "", "docs updated"] }),
+      task("t2"),
+    ]);
+    assert.deepStrictEqual(getTask(plan, "t1")!.covers, [
+      "e2e passes",
+      "docs updated",
+    ]);
+    assert.strictEqual(getTask(plan, "t2")!.covers, undefined);
+  });
+
+  it("edits covers through updateTask and clears with an empty list", () => {
+    let plan = createPlan("g", [task("t1")]);
+    plan = updateTask(plan, "t1", { covers: ["e2e passes"] });
+    assert.deepStrictEqual(getTask(plan, "t1")!.covers, ["e2e passes"]);
+    plan = updateTask(plan, "t1", { covers: [] });
+    assert.strictEqual(getTask(plan, "t1")!.covers, undefined);
+  });
+
+  it("groups tasks per criterion with done and failed subsets", () => {
+    let plan = createPlan("g", [
+      task("t1", { covers: ["e2e passes"] }),
+      task("t2", { covers: ["e2e passes", "docs updated"] }),
+      task("t3", { covers: ["docs updated"] }),
+    ]);
+    plan = setTaskStatus(plan, "t1", "ready");
+    plan = setTaskStatus(plan, "t1", "running");
+    plan = setTaskStatus(plan, "t1", "review");
+    plan = setTaskStatus(plan, "t1", "done");
+    plan = setTaskStatus(plan, "t3", "ready");
+    plan = setTaskStatus(plan, "t3", "running");
+    plan = setTaskStatus(plan, "t3", "failed");
+
+    const coverage = coverageByCriterion(plan);
+    assert.deepStrictEqual(coverage, [
+      { criterion: "e2e passes", tasks: ["t1", "t2"], done: ["t1"], failed: [] },
+      {
+        criterion: "docs updated",
+        tasks: ["t2", "t3"],
+        done: [],
+        failed: ["t3"],
+      },
+    ]);
+  });
+
+  it("matches criterion names case-insensitively, keeping the first spelling", () => {
+    const plan = createPlan("g", [
+      task("t1", { covers: ["E2E Passes"] }),
+      task("t2", { covers: ["e2e passes"] }),
+    ]);
+    const coverage = coverageByCriterion(plan);
+    assert.strictEqual(coverage.length, 1);
+    assert.strictEqual(coverage[0].criterion, "E2E Passes");
+    assert.deepStrictEqual(coverage[0].tasks, ["t1", "t2"]);
+  });
+
+  it("tolerates plans persisted before covers existed", () => {
+    const plan = createPlan("g", [task("t1")]);
+    const legacy: Plan = {
+      ...plan,
+      tasks: plan.tasks.map((t) => {
+        const { covers: _covers, ...rest } = t;
+        return rest;
+      }),
+    };
+    assert.deepStrictEqual(coverageByCriterion(legacy), []);
   });
 });

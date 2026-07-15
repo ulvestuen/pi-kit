@@ -28,6 +28,7 @@ hard cap.**
 - [The scheduler state machine](#the-scheduler-state-machine)
 - [Plan-task lifecycle and the retry loop](#plan-task-lifecycle-and-the-retry-loop)
 - [The critic gate](#the-critic-gate)
+- [The integration gate: `orchestrate_verify`](#the-integration-gate-orchestrate_verify)
 - [Self-prompting: why the run never stalls](#self-prompting-why-the-run-never-stalls)
 - [Worktree mode: parallel writers and merges](#worktree-mode-parallel-writers-and-merges)
 - [Terminal states, failures, and recovery](#terminal-states-failures-and-recovery)
@@ -301,6 +302,15 @@ Every completed task is scored by an independent, fresh-context critic
 against *that task's own* acceptance criteria — the same lykkja-shaped
 criteria the planner attached at decomposition time.
 
+Before the critic is dispatched, an execution-capable **evidence agent**
+(config `evidenceAgent`, default `auditor`) independently re-runs the
+verification commands the task's criteria imply and the implementer's report
+claims — inside the task's worktree when isolated — and the pasted
+command/output evidence is embedded in the review subject. The critic
+therefore scores from observed execution, not from the implementer's claims.
+If the evidence run fails or the agent definition is missing, the review
+proceeds with an explicit note instead of blocking.
+
 ```mermaid
 flowchart TB
     task["task in 'review'"] --> subject["review subject:<br/>task id/title + implementer's report<br/>+ where the work lives (branch/tree)"]
@@ -327,6 +337,31 @@ Properties by construction:
 - **The rubric is the task's contract.** Criteria written at planning time
   are exactly what gets scored — one shared vocabulary
   (lykkja's `Criterion`/`CriterionScore`) from plan to review to checkpoint.
+
+## The integration gate: `orchestrate_verify`
+
+A clean merge is not integration testing. When an `integrationCheck` command
+is configured (e.g. `"npm test"`), the wave report's AUTOMATED NEXT STEP
+inserts an integration gate whenever tasks landed that wave: merge the passed
+branches, then call `orchestrate_verify`, which runs the command in the
+working tree (`sh -c`, `integrationTimeoutMs` cap) and reports PASSED or
+FAILED with the output tail. The verdict is integration-level CHECK evidence
+for the checkpoint; a failure instructs the model to repair through the plan
+— re-queue the merged tasks whose changes broke the gate, or append a fix
+task — exactly like a failed review, never silently. The `complete` terminal
+routes the goal-level end-to-end verification through the same gate.
+
+Two more left-leg safeguards run before any wave is dispatched:
+
+- **Plan review gate** — when `critic_advise` is installed, the run protocol
+  has the critic critique the decomposition itself (DAG, file scopes,
+  criteria) against the goal criteria, and the model repairs the plan before
+  dispatching. Design-level defects are caught at the design level.
+- **Goal-criterion coverage** — each task carries a `covers` tag naming the
+  goal-level criteria it helps satisfy; every wave report prints
+  per-criterion coverage (`coverageByCriterion`), so checkpoint scoring is
+  traceable and an uncovered goal criterion is visible as a decomposition
+  gap.
 
 ## Self-prompting: why the run never stalls
 

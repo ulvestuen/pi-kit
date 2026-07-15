@@ -70,8 +70,8 @@ flowchart TB
     impl["Software Implementation<br/><em>a spawned sub-agent: fleet runTasks →<br/>spawn backend (tmux / exe.dev / microsandbox),<br/>own context window, role prompt, tool limits,<br/>optional worktree isolation</em>"]
 
     subgraph right["Right leg — verify (check against the contracts)"]
-        ut["Unit Testing<br/><em>critic gate: fresh-context review of the task<br/>against its own acceptance criteria</em>"]
-        it["Integration Testing<br/><em>serial merges of reviewed-passing branches,<br/>in DAG order; conflicts = review failures</em>"]
+        ut["Unit Testing<br/><em>evidence agent re-runs the task's checks,<br/>then the critic gate scores the task against<br/>its own criteria from that executed evidence</em>"]
+        it["Integration Testing<br/><em>serial merges of reviewed-passing branches<br/>in DAG order, then the orchestrate_verify<br/>integration gate runs the configured check</em>"]
         st["System Testing<br/><em>goal-level end-to-end verification<br/>after the plan completes</em>"]
         at["Acceptance Testing<br/><em>lykkja_checkpoint: every goal criterion<br/>scored from critic evidence → verdict</em>"]
     end
@@ -90,9 +90,9 @@ The pairing of levels is exact, not decorative:
 | V level (down) | Written by | V level (up) | Checked by |
 |---|---|---|---|
 | Stakeholder Requirements — the goal and its strict, measurable bar | `lykkja_start` (goal-level criteria) | Acceptance Testing | `lykkja_checkpoint` — every criterion scored honestly from critic verdicts; only `FINAL` ends the run |
-| System Requirements — what the decomposition must add up to | `plan_create` (the plan as data) | System Testing | goal-level end-to-end verification, required before the final checkpoint |
-| High-Level Design — the task DAG and its dependency/merge order | planner DAG (`dependsOn`, per-task file scopes) | Integration Testing | serial DAG-order merges of passed branches; a conflict is a recorded review failure |
-| Detailed Design — one task's brief and acceptance criteria | per-task criteria attached at decomposition time | Unit Testing | the critic gate: independent fresh-context review against *that task's own* criteria |
+| System Requirements — what the decomposition must add up to | `plan_create` (the plan as data), with per-task `covers` tags tracing goal criteria into the DAG | System Testing | goal-level end-to-end verification, required before the final checkpoint; per-criterion coverage read off the plan |
+| High-Level Design — the task DAG and its dependency/merge order | planner DAG (`dependsOn`, per-task file scopes), verified up front by the `critic_advise` plan review gate | Integration Testing | serial DAG-order merges of passed branches, then the `orchestrate_verify` integration gate runs the configured check on the merged tree; a conflict or a failed gate is a recorded review failure |
+| Detailed Design — one task's brief and acceptance criteria | per-task criteria attached at decomposition time | Unit Testing | the evidence agent independently re-runs the task's verification commands, then the critic gate reviews against *that task's own* criteria from the executed evidence |
 | Software Implementation | fleet + spawn sub-agent | — the vertex — | the sub-agent's self-report is informational only; it can never pass its own work |
 
 One shared vocabulary holds the two legs together: lykkja's
@@ -205,8 +205,10 @@ iteration.
 | Scope slicing | planner | `plan_create`, `plan-decomposition` skill |
 | Micro-V left leg (design → brief) | orchestrator + planner | `orchestrate_step` brief building, per-task criteria |
 | Vertex (implementation) | fleet + spawn | `runTasks`, spawn backends, worktree isolation |
-| Unit Testing (per-slice verification) | critic | the critic gate, `buildCriticPrompt`/`parseCriticOutput` |
-| Integration Testing | orchestrator | serial DAG-order merges of passed branches |
+| Unit Testing (per-slice verification) | critic + fleet auditor | the evidence agent re-runs the checks, then the critic gate scores (`buildCriticPrompt`/`parseCriticOutput`) |
+| Integration Testing | orchestrator | serial DAG-order merges of passed branches + the `orchestrate_verify` gate (`integrationCheck`) |
+| Design review (left-leg verification) | critic | the `critic_advise` plan review gate before the first wave |
+| Goal-criterion traceability | planner | per-task `covers` tags, `coverageByCriterion`, coverage in every wave report |
 | System + Acceptance Testing | lykkja | end-to-end verification + `lykkja_checkpoint` verdict |
 | Time axis (waves) | orchestrator + lykkja | one PDCA pass per `orchestrate_step`, verdict-driven |
 | Granularity axis (parallel stack) | fleet | concurrency pool, `maxConcurrent`, isolation |

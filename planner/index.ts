@@ -7,6 +7,7 @@ import { Type } from "@mariozechner/pi-ai";
 import { getConfigPath, loadConfig, type PlannerConfig } from "./config.ts";
 import {
   addTasks,
+  coverageByCriterion,
   createPlan,
   getTask,
   setTaskStatus,
@@ -56,6 +57,17 @@ function renderDashboard(plan: Plan): string {
       `    [${task.status.padEnd(7)}] ${task.id}: ${task.title}${deps}${attempts}${arts}`,
     );
   }
+  const coverage = coverageByCriterion(plan);
+  if (coverage.length > 0) {
+    lines.push("  Goal-criterion coverage:");
+    for (const entry of coverage) {
+      const failed =
+        entry.failed.length > 0 ? `, ${entry.failed.length} failed` : "";
+      lines.push(
+        `    ${entry.criterion}: ${entry.done.length}/${entry.tasks.length} done${failed} (${entry.tasks.join(", ")})`,
+      );
+    }
+  }
   return lines.join("\n");
 }
 
@@ -90,6 +102,12 @@ const TASK_INPUT_SCHEMA = Type.Object({
     description: "Strict, measurable acceptance criteria for this task.",
     minItems: 1,
   }),
+  covers: Type.Optional(
+    Type.Array(Type.String(), {
+      description:
+        "Goal-level criterion names this task helps satisfy — the exact names from the lykkja goal loop, so goal-criterion coverage can be traced through the plan.",
+    }),
+  ),
 });
 
 export default function (pi: ExtensionAPI) {
@@ -203,6 +221,12 @@ export default function (pi: ExtensionAPI) {
               description: Type.Optional(Type.String()),
               agent: Type.Optional(Type.String()),
               criteria: Type.Optional(Type.Array(CRITERION_SCHEMA)),
+              covers: Type.Optional(
+                Type.Array(Type.String(), {
+                  description:
+                    "Goal-level criterion names this task helps satisfy.",
+                }),
+              ),
               artifacts: Type.Optional(
                 Type.Array(
                   Type.Object({
@@ -257,6 +281,7 @@ export default function (pi: ExtensionAPI) {
               description: edit.description,
               agent: edit.agent,
               criteria: edit.criteria,
+              covers: edit.covers,
               artifacts: edit.artifacts,
             },
             options,
