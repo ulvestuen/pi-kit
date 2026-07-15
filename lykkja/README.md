@@ -265,3 +265,9 @@ so it is fully covered in isolation.
 - **A safety limit prevents infinite loops.** If the bar genuinely cannot be met,
   the loop stops at `maxIterations` and reports what still fails, instead of
   spinning forever or faking success.
+- **The loop is the wave engine of the Micro-V'ave execution model.** In a
+  multi-agent orchestration run, each PDCA pass drives one wave of micro
+  V-model cycles: criteria opened with `lykkja_start` are the acceptance
+  contract at the top of every V, and the `lykkja_checkpoint` verdict is what
+  advances (or ends) the wave sequence. See
+  [`docs/micro-vave-execution-model.md`](../docs/micro-vave-execution-model.md).

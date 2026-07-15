@@ -27,6 +27,7 @@ This repository contains pi-related integrations and extensions.
 ## Architecture documents
 
 - [`docs/agent-native-architecture.md`](./docs/agent-native-architecture.md) – ADR: agent-native orchestration architecture (SHOT — Structured Handoff on existing transport)
+- [`docs/micro-vave-execution-model.md`](./docs/micro-vave-execution-model.md) – how task orchestration, sub-agent spawning, and the PDCA loop implement the Micro-V'ave execution model: scope slices descending micro V-models in parallel stacks, waves along the time axis, and verified product chunks out
 - [`docs/orchestrator-architecture.md`](./docs/orchestrator-architecture.md) – how an orchestration run works end to end: the goal loop, dispatch waves, the scheduler state machine, the critic gate, retries, merges, and failure recovery — with workflow diagrams
 - [`docs/fleet-architecture.md`](./docs/fleet-architecture.md) – how the sub-agent runtime works: agent discovery, the concurrency pool, the child-process contract, worktree isolation, timeouts and kill semantics, and spawn backend execution — with workflow diagrams
 - [`docs/agent-native-final-acceptance.md`](./docs/agent-native-final-acceptance.md) – final branch acceptance: ADR traceability, test evidence, public API, migration, and scoped file inventory

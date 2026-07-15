@@ -8,7 +8,9 @@ merges, and failures behave. For installation and configuration, see the
 [orchestrator README](../orchestrator/README.md); for the design rationale,
 see [multi-agent-orchestration.md](./multi-agent-orchestration.md); for the
 sub-agent runtime underneath, see the
-[fleet architecture](./fleet-architecture.md).
+[fleet architecture](./fleet-architecture.md); for how waves, sub-agents, and
+the PDCA loop realize the Micro-V'ave execution model, see
+[micro-vave-execution-model.md](./micro-vave-execution-model.md).
 
 The one-sentence version: **`/orchestrate <goal>` plans the goal as a task
 DAG, dispatches waves of concurrent sub-agents, gates every completed task
