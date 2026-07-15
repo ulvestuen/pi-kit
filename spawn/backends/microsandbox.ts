@@ -228,7 +228,7 @@ export function createMicrosandboxBackend(
       return {
         workspaceMount: config.msbMountCwd,
         cursorOutput: false,
-        confirmedKill: false,
+        confirmedKill: true,
         durableLogs: true,
         networkAccess: true,
         hardwareIsolation: true,

@@ -101,7 +101,9 @@ interface BackendCapabilities {        // on SpawnBackend
 **Evolution rules:** Every interface has `version`. New fields append. Old fields
 never removed; deprecated fields marked with `@deprecated` + removal version.
 `TaskResult` gains optional `runId`, `outputArtifacts`, `toolCalls`, `usage`.
-Old consumers see these as `undefined`.
+Old consumers see these as `undefined`. The current fleet runner only populates
+`runId`; the other three fields are reserved until structured child-result
+parsing is implemented.
 
 ### Existing API additions
 
@@ -162,9 +164,14 @@ function buildHandoffSection(plan, task): string {
 HEAD, not from prerequisite branch — is fixed by:
 1. After a passing review in worktree mode, orchestrator commits implementer
    changes before marking `done`.
-2. `buildTaskBrief` includes `parentBranch: <prerequisite branch>`.
+2. `buildTaskBrief` identifies the selected prerequisite branch and explicitly
+   warns that other prerequisite branches are not merged into the worktree.
 3. `TaskSpec.parentBranch` → fleet runner builds
    `git worktree add -b <branch> <path> <parent-branch>`.
+
+Worktrees have one fork point. When multiple done dependencies expose branch
+artifacts, the first branch in `dependsOn` order is selected; the remaining
+branches are references that must be merged separately.
 
 ## 6. Backend-neutral completion
 
@@ -174,9 +181,9 @@ Default declarations (returned by new `capabilities()` method):
 
 | Backend | workspaceMount | cursorOutput | confirmedKill | durableLogs | network | isolation |
 |---|---|---|---|---|---|---|
-| tmux | true (host path) | false | false | true | true | false |
-| exedev | false | false | false | true (VM) | true | false |
-| microsandbox | true (r/w) | false | false | true | configurable | true |
+| tmux | true (host path) | false | true | true | true | false |
+| exedev | false | false | true | true (VM) | true | false |
+| microsandbox | true (r/w) | false | true | true | configurable | true |
 
 ### Kill confirmation protocol
 
@@ -186,9 +193,9 @@ Caller stamps `killed` only when `stopped`; skips stamp when `alreadyComplete`.
 
 ### Hard promise deadline
 
-Spawn adapter races the poll loop against a `Promise.race` timeout. On timeout
-fire, waits up to 5 s for kill confirmation, then stamps `killed` with a
-cancellation warning in stderr.
+The spawn adapter checks its hard deadline in the poll loop. On expiry it calls
+the backend kill protocol and stamps the registry from the returned
+`KillResult`; there is no separate post-kill wait loop.
 
 ## 7. Context boundaries
 
@@ -218,9 +225,10 @@ Cross-session recovery remains manual re-dispatch.
 
 ## 9. Cancellation / timeouts
 
-- **Hard deadline:** Adapter uses `Promise.race` with per-task timeout.
-- **Kill confirmation:** After deadline, waits up to 5 s for backend
-  `KillResult.stopped`/`alreadyComplete`.
+- **Hard deadline:** Adapter checks elapsed time on each poll and invokes the
+  backend kill protocol when the deadline expires.
+- **Kill confirmation:** All built-in backends return `stopped: true` only
+  after confirming the process/window is gone.
 - **Public `spawn_agent`:** Respects `AbortSignal` — aborts before launch without
   launching; during launch, cancels the wait for backend availability.
 - **Fleet-level:** Already correct — per-task timeout starts before worktree
@@ -232,10 +240,10 @@ Cross-session recovery remains manual re-dispatch.
 | Gap | Fix (phase 1-2) |
 |---|---|
 | `jobs.json` accepts manipulated records | On load: schema-validate every record, reject invalid ones, write `recovered-N.json`. |
-| Secrets persisted in `jobs.json` task field | Strip task content on first terminal refresh (`"[redacted]"`). Optional `secretsFilter` regex. |
+| Secrets persisted in `jobs.json` task field | Not yet filtered. Do not put secrets in task briefs; filtering is deferred until it can be enforced at every registry write. |
 | Microsandbox mounts host cwd r/w by default | New `sandboxReadonlyWorkspace` config (default false — backward compat; `true` = read-only). |
 | API keys exported into tmux scripts | Already `tmuxForwardEnv` controlled; add `envPassthrough` documentation and audit. |
-| Registry has no integrity check | Optional HMAC/sha256sum; verify on load, reject tampered. |
+| Registry has no integrity check | Integrity protection is deferred; no inactive HMAC configuration is advertised. |
 
 ## 11. Compatibility / migration
 
@@ -282,8 +290,8 @@ replaces the active registry.
 
 | File | Change |
 |---|---|
-| `fleet/runner.ts` | Add `RunId`, `inputArtifacts`, `parentBranch` to `TaskSpec`. Add `runId`, `outputArtifacts`, `toolCalls`, `usage` to `TaskResult`. `buildWorktreeArgs` accepts optional `parentBranch`. |
-| `fleet/index.ts` | Tool schema gains optional `runId`, `inputArtifacts`, `parentRunIds`. |
+| `fleet/runner.ts` | Add `RunId`, `inputArtifacts`, `parentRunIds`, `parentBranch` to `TaskSpec`; structured prerequisite metadata is appended to the child brief. Add `runId` plus reserved `outputArtifacts`, `toolCalls`, `usage` fields to `TaskResult`. `buildWorktreeArgs` accepts optional `parentBranch`. |
+| `fleet/index.ts` | Tool schema gains optional `runId`, `inputArtifacts`, `parentRunIds` and passes each through to the runner. |
 | `fleet/test.ts` | Tests for `RunId` propagation, `parentBranch` worktree, backward-compatible missing fields. |
 
 ### Changed files — spawn
@@ -291,12 +299,12 @@ replaces the active registry.
 | File | Change |
 |---|---|
 | `spawn/jobs.ts` | `capabilities()` on `SpawnBackend`. `kill()` returns `KillResult`. Registry v2 format with schema validation. |
-| `spawn/backends/tmux.ts` | `capabilities()` (`workspace=true,cursor=false,kill=false,logs=true,net=true,hw=false`). `kill()` checks pane_dead after kill-window. |
+| `spawn/backends/tmux.ts` | `capabilities()` (`workspace=true,cursor=false,kill=true,logs=true,net=true,hw=false`). `kill()` confirms the window is stopped. |
 | `spawn/backends/exedev.ts` | `capabilities()`. `kill()` adds `kill -0` probe. |
 | `spawn/backends/microsandbox.ts` | `capabilities()`. `kill()` adds PID check. `sandboxReadonlyWorkspace` support. |
-| `spawn/runner-adapter.ts` | Hard promise deadline. `capabilities().confirmedKill` selects kill-wait behavior. Propagates `RunId`. |
+| `spawn/runner-adapter.ts` | Hard poll-loop deadline and explicit three-branch `KillResult` handling. Propagates `RunId`. |
 | `spawn/index.ts` | `spawn_agent` respects `AbortSignal`. Saves v2 registry format. |
-| `spawn/config.ts` | Add `sandboxReadonlyWorkspace`, `secretsFilter`, `registryHmac` config. |
+| `spawn/config.ts` | Add `sandboxReadonlyWorkspace`. Secret filtering and registry integrity settings remain unadvertised until implemented. |
 | `spawn/test.ts` | Test `capabilities()`, `KillResult` shapes, v2 registry load/migrate. |
 
 ### Changed files — planner
@@ -311,7 +319,7 @@ replaces the active registry.
 
 | File | Change |
 |---|---|
-| `orchestrator/index.ts` | `buildTaskBrief` injects `buildHandoffSection`. `applyReview` calls `recordPassingArtifacts`. Review subject includes `artifacts`. Wave events carry `RunId`. Details include `runLog`. |
+| `orchestrator/index.ts` | `buildTaskBrief` injects `buildHandoffSection`. `applyReview` calls `recordPassingArtifacts`. Review subject includes `artifacts`. Wave/task/review events are appended when they occur and carry `RunId`; details include the truthful `runLog`. |
 | `orchestrator/index.ts` | `recordPassingArtifacts` creates `ArtifactRef[]` from result and commits in worktree mode. |
 | `orchestrator/test.ts` | Test artifact propagation, parent-branch worktree, `runLog` enrichment. |
 

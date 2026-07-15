@@ -62,8 +62,8 @@ the accepted ADR (`docs/agent-native-architecture.md`). It verifies:
 
 ### Workspace dependency resolution
 
-- `fleet/package.json`: `"@pi-kit/agent-types": "workspace:*"` ✓
-- `spawn/package.json`: `"@pi-kit/agent-types": "workspace:*"` ✓
+- `fleet/package.json`: `"@pi-kit/agent-types": "*"` ✓
+- `spawn/package.json`: `"@pi-kit/agent-types": "*"` ✓
 - `node_modules/@pi-kit/agent-types` → symlink `../../agent-types` ✓ (verified via `ls -la` and `readlink`)
 
 ## 3. Evidence: all tests and TypeScript checks pass together
@@ -232,9 +232,9 @@ Verification against `docs/agent-native-architecture.md` §13 "File / test chang
 | `spawn/backends/tmux.ts` — capabilities(), kill() checks pane_dead | `spawn/backends/tmux.ts` — capabilities() returns correct values, kill() checks pane status | ✓ |
 | `spawn/backends/exedev.ts` — capabilities(), kill() with kill -0 probe | `spawn/backends/exedev.ts` — capabilities() returns correct values, kill() uses kill -0 | ✓ |
 | `spawn/backends/microsandbox.ts` — capabilities(), kill() with PID check, sandboxReadonlyWorkspace | `spawn/backends/microsandbox.ts` — capabilities() returns correct values, kill() checks host pid | ✓ |
-| `spawn/runner-adapter.ts` — hard promise deadline, capabilities().confirmedKill selection, KillResult propagation | `spawn/runner-adapter.ts` — deadlineMs, killAndStamp with KillResult branches, cleanupSpawnToolingJobs | ✓ |
+| `spawn/runner-adapter.ts` — hard deadline and KillResult propagation | `spawn/runner-adapter.ts` — deadlineMs, killAndStamp with KillResult branches, cleanupSpawnToolingJobs | ✓ |
 | `spawn/index.ts` — spawn_agent respects AbortSignal, saves v2 registry | `spawn/index.ts` — signal.aborted check before launch, saveJobs from jobs.ts (v2) | ✓ |
-| `spawn/config.ts` — sandboxReadonlyWorkspace, secretsFilter, registryHmac | `spawn/config.ts` — all three config fields present in SpawnConfig interface and loadConfig | ✓ |
+| `spawn/config.ts` — sandboxReadonlyWorkspace | `spawn/config.ts` — read-only mount field is implemented; inactive secret-filter/HMAC settings are not advertised | ✓ |
 | `spawn/test.ts` — capabilities(), KillResult shapes, v2 registry load/migrate | `spawn/test.ts` — 132 tests covering all required suites | ✓ |
 
 **ADR §13 compliance: 16/16 requirements met for scoped packages.**

@@ -34,13 +34,6 @@ const DEFAULT_OUTPUT_MAX_BYTES = Number.POSITIVE_INFINITY;
 const ERROR_TAIL_BYTES = 16 * 1024;
 const NO_OUTPUT = "(no output yet)";
 
-/**
- * After a kill command is sent to a backend with confirmedKill=false,
- * the adapter waits this long for the job to reach a terminal state
- * (via refresh from done markers) before stamping "killed".
- */
-export const KILL_CONFIRMATION_WAIT_MS = 5_000;
-
 export interface SpawnToolingSpawnOptions {
   /** Spawn extension configuration shared with the selected backend. */
   config: SpawnConfig;

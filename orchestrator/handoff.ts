@@ -20,7 +20,11 @@ import {
  * Injected into the downstream task's brief so structured artifact handoff
  * happens through the brief text — no shared conversation context needed.
  */
-export function buildHandoffSection(plan: Plan, task: PlanTask): string {
+export function buildHandoffSection(
+  plan: Plan,
+  task: PlanTask,
+  parentBranch?: string,
+): string {
   const deps = task.dependsOn
     .map((id) => getTask(plan, id))
     .filter((t): t is PlanTask =>
@@ -35,13 +39,32 @@ export function buildHandoffSection(plan: Plan, task: PlanTask): string {
         `    - ${art.type}: ${art.description} at ${art.location ?? "(in-tree)"}`,
       );
   }
+  if (parentBranch) {
+    lines.push(
+      "",
+      `Workspace branch handoff: this worktree is forked from ${parentBranch}.`,
+    );
+    const otherBranches = deps
+      .flatMap((dep) => dep.artifacts)
+      .filter((artifact) => artifact.type === "branch")
+      .map((artifact) => artifact.location ?? artifact.id)
+      .filter((branch) => branch !== parentBranch);
+    if (otherBranches.length > 0) {
+      lines.push(
+        `Other prerequisite branches are references only and are not merged into this workspace: ${[...new Set(otherBranches)].join(", ")}.`,
+      );
+    }
+  }
   return lines.join("\n");
 }
 
 /**
  * Extract the parent branch from prerequisite task branch artifacts.
  * Used by the orchestrator to create worktrees forked from the prerequisite
- * branch instead of HEAD — enabling prerequisite branch handoff.
+ * branch instead of HEAD — enabling prerequisite branch handoff. Git
+ * worktrees have a single fork point, so the first branch in dependsOn order
+ * is selected; buildHandoffSection tells the child which other prerequisite
+ * branches are references only.
  */
 export function findParentBranch(
   plan: Plan,
@@ -59,17 +82,30 @@ export function findParentBranch(
 
 /**
  * When a task passes review, record its output artifacts in the plan.
- * In worktree mode, commit the implementer's changes first via the
- * optional worktreeCommit callback (best-effort; errors are swallowed).
+ * In worktree mode, commit the implementer's changes first via the optional
+ * worktreeCommit callback. A branch is only advertised as a handoff parent
+ * after that callback succeeds; failures are reported through onWarning.
  */
 export async function recordPassingArtifacts(
   plan: Plan,
   task: PlanTask,
   result?: TaskResult,
   worktreeCommit?: (branch: string) => Promise<void>,
+  onWarning?: (message: string) => void,
 ): Promise<Plan> {
   const artifacts: ArtifactRef[] = [];
-  if (result?.branch) {
+  let branchReady = result?.branch !== undefined;
+  if (worktreeCommit && result?.branch) {
+    try {
+      await worktreeCommit(result.branch);
+    } catch (error: any) {
+      branchReady = false;
+      onWarning?.(
+        `Branch ${result.branch} was not recorded for handoff because its changes could not be committed: ${error?.message ?? error}`,
+      );
+    }
+  }
+  if (result?.branch && branchReady) {
     artifacts.push({
       type: "branch",
       id: result.branch,
@@ -103,14 +139,5 @@ export async function recordPassingArtifacts(
     description: `Summary of task ${task.id}: ${task.title}`,
   });
 
-  let updated = updateTask(plan, task.id, { artifacts });
-  if (worktreeCommit && result?.branch) {
-    // Commit is best-effort — artifact recording is the important part.
-    try {
-      await worktreeCommit(result.branch);
-    } catch {
-      // Swallow: commit failure does not block plan progression.
-    }
-  }
-  return updated;
+  return updateTask(plan, task.id, { artifacts });
 }

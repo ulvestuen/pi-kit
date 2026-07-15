@@ -156,12 +156,12 @@ export default function (pi: ExtensionAPI) {
                   description: Type.String(),
                   location: Type.Optional(Type.String()),
                 }),
-                { description: "Artifacts available as input to this task." },
+                { description: "Artifacts appended to the sub-agent's task brief as structured prerequisite context." },
               ),
             ),
             parentRunIds: Type.Optional(
               Type.Array(Type.String(), {
-                description: "Run IDs of parent tasks (agent-native contract).",
+                description: "Run IDs of parent tasks, appended to the sub-agent's task brief.",
               }),
             ),
             parentBranch: Type.Optional(
@@ -187,6 +187,7 @@ export default function (pi: ExtensionAPI) {
           timeoutMs: t.timeoutMs,
           runId: t.runId,
           inputArtifacts: t.inputArtifacts,
+          parentRunIds: t.parentRunIds,
           parentBranch: t.parentBranch,
         }));
 

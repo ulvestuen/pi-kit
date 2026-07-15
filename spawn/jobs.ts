@@ -30,12 +30,15 @@ export const SPAWN_BACKEND_NAMES: SpawnBackendName[] = [
   "microsandbox",
 ];
 
-export type SpawnJobStatus =
-  | "running"
-  | "done"
-  | "failed"
-  | "killed"
-  | "lost";
+export const SPAWN_JOB_STATUSES = [
+  "running",
+  "done",
+  "failed",
+  "killed",
+  "lost",
+] as const;
+
+export type SpawnJobStatus = (typeof SPAWN_JOB_STATUSES)[number];
 
 /** One detached sub-agent job. */
 export interface SpawnJob {
@@ -213,7 +216,10 @@ function validateJob(raw: any): SpawnJob | null {
   if (typeof raw.agent !== "string") return null;
   if (typeof raw.task !== "string") return null;
   if (typeof raw.cwd !== "string") return null;
-  if (!"running done failed killed lost".includes(raw.status)) return null;
+  if (
+    typeof raw.status !== "string" ||
+    !(SPAWN_JOB_STATUSES as readonly string[]).includes(raw.status)
+  ) return null;
   if (typeof raw.createdAt !== "number") return null;
   if (typeof raw.updatedAt !== "number") return null;
   return raw as SpawnJob;

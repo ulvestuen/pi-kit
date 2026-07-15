@@ -249,7 +249,7 @@ export function createTmuxBackend(
       return {
         workspaceMount: true,
         cursorOutput: false,
-        confirmedKill: false,
+        confirmedKill: true,
         durableLogs: true,
         networkAccess: true,
         hardwareIsolation: false,

@@ -48,13 +48,14 @@ Each count below is extracted from the `ℹ tests N` / `ℹ pass N` / `ℹ fail 
 
 ## 3. Import resolution and symlink checks
 
-From `import-resolution.txt`:
+The raw `import-resolution.txt` snapshot predates the npm compatibility fix.
+The current manifests use npm-supported workspace ranges:
 - Root symlink: `node_modules/@pi-kit/agent-types -> ../../agent-types`
 - `fleet/package.json`: `"@pi-kit/agent-types": "*"`
 - `spawn/package.json`: `"@pi-kit/agent-types": "*"`
-- `planner/package.json`: `"@pi-kit/agent-types": "workspace:*"`
-- `critic/package.json`: `"@pi-kit/agent-types": "workspace:*"`
-- `orchestrator/package.json`: `"@pi-kit/agent-types": "workspace:*"`
+- `planner/package.json`: `"@pi-kit/agent-types": "*"`
+- `critic/package.json`: `"@pi-kit/agent-types": "*"`
+- `orchestrator/package.json`: `"@pi-kit/agent-types": "*"`
 - TypeScript resolution verified by `tsc --noEmit` across all 7 packages (all exit 0).
 
 ## 4. Prior verification doc correction

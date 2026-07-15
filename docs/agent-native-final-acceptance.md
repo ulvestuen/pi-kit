@@ -197,6 +197,9 @@ details: {
 ```
 
 `runLog` entries carry `RunId { runId, taskId, attempt, wave }`.
+They are appended as execution happens and use distinct `task_start`,
+`task_end`, `review_start`, and `review_end` event types between the wave
+boundaries.
 `details.stopped` returned for early-stop path (`orchestrator/index.ts:216`).
 `details.terminal` with `summary` for complete/blocked (`orchestrator/index.ts:246,268`).
 

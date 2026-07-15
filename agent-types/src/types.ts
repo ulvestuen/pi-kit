@@ -125,6 +125,12 @@ export interface KillResult {
 export interface RunEvent {
   timestamp: number;
   runId: RunId;
-  type: "wave_start" | "task_start" | "task_end" | "wave_end";
+  type:
+    | "wave_start"
+    | "task_start"
+    | "task_end"
+    | "review_start"
+    | "review_end"
+    | "wave_end";
   payload: unknown;
 }

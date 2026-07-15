@@ -213,7 +213,9 @@ The `killAndStamp` and `cleanup` paths mark "lost" because they move on permanen
 ## 6. Assumptions
 
 - The three-branch KillResult contract (stopped / alreadyComplete / warned+unconfirmed) defined in ADR §6/§9 is authoritative and exhaustive.
-- Backend `confirmedKill: false` capabilities do not change the caller's branch logic — the branch is determined by the KillResult shape, not the capabilities object.
+- All built-in backends advertise `confirmedKill: true` because they return
+  `stopped: true` only after confirming the process or window is gone. Caller
+  branch logic is still determined by the `KillResult` shape.
 - A thrown exception from `backend.kill()` is semantically equivalent to warned/unconfirmed (branch 3) and follows the same refresh → mark-lost path.
 - Legacy jobs without `parentPid` are treated as stale during cleanup (matches pre-ownership-tracking behavior).
 - No changes were made outside `spawn/` and `docs/` as instructed.

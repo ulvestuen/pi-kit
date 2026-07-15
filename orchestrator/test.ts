@@ -525,22 +525,25 @@ describe("worktree commit after passing review", () => {
     assert.strictEqual(commitCalled, false);
   });
 
-  it("recordPassingArtifacts swallows commit errors without blocking plan", async () => {
+  it("recordPassingArtifacts omits an uncommitted branch and reports a warning", async () => {
     const { recordPassingArtifacts } = await import("./handoff.ts");
     const commitFn = async () => {
       throw new Error("git commit failed");
     };
+    const warnings: string[] = [];
     const plan = createPlan("g", [task("t1")]);
     const result = okResult({ branch: "fleet/task-1-100" });
-    // Should not throw even though commit fails
     const updated = await recordPassingArtifacts(
       plan,
       getTask(plan, "t1")!,
       result,
       commitFn,
+      (warning) => warnings.push(warning),
     );
-    // Artifacts are still recorded
-    assert.ok(getTask(updated, "t1")!.artifacts.length > 0);
+    const artifacts = getTask(updated, "t1")!.artifacts;
+    assert.ok(artifacts.some((artifact) => artifact.type === "summary"));
+    assert.ok(!artifacts.some((artifact) => artifact.type === "branch"));
+    assert.match(warnings[0], /could not be committed: git commit failed/);
   });
 });
 
@@ -613,9 +616,7 @@ describe("parentBranch extraction from prerequisite artifacts", () => {
     plan = promoteToDone(plan, "t1");
     plan = promoteToDone(plan, "t2");
     const t3 = getTask(plan, "t3")!;
-    const parent = findParentBranch(plan, t3);
-    // Should find one of them (order depends on dependsOn traversal)
-    assert.ok(parent === "fleet/task-x" || parent === "fleet/task-y");
+    assert.strictEqual(findParentBranch(plan, t3), "fleet/task-x");
   });
 });
 
@@ -850,5 +851,33 @@ describe("end-to-end: legacy plain-text task → structured artifact handoff to 
     assert.match(handoff, /branch: branch one at loc1/);
     assert.match(handoff, /summary: summary one at \(in-tree\)/);
     assert.match(handoff, /path: output file at \/tmp\/out/);
+  });
+
+  it("identifies the single worktree fork branch and unmerged prerequisites", () => {
+    let plan = createPlan("g", [
+      task("t1"),
+      task("t2"),
+      task("t3", { dependsOn: ["t1", "t2"] }),
+    ]);
+    plan = updateTask(plan, "t1", {
+      artifacts: [
+        { type: "branch", id: "b1", description: "one", location: "fleet/one" },
+      ],
+    });
+    plan = updateTask(plan, "t2", {
+      artifacts: [
+        { type: "branch", id: "b2", description: "two", location: "fleet/two" },
+      ],
+    });
+    plan = promoteToDone(plan, "t1");
+    plan = promoteToDone(plan, "t2");
+
+    const handoff = buildHandoffSection(
+      plan,
+      getTask(plan, "t3")!,
+      "fleet/one",
+    );
+    assert.match(handoff, /worktree is forked from fleet\/one/);
+    assert.match(handoff, /not merged into this workspace: fleet\/two/);
   });
 });

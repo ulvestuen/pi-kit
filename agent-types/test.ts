@@ -186,6 +186,16 @@ describe("RunEvent", () => {
     assert.strictEqual(event.type, "task_end");
     assert.strictEqual(event.runId.runId, "r");
   });
+
+  it("distinguishes critic review events from task execution events", () => {
+    const event: RunEvent = {
+      timestamp: 1235,
+      runId: { runId: "review-r", taskId: "t", attempt: 1, wave: 1 },
+      type: "review_end",
+      payload: { passed: true },
+    };
+    assert.strictEqual(event.type, "review_end");
+  });
 });
 
 describe("ToolCallSummary", () => {
@@ -352,19 +362,19 @@ describe("RunId identity", () => {
 // ---------------------------------------------------------------------------
 
 describe("BackendCapabilities per-backend contracts", () => {
-  it("tmux: workspaceMount=true, confirmedKill=false, durableLogs=true", () => {
+  it("tmux: workspaceMount=true, confirmedKill=true, durableLogs=true", () => {
     const tmux: BackendCapabilities = {
-      workspaceMount: true, cursorOutput: false, confirmedKill: false,
+      workspaceMount: true, cursorOutput: false, confirmedKill: true,
       durableLogs: true, networkAccess: true, hardwareIsolation: false,
     };
     assert.strictEqual(tmux.workspaceMount, true);
-    assert.strictEqual(tmux.confirmedKill, false);
+    assert.strictEqual(tmux.confirmedKill, true);
     assert.strictEqual(tmux.hardwareIsolation, false);
   });
 
   it("microsandbox: hardwareIsolation=true, workspaceMount=true", () => {
     const ms: BackendCapabilities = {
-      workspaceMount: true, cursorOutput: false, confirmedKill: false,
+      workspaceMount: true, cursorOutput: false, confirmedKill: true,
       durableLogs: true, networkAccess: true, hardwareIsolation: true,
     };
     assert.strictEqual(ms.hardwareIsolation, true);
@@ -373,7 +383,7 @@ describe("BackendCapabilities per-backend contracts", () => {
 
   it("exedev: no workspace mount, durable logs in VM", () => {
     const exedev: BackendCapabilities = {
-      workspaceMount: false, cursorOutput: false, confirmedKill: false,
+      workspaceMount: false, cursorOutput: false, confirmedKill: true,
       durableLogs: true, networkAccess: true, hardwareIsolation: false,
     };
     assert.strictEqual(exedev.workspaceMount, false);

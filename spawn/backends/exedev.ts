@@ -374,7 +374,7 @@ export function createExedevBackend(
       return {
         workspaceMount: false,
         cursorOutput: false,
-        confirmedKill: false,
+        confirmedKill: true,
         durableLogs: true,
         networkAccess: true,
         hardwareIsolation: false,

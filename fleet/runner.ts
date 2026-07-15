@@ -32,6 +32,8 @@ export interface TaskSpec {
   runId?: RunId;
   /** Artifacts available as input to this task. */
   inputArtifacts?: ArtifactRef[];
+  /** Stable IDs of prerequisite runs, included in the child brief. */
+  parentRunIds?: string[];
   /** Parent branch to create worktrees from (default: current HEAD). */
   parentBranch?: string;
 }
@@ -54,11 +56,20 @@ export interface TaskResult {
   worktreePath?: string;
   /** Stable run identity (agent-native contract). */
   runId?: RunId;
-  /** Artifacts produced by this task. */
+  /**
+   * Reserved for structured child-result parsing. The current runner does not
+   * populate this field, so consumers must treat undefined as "not reported".
+   */
   outputArtifacts?: ArtifactRef[];
-  /** Tool calls made during execution. */
+  /**
+   * Reserved for structured child-result parsing. The current runner does not
+   * populate this field, so consumers must treat undefined as "not reported".
+   */
   toolCalls?: { tool: string; args: unknown; result: string }[];
-  /** Token usage, when available from the child. */
+  /**
+   * Reserved for structured child-result parsing. The current runner does not
+   * populate this field, so consumers must treat undefined as "not reported".
+   */
   usage?: { promptTokens?: number; completionTokens?: number };
 }
 
@@ -145,8 +156,29 @@ export function buildPiArgs(def: AgentDefinition, spec: TaskSpec): string[] {
   if (def.tools && def.tools.length > 0) {
     args.push("--tools", def.tools.join(","));
   }
-  args.push(spec.task);
+  args.push(buildTaskPrompt(spec));
   return args;
+}
+
+/** Add structured prerequisite metadata to the self-contained child brief. */
+export function buildTaskPrompt(spec: TaskSpec): string {
+  const artifacts = spec.inputArtifacts ?? [];
+  const parentRunIds = spec.parentRunIds ?? [];
+  if (artifacts.length === 0 && parentRunIds.length === 0) return spec.task;
+
+  const lines = [spec.task, "", "Structured prerequisite context:"];
+  if (artifacts.length > 0) {
+    lines.push("Input artifacts:");
+    for (const artifact of artifacts) {
+      lines.push(
+        `- ${artifact.type}: ${artifact.description} at ${artifact.location ?? artifact.id}`,
+      );
+    }
+  }
+  if (parentRunIds.length > 0) {
+    lines.push(`Parent run IDs: ${parentRunIds.join(", ")}`);
+  }
+  return lines.join("\n");
 }
 
 /** git arguments that create a task worktree on a new branch.

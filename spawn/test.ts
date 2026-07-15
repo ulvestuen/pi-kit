@@ -53,7 +53,6 @@ import {
 import {
   cleanupSpawnToolingJobs,
   createSpawnToolingSpawn,
-  KILL_CONFIRMATION_WAIT_MS,
 } from "./runner-adapter.ts";
 import { registryPath } from "./jobs.ts";
 import type { BackendCapabilities, KillResult } from "@pi-kit/agent-types";
@@ -1159,7 +1158,7 @@ describe("config", () => {
 // ============================================================================
 
 describe("ADR backend capabilities", () => {
-  it("tmux declares: mount=true, cursor=false, kill=false, logs=true, net=true, iso=false", async () => {
+  it("tmux declares: mount=true, cursor=false, kill=true, logs=true, net=true, iso=false", async () => {
     const config = testConfig();
     const { exec } = fakeExec(() => ({}));
     const backend = createTmuxBackend(exec, config);
@@ -1167,14 +1166,14 @@ describe("ADR backend capabilities", () => {
     assert.deepEqual(caps, {
       workspaceMount: true,
       cursorOutput: false,
-      confirmedKill: false,
+      confirmedKill: true,
       durableLogs: true,
       networkAccess: true,
       hardwareIsolation: false,
     } satisfies BackendCapabilities);
   });
 
-  it("exedev declares: mount=false, cursor=false, kill=false, logs=true, net=true, iso=false", async () => {
+  it("exedev declares: mount=false, cursor=false, kill=true, logs=true, net=true, iso=false", async () => {
     const config = testConfig();
     const { exec } = fakeExec(() => ({}));
     const backend = createExedevBackend(exec, config);
@@ -1182,14 +1181,14 @@ describe("ADR backend capabilities", () => {
     assert.deepEqual(caps, {
       workspaceMount: false,
       cursorOutput: false,
-      confirmedKill: false,
+      confirmedKill: true,
       durableLogs: true,
       networkAccess: true,
       hardwareIsolation: false,
     } satisfies BackendCapabilities);
   });
 
-  it("microsandbox declares: mount=configurable, cursor=false, kill=false, logs=true, net=true, iso=true", async () => {
+  it("microsandbox declares: mount=configurable, cursor=false, kill=true, logs=true, net=true, iso=true", async () => {
     const config = testConfig({ msbMountCwd: true });
     const { exec } = fakeExec(() => ({}));
     const backend = createMicrosandboxBackend(
@@ -1200,7 +1199,7 @@ describe("ADR backend capabilities", () => {
     const caps = await backend.capabilities();
     assert.equal(caps.workspaceMount, true);
     assert.equal(caps.cursorOutput, false);
-    assert.equal(caps.confirmedKill, false);
+    assert.equal(caps.confirmedKill, true);
     assert.equal(caps.durableLogs, true);
     assert.equal(caps.networkAccess, true);
     assert.equal(caps.hardwareIsolation, true);
@@ -2884,5 +2883,33 @@ describe("consolidated KillResult contract — all branches, consumers, and back
     assert.equal(jobs.length, 1);
     assert.equal(jobs[0].name, "good");
     assert.ok(errors.length > 0);
+  });
+
+  it("rejects substring, empty, and non-string job statuses", () => {
+    const config = testConfig();
+    mkdirSync(config.logDir, { recursive: true });
+    const base = {
+      backend: "tmux",
+      agent: "s",
+      task: "t",
+      cwd: "/tmp",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    writeFileSync(registryPath(config.logDir), JSON.stringify({
+      version: 2,
+      jobs: [
+        { ...base, name: "valid", status: "running" },
+        { ...base, name: "substring", status: "run" },
+        { ...base, name: "empty", status: "" },
+        { ...base, name: "combined", status: "done fail" },
+        { ...base, name: "number", status: 1 },
+      ],
+    }), "utf8");
+
+    const errors: string[] = [];
+    const jobs = loadJobs(config.logDir, (message) => errors.push(message));
+    assert.deepEqual(jobs.map((job) => job.name), ["valid"]);
+    assert.match(errors[0], /4 invalid job record/);
   });
 });

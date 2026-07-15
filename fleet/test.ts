@@ -8,6 +8,7 @@ import {
 } from "./registry.ts";
 import {
   buildPiArgs,
+  buildTaskPrompt,
   buildWorktreeArgs,
   capOutput,
   parsePiJsonOutput,
@@ -224,6 +225,26 @@ describe("buildPiArgs", () => {
       "x prompt",
       "t",
     ]);
+  });
+
+  it("appends artifacts and parent run IDs to the child brief", () => {
+    const prompt = buildTaskPrompt({
+      agent: "x",
+      task: "implement the parser",
+      inputArtifacts: [
+        {
+          type: "branch",
+          id: "feature/parser",
+          description: "parser implementation",
+          location: "fleet/parser-1",
+        },
+      ],
+      parentRunIds: ["parser-w1-a1"],
+    });
+    assert.match(prompt, /^implement the parser/);
+    assert.match(prompt, /Input artifacts:/);
+    assert.match(prompt, /branch: parser implementation at fleet\/parser-1/);
+    assert.match(prompt, /Parent run IDs: parser-w1-a1/);
   });
 });
 
@@ -931,18 +952,32 @@ describe("agent-native: parentBranch worktree", () => {
 describe("agent-native: inputArtifacts and outputArtifacts", () => {
   const registry = registryOf(def("worker"));
 
-  it("TaskSpec.inputArtifacts are accepted without error", async () => {
+  it("passes inputArtifacts and parentRunIds to the child prompt", async () => {
     const inputArtifacts: ArtifactRef[] = [
       { type: "branch", id: "feat-a", description: "prerequisite" },
       { type: "summary", id: "rev-1", description: "review" },
     ];
+    let childPrompt = "";
     const [result] = await runTasks(
       registry,
-      [{ agent: "worker", task: "t", inputArtifacts }],
-      { spawn: okSpawn("ok"), cwd: "/repo" },
+      [{
+        agent: "worker",
+        task: "t",
+        inputArtifacts,
+        parentRunIds: ["parent-1"],
+      }],
+      {
+        spawn: okSpawn("ok", (request) => {
+          childPrompt = request.args.at(-1) ?? "";
+        }),
+        cwd: "/repo",
+      },
     );
     assert.strictEqual(result.status, "ok");
-    // inputArtifacts are on the spec; result has outputArtifacts (from the child)
+    assert.match(childPrompt, /branch: prerequisite at feat-a/);
+    assert.match(childPrompt, /summary: review at rev-1/);
+    assert.match(childPrompt, /Parent run IDs: parent-1/);
+    // Structured result parsing is not implemented yet.
     assert.strictEqual(result.outputArtifacts, undefined);
   });
 
