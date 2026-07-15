@@ -10,7 +10,7 @@ implementation sub-agents**. The guiding principle is the same one pi-kit
 already follows: small standalone modules, each useful on its own, with larger
 features composed *from* them rather than built as a monolith. The design also
 specifies how the pieces interoperate with the existing
-[`lykkja`](../lykkja/README.md) Plan-Do-Check-Act loop extension — lykkja is
+[`pdca`](../pdca/README.md) Plan-Do-Check-Act loop extension — pdca is
 deliberately reused, unchanged, as the quality gate and stopping rule of the
 orchestration loop.
 
@@ -28,7 +28,7 @@ orchestration loop.
   mechanical.
 - **Independent review**: score results with a critic agent that has fresh
   context, instead of relying on the working agent grading its own homework.
-- **Disciplined iteration**: wrap the whole run in a lykkja PDCA loop so the
+- **Disciplined iteration**: wrap the whole run in the pdca extension's PDCA loop so the
   orchestrator iterates until an explicit, measurable bar is met — or stops at
   a hard cap.
 - **Standalone modules**: every extension is independently installable and
@@ -42,7 +42,7 @@ orchestration loop.
 - Cross-machine distribution is delegated to spawn backends; fleet/orchestrator
   keep a synchronous result contract and do not manage remote machines directly.
 - No changes to pi core; everything uses the public `ExtensionAPI`.
-- No replacement of lykkja — it is composed with, not forked.
+- No replacement of pdca — it is composed with, not forked.
 
 ---
 
@@ -55,7 +55,7 @@ Each extension is a workspace with the same shape the existing four use:
 | File | Role |
 |---|---|
 | `index.ts` | Thin wiring: default-exports `function (pi: ExtensionAPI)`; registers tools/commands/hooks |
-| `<core>.ts` | Pure, dependency-free engine (like `lykkja/loop.ts`) — the reusable module |
+| `<core>.ts` | Pure, dependency-free engine (like `pdca/loop.ts`) — the reusable module |
 | `config.ts` | JSON config at `~/.pi/agent/extensions/<name>/<name>.json`, env-var fallbacks, clear validation errors |
 | `test.ts` | Network-free unit tests, run with `tsx --test` |
 | `README.md` | Standalone install/config/usage docs |
@@ -66,14 +66,14 @@ Each extension is a workspace with the same shape the existing four use:
 - `pi.registerTool(defineTool({...}))`, `pi.registerCommand(name, {...})`
 - `pi.on(...)` lifecycle events (`before_agent_start`, `session_start`, …)
 - `pi.appendEntry(customType, data)` + `ctx.sessionManager.getEntries()` for
-  restart-safe state (the lykkja pattern)
+  restart-safe state (the pdca pattern)
 - `pi.sendUserMessage(text, opts?)` for self-prompting
 - `pi.events.on/emit` — the shared bus for loose extension-to-extension signals
 - `ctx.ui` (notify, `setStatus`), `ctx.hasUI`, `ctx.signal`, `ctx.mode`
 
-### lykkja (reused as-is)
+### pdca (reused as-is)
 
-The pure engine `lykkja/loop.ts` exports the types and functions this design
+The pure engine `pdca/loop.ts` exports the types and functions this design
 leans on: `Criterion { name, threshold }`, `CriterionScore { name, score,
 weakness? }`, `LoopState`, `Decision { verdict: "FINAL" | "ITERATING" |
 "STOPPED", … }`, plus `createLoop`, `recordCheckpoint`, `normalizeCriteria`,
@@ -105,7 +105,7 @@ Four new extensions, one role each:
         │ plan.ts       │ runner.ts     │ review.ts     loop.ts
         ▼               ▼               ▼               ▼
 ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
-│  planner/    │ │  fleet/      │ │  critic/     │ │  lykkja/     │
+│  planner/    │ │  fleet/      │ │  critic/     │ │  pdca/     │
 │  plan as a   │ │  sub-agent   │ │  independent │ │  PDCA loop,  │
 │  task DAG    │ │  runtime     │ │  reviewer    │ │  stop rule   │
 └──────────────┘ └──────────────┘ └──────┬───────┘ └──────────────┘
@@ -126,11 +126,11 @@ mechanisms, and never by importing each other's `index.ts`:
    `planner:task_status`, …) for extensions that want to *observe* each other
    without depending on each other.
 3. **Custom session entries** — persisted state (`fleet-state`,
-   `planner-state`, `lykkja-state`) readable by anyone via
-   `ctx.sessionManager.getEntries()`; this is already lykkja's de facto read
+   `planner-state`, `pdca-state`) readable by anyone via
+   `ctx.sessionManager.getEntries()`; this is already pdca's de facto read
    hook.
 4. **Model-level composition** — tools, skills, and prompts. The orchestrator
-   can instruct the model to call `lykkja_start`; a skill can reference another
+   can instruct the model to call `pdca_start`; a skill can reference another
    skill.
 
 Each layer degrades gracefully: fleet alone gives you parallel sub-agents;
@@ -266,7 +266,7 @@ Mechanics:
   so a restarted session can report what was in flight (an interrupted
   synchronous wave is treated as aborted; on `session_start` any stale
   "running" entries are marked `aborted`).
-- **System prompt** (`before_agent_start`, config-gated like lykkja): one short
+- **System prompt** (`before_agent_start`, config-gated like pdca): one short
   paragraph advertising delegation and when to use it.
 - Config: `maxConcurrent`, `maxBatch`, `defaultTimeoutMs`, `outputCapBytes`,
   `piBinary` (default `"pi"`), `injectSystemPrompt`, historical tmux fields,
@@ -282,7 +282,7 @@ with per-task acceptance criteria.
 ### 5.1 Plan model — `plan.ts` (pure)
 
 ```ts
-import type { Criterion, CriterionInput } from "pi-lykkja/loop.ts"; // dependency-free
+import type { Criterion, CriterionInput } from "pi-pdca/loop.ts"; // dependency-free
 
 export type TaskStatus =
   | "pending"   // dependencies not yet met
@@ -298,7 +298,7 @@ export interface PlanTask {
   description: string;       // full brief handed to the sub-agent
   dependsOn: string[];       // task ids
   agent?: string;            // fleet agent name; default "implementer"
-  criteria: Criterion[];     // lykkja-shaped acceptance criteria
+  criteria: Criterion[];     // pdca-shaped acceptance criteria
   status: TaskStatus;
   attempts: number;
 }
@@ -316,8 +316,8 @@ export function setTaskStatus(plan: Plan, id: string, status: TaskStatus): Plan;
 export function summarizePlan(plan: Plan): PlanSummary; // counts, critical path, blockers
 ```
 
-Criteria reuse lykkja's `normalizeCriteria` so every task's acceptance bar is,
-by construction, something lykkja and the critic can score.
+Criteria reuse pdca's `normalizeCriteria` so every task's acceptance bar is,
+by construction, something pdca and the critic can score.
 
 ### 5.2 Wiring — `index.ts`
 
@@ -329,7 +329,7 @@ by construction, something lykkja and the critic can score.
 - Events: `planner:plan_created`, `planner:task_status`.
 - **Skill `plan-decomposition`**: how to split a goal into small,
   independently-verifiable, parallelizable tasks with strict per-task criteria;
-  cross-references lykkja's `success-criteria` skill instead of restating it.
+  cross-references pdca's `success-criteria` skill instead of restating it.
 
 Planner alone (without fleet/orchestrator) is already useful: it gives any
 session a structured, persistent plan the model maintains via tools.
@@ -339,14 +339,14 @@ session a structured, persistent plan the model maintains via tools.
 ## 6. `critic/` (pi-critic) — independent advisor/reviewer
 
 The critic exists because self-scoring is the weakest link in a self-checking
-loop. lykkja's `honest-verification` skill mitigates grade inflation; the
+loop. pdca's `honest-verification` skill mitigates grade inflation; the
 critic removes the conflict of interest entirely by having **a different agent
 with fresh context** do the CHECK.
 
 ### 6.1 Review model — `review.ts` (pure)
 
 ```ts
-import type { Criterion, CriterionScore } from "pi-lykkja/loop.ts";
+import type { Criterion, CriterionScore } from "pi-pdca/loop.ts";
 
 export interface ReviewRequest {
   subject: string;            // what is being reviewed (diff, file list, artifact, task result)
@@ -356,7 +356,7 @@ export interface ReviewRequest {
 }
 
 export interface ReviewResult {
-  scores: CriterionScore[];   // lykkja-shaped: score + weakness per criterion
+  scores: CriterionScore[];   // pdca-shaped: score + weakness per criterion
   passed: boolean;
   weaknesses: string[];       // prioritized, actionable
   raw: string;                // critic's full prose for the details view
@@ -388,7 +388,7 @@ silent pass).
 
 Standalone value: `critic_review` is a useful "second pair of eyes" tool in any
 session, entirely outside orchestration — including as the CHECK step of a
-plain lykkja loop (see §9).
+plain pdca loop (see §9).
 
 ---
 
@@ -396,7 +396,7 @@ plain lykkja loop (see §9).
 
 The orchestrator owns *control flow only*. Planning intelligence lives in the
 model + planner skill; execution lives in fleet; judgment lives in critic;
-the stopping rule lives in lykkja.
+the stopping rule lives in pdca.
 
 ### 7.1 Scheduler — `scheduler.ts` (pure)
 
@@ -424,9 +424,9 @@ export function applyReview(plan: Plan, id: string, review: ReviewResult, policy
 ### 7.2 Control flow — `index.ts`
 
 `/orchestrate <goal>` (plus `/orchestrate status|stop`) seeds the run via
-`pi.sendUserMessage`, lykkja-style. One run proceeds:
+`pi.sendUserMessage`, pdca-style. One run proceeds:
 
-1. **Open the goal loop** — the model calls `lykkja_start` with goal-level
+1. **Open the goal loop** — the model calls `pdca_start` with goal-level
    criteria (the skill instructs how to derive them; typically "all plan tasks
    done", "end-to-end verification passes", plus goal-specific bars).
 2. **Plan** — the model produces the decomposition via `plan_create`
@@ -437,54 +437,54 @@ export function applyReview(plan: Plan, id: string, review: ReviewResult, policy
 4. **Review** — each completed task goes through `critic_review` against *its
    own* criteria; failures are re-dispatched with the critic's weaknesses
    appended to the task brief, up to `maxAttempts`.
-5. **Checkpoint** — after each wave the model calls `lykkja_checkpoint` with
+5. **Checkpoint** — after each wave the model calls `pdca_checkpoint` with
    the wave summary as PLAN/DO and **critic-derived** goal-level scores as
-   CHECK. lykkja's verdict is the ACT:
+   CHECK. pdca's verdict is the ACT:
    - `ITERATING` → next wave (or plan repair: the model may `plan_update` to
      add follow-up tasks targeting the weakest criterion);
    - `FINAL` → done, summarize;
    - `STOPPED` → hard stop with an honest failure report — the
      `maxIterations` cap is the runaway guard for the entire orchestration.
 
-Like lykkja, forward motion is driven by **self-prompting through tool
+Like pdca, forward motion is driven by **self-prompting through tool
 results**: every `orchestrate_step` result ends with an explicit
 "AUTOMATED NEXT STEP" prompt, so the run needs no user turns between waves.
 
 The orchestrator imports only pure cores (`plan.ts`, `scheduler.ts`,
 `runner.ts`, `review.ts`, `loop.ts`) and otherwise composes at the model level
-(instructing calls to `lykkja_*`, `plan_*` tools). If a dependency isn't
+(instructing calls to `pdca_*`, `plan_*` tools). If a dependency isn't
 installed, `/orchestrate` says which piece is missing instead of failing
 mid-run.
 
 ---
 
-## 8. Playing in tandem with lykkja
+## 8. Playing in tandem with pdca
 
-lykkja stays unchanged and is composed at three distinct levels:
+pdca stays unchanged and is composed at three distinct levels:
 
-**Goal level — lykkja as the orchestrator's stopping rule.** The orchestration
-run *is* a lykkja loop: `lykkja_start` opens it, every dispatch wave is one
+**Goal level — pdca as the orchestrator's stopping rule.** The orchestration
+run *is* a pdca loop: `pdca_start` opens it, every dispatch wave is one
 PDCA pass, and `FINAL`/`ITERATING`/`STOPPED` decides continue-vs-stop. This
-respects lykkja's one-loop-per-session constraint: the orchestrator's session
-owns exactly one loop, the goal loop. Nothing about lykkja's state entry
-(`lykkja-state`), dashboard, or status line needs to change.
+respects pdca's one-loop-per-session constraint: the orchestrator's session
+owns exactly one loop, the goal loop. Nothing about pdca's state entry
+(`pdca-state`), dashboard, or status line needs to change.
 
 **Task level — hierarchical loops for free.** Each sub-agent is a separate
 `pi` process and therefore a separate session with its own entry log. If
-lykkja is installed globally (it is, via this kit), an `implementer` agent can
+pdca is installed globally (it is, via this kit), an `implementer` agent can
 run its own task-level PDCA loop against its task's criteria — nested loops
 with zero state conflict, because "one loop per session" is per *child*
 session. Agent definitions opt in simply by referencing the `pdca-loop` skill
 in their system prompt.
 
-**CHECK level — the critic upgrades lykkja's weakest phase.** The critic emits
-`CriterionScore[]` in lykkja's exact shape, so external review drops straight
-into `lykkja_checkpoint`. This composition is valuable *outside* orchestration
-too: any plain lykkja loop can use `critic_review` as its CHECK step and feed
+**CHECK level — the critic upgrades pdca's weakest phase.** The critic emits
+`CriterionScore[]` in pdca's exact shape, so external review drops straight
+into `pdca_checkpoint`. This composition is valuable *outside* orchestration
+too: any plain pdca loop can use `critic_review` as its CHECK step and feed
 the result to the checkpoint — independent scoring instead of self-report,
 with `honest-verification` as the fallback when the critic isn't installed.
 
-**Optional future lykkja enhancement (non-breaking, not required).** A small
+**Optional future pdca enhancement (non-breaking, not required).** A small
 exported helper in `loop.ts` such as
 `checkpointFromReview(plan: string, changes: string, review: ReviewResult): CheckpointInput`
 would make the critic→checkpoint handoff one call. Everything above works
@@ -508,20 +508,20 @@ non-overlapping file scopes (a planner skill concern) stays the simple default.
 Root `package.json` gains the new workspaces and manifest entries:
 
 ```json
-"workspaces": ["threema", "lykkja", "exa", "kagi",
+"workspaces": ["threema", "pdca", "exa", "kagi",
                "fleet", "planner", "critic", "orchestrator"],
 "pi": {
-  "extensions": ["./threema", "./lykkja", "./exa", "./kagi",
+  "extensions": ["./threema", "./pdca", "./exa", "./kagi",
                  "./fleet", "./planner", "./critic", "./orchestrator"],
-  "skills": ["./lykkja/skills", "./planner/skills", "./critic/skills",
+  "skills": ["./pdca/skills", "./planner/skills", "./critic/skills",
              "./orchestrator/skills"]
 }
 ```
 
-Each package carries its own `pi` manifest (like `pi-lykkja` does) so any
+Each package carries its own `pi` manifest (like `pi-pdca` does) so any
 subset installs standalone: `pi install <repo>` for the kit, or copy one
 folder into `~/.pi/agent/extensions/<name>/`. Cross-package pure-core imports
-(`planner` → `lykkja/loop.ts`, `critic`/`orchestrator` → `fleet/runner.ts`)
+(`planner` → `pdca/loop.ts`, `critic`/`orchestrator` → `fleet/runner.ts`)
 are workspace-relative imports of dependency-free modules; a standalone copy
 of a dependent package vendors those single files or declares the sibling
 package a dependency — decided per package in its README.
@@ -533,10 +533,10 @@ package a dependency — decided per package in its README.
 | Failure | Behavior |
 |---|---|
 | Task timeout / child crash | `TaskResult.status = "timeout" \| "error"`; scheduler treats it as a failed attempt → retry up to `maxAttempts`, then task `failed` |
-| Partial wave failure | Completed tasks proceed to review; the DAG naturally holds back dependents of failed tasks; `terminal: "blocked"` surfaces the blocker in the checkpoint (scored low → lykkja `ITERATING` drives plan repair, or `STOPPED` ends honestly) |
+| Partial wave failure | Completed tasks proceed to review; the DAG naturally holds back dependents of failed tasks; `terminal: "blocked"` surfaces the blocker in the checkpoint (scored low → pdca `ITERATING` drives plan repair, or `STOPPED` ends honestly) |
 | Critic output unparseable | Review = failed with "unscorable output" weakness; one automatic critic re-run before counting an attempt |
 | Critic disagreement (scores vs. sub-agent claim) | The critic wins by construction — it is the only source of CHECK scores; sub-agent self-reports are informational (`details`) only |
-| lykkja `STOPPED` | Orchestrator halts, reports per-task state, remaining weaknesses, and branches left unmerged; nothing is silently discarded |
+| pdca `STOPPED` | Orchestrator halts, reports per-task state, remaining weaknesses, and branches left unmerged; nothing is silently discarded |
 | Session restart mid-run | On `session_start`, fleet/critic/orchestrator kill/stamp stale internal spawn jobs (only those whose recorded parent process is gone — a spawned child or concurrent session leaves a live parent's jobs alone), fleet marks in-flight entries `aborted`, planner state restores, and the plan's `running` tasks reset to `ready` — the next `orchestrate_step` resumes the run idempotently |
 | User abort (`ctx.signal`) | Runner aborts queued tasks, asks the spawn adapter to kill/stamp running jobs, queue drains, state entries record the abort |
 
@@ -545,7 +545,7 @@ package a dependency — decided per package in its README.
 ## 11. Testing strategy
 
 All unit tests are network-free and process-free, `tsx --test`, mirroring
-`lykkja/test.ts`:
+`pdca/test.ts`:
 
 - **fleet**: `registry.ts` frontmatter parsing/precedence; `runner.ts` with a
   fake spawn — concurrency limits observed, timeouts fire, output capping,
@@ -574,10 +574,10 @@ sandbox repo.
    `plan-decomposition` skill. Deliverable: persistent structured plans.
 3. **Phase 3 — `critic/`**: review model + `critic_review`/`critic_advise` +
    `advisory-review` skill. Deliverable: independent review, including as the
-   CHECK step of plain lykkja loops.
+   CHECK step of plain pdca loops.
 4. **Phase 4 — `orchestrator/`**: scheduler + `/orchestrate` + skills, wiring
-   the goal-level lykkja loop. Deliverable: the full pipeline.
-5. **Phase 5 (optional)** — lykkja `checkpointFromReview` helper, worktree
+   the goal-level pdca loop. Deliverable: the full pipeline.
+5. **Phase 5 (optional)** — pdca `checkpointFromReview` helper, worktree
    `integrator` agent, tuning (caps, models, concurrency) from real use.
 
 ---
@@ -599,5 +599,5 @@ sandbox repo.
   orchestrator model wants more freedom (e.g. dynamic re-planning mid-wave),
   loosen deliberately, not by default.
 - **Criteria quality**: the whole loop is only as good as the criteria; this is
-  inherited from lykkja and mitigated the same way (`success-criteria` skill,
+  inherited from pdca and mitigated the same way (`success-criteria` skill,
   planner skill requiring per-task criteria).

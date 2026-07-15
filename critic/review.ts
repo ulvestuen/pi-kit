@@ -2,8 +2,8 @@
  * critic review engine — pure, dependency-free prompt construction and
  * output parsing for independent reviews.
  *
- * The only import is lykkja's pure loop engine, so scores land in lykkja's
- * exact CriterionScore shape and can feed straight into lykkja_checkpoint.
+ * The only import is pdca's pure loop engine, so scores land in pdca's
+ * exact CriterionScore shape and can feed straight into pdca_checkpoint.
  * Robustness lives in parseCriticOutput: a review that cannot be parsed is a
  * failed review, never a silent pass.
  */
@@ -12,7 +12,7 @@ import {
   clampScore,
   type Criterion,
   type CriterionScore,
-} from "../lykkja/loop.ts";
+} from "../pdca/loop.ts";
 import type { ArtifactRef } from "@pi-kit/agent-types";
 
 export const DEFAULT_SCALE_MAX = 10;
@@ -31,7 +31,7 @@ export interface ReviewRequest {
 }
 
 export interface ReviewResult {
-  /** lykkja-shaped: score + weakness per criterion. */
+  /** pdca-shaped: score + weakness per criterion. */
   scores: CriterionScore[];
   /** True only when every criterion met its threshold. */
   passed: boolean;

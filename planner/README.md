@@ -25,12 +25,12 @@ Each task carries:
 - `dependsOn` — task ids; `plan_create` validates uniqueness, rejects
   dangling references, self-dependencies, and cycles;
 - `agent` — the fleet agent to execute it (default `implementer`);
-- `criteria` — acceptance criteria in lykkja's exact `Criterion` shape
-  (name + threshold), normalized with lykkja's own `normalizeCriteria`, so
-  every task's bar is by construction something lykkja and the critic can
+- `criteria` — acceptance criteria in pdca's exact `Criterion` shape
+  (name + threshold), normalized with pdca's own `normalizeCriteria`, so
+  every task's bar is by construction something pdca and the critic can
   score;
 - `covers` — optional goal-level criterion names (the exact names from the
-  lykkja goal loop) this task helps satisfy; `coverageByCriterion` and the
+  pdca goal loop) this task helps satisfy; `coverageByCriterion` and the
   `/plan` dashboard then report per-goal-criterion progress mechanically,
   and a goal criterion nothing covers is visible as a decomposition gap;
 - `status` — `pending → ready → running → review → done` (or `failed`) — and
@@ -61,9 +61,9 @@ pi -e /absolute/path/to/pi-kit/planner/index.ts \
    --skills /absolute/path/to/pi-kit/planner/skills
 ```
 
-Note: `plan.ts` imports lykkja's pure `loop.ts` (criteria shapes) via a
+Note: `plan.ts` imports pdca's pure `loop.ts` (criteria shapes) via a
 workspace-relative path. A standalone copy of `planner/` must keep the
-`lykkja/` folder alongside it or vendor `lykkja/loop.ts`.
+`pdca/` folder alongside it or vendor `pdca/loop.ts`.
 
 ## Configuration
 

@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import * as assert from "node:assert/strict";
-import { createLoop, recordCheckpoint } from "../lykkja/loop.ts";
+import { createLoop, recordCheckpoint } from "../pdca/loop.ts";
 import type { TaskResult } from "../fleet/runner.ts";
 import type { ReviewResult } from "../critic/review.ts";
 import {

@@ -6,12 +6,12 @@
 waves of concurrent sub-agents (**fleet**, using the shared **spawn** tooling
 for the actual child execution), gates every completed task behind
 an independent reviewer (**critic**), and drives the whole run inside a
-lykkja PDCA loop (**lykkja**) until an explicit, measurable bar is met — or
+PDCA loop (**pdca**) until an explicit, measurable bar is met — or
 stops honestly at a hard cap.
 
 The orchestrator owns *control flow only*. Planning intelligence lives in the
 model plus the planner skill; execution lives in fleet and spawn tooling;
-judgment lives in the critic; the stopping rule lives in lykkja.
+judgment lives in the critic; the stopping rule lives in pdca.
 
 For a deep dive into the internals — the goal loop, wave anatomy, the
 scheduler state machine, the critic gate, retries, merges, and failure
@@ -29,7 +29,7 @@ recovery, with diagrams — see
 
 ## How a run works
 
-1. **Goal loop** — the model opens a lykkja loop with goal-level criteria.
+1. **Goal loop** — the model opens a pdca loop with goal-level criteria.
    The orchestration run *is* that loop; every dispatch wave is one PDCA pass.
 2. **Plan** — the model decomposes the goal via `plan_create`
    (`plan-decomposition` skill), assigning each task an agent, criteria, and
@@ -50,7 +50,7 @@ recovery, with diagrams — see
    is configured, the model merges the passed branches and calls
    `orchestrate_verify`; a failed gate is CHECK evidence and a plan-repair
    trigger, exactly like a failed review.
-7. **Checkpoint** — after each wave the model calls `lykkja_checkpoint` with
+7. **Checkpoint** — after each wave the model calls `pdca_checkpoint` with
    critic-derived goal scores (plus the integration-gate verdict and the
    per-goal-criterion coverage from the wave report). `ITERATING` → next wave
    (or plan repair via `plan_update`); `FINAL` → done; `STOPPED` → honest
@@ -77,11 +77,11 @@ merged back — serially, in DAG order, by the orchestrating session.
 
 The orchestrator imports only pure cores across packages —
 `planner/plan.ts`, `fleet/registry.ts` + `runner.ts`, `critic/review.ts`,
-`lykkja/loop.ts` — plus the `fleet/host.ts` discovery/spawn-tooling helpers;
+`pdca/loop.ts` — plus the `fleet/host.ts` discovery/spawn-tooling helpers;
 never another extension's `index.ts`. Plan updates flow back to the planner
-extension via the shared event bus (`planner:set_plan`), and lykkja/planner
+extension via the shared event bus (`planner:set_plan`), and pdca/planner
 tools are composed at the model level. `/orchestrate` checks that the
-`lykkja_*` and `plan_*` tools are installed and reports what is missing
+`pdca_*` and `plan_*` tools are installed and reports what is missing
 instead of failing mid-run.
 
 ## Installation
@@ -90,19 +90,19 @@ instead of failing mid-run.
 pi install https://github.com/ulvestuen/pi-kit
 ```
 
-installs all four extensions plus lykkja. For a quick test with everything
+installs all four extensions plus pdca. For a quick test with everything
 loaded:
 
 ```bash
 git clone https://github.com/ulvestuen/pi-kit.git
 cd pi-kit && npm install
-pi -e lykkja/index.ts -e fleet/index.ts -e planner/index.ts \
+pi -e pdca/index.ts -e fleet/index.ts -e planner/index.ts \
    -e critic/index.ts -e orchestrator/index.ts \
-   --skills lykkja/skills --skills planner/skills \
+   --skills pdca/skills --skills planner/skills \
    --skills critic/skills --skills orchestrator/skills
 ```
 
-A standalone copy of `orchestrator/` must keep the `lykkja/`, `fleet/`,
+A standalone copy of `orchestrator/` must keep the `pdca/`, `fleet/`,
 `planner/`, `critic/`, and `spawn/` folders alongside it (or vendor their
 relevant pure cores/adapters).
 
@@ -150,7 +150,7 @@ npm test
 The scheduler state machine (wave composition, retry-with-feedback,
 `blocked`/`complete` terminals) and a scripted end-to-end simulation — a fake
 runner and fake critic driving a 5-task DAG through timeouts and a failed
-review to plan completion and a lykkja `FINAL` — are covered by pure unit
+review to plan completion and a pdca `FINAL` — are covered by pure unit
 tests.
 
 ## Files

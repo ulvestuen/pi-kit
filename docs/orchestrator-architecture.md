@@ -1,7 +1,7 @@
 # Orchestrator architecture — how a multi-agent run works
 
 This document explains the internals of [`orchestrator/`](../orchestrator/):
-how `/orchestrate` composes the planner, fleet, critic, and lykkja extensions
+how `/orchestrate` composes the planner, fleet, critic, and pdca extensions
 into one self-driving run, what happens inside a dispatch wave, how the
 scheduler state machine decides what to do next, and how retries, reviews,
 merges, and failures behave. For installation and configuration, see the
@@ -14,7 +14,7 @@ the PDCA loop realize the Micro-V'ave execution model, see
 
 The one-sentence version: **`/orchestrate <goal>` plans the goal as a task
 DAG, dispatches waves of concurrent sub-agents, gates every completed task
-behind an independent critic review, and drives the whole run inside a lykkja
+behind an independent critic review, and drives the whole run inside a pdca
 PDCA loop until an explicit, measurable bar is met — or stops honestly at a
 hard cap.**
 
@@ -43,8 +43,8 @@ the extension that owns it:
 
 | Concern | Owner | Mechanism |
 |---|---|---|
-| Stopping rule, iteration cap | **lykkja** | The run *is* one lykkja PDCA loop; `lykkja_checkpoint` verdicts decide continue-vs-stop |
-| The plan as data | **planner** | Validated task DAG with per-task, lykkja-shaped acceptance criteria |
+| Stopping rule, iteration cap | **pdca** | The run *is* one PDCA loop; `pdca_checkpoint` verdicts decide continue-vs-stop |
+| The plan as data | **planner** | Validated task DAG with per-task, pdca-shaped acceptance criteria |
 | Execution | **fleet + spawn** | Waves of concurrent sub-agents via fleet's runner, with labeled child execution delegated to spawn backends |
 | Judgment on results | **critic** | Fresh-context review of every completed task against its own criteria |
 | Wave/retry/terminal mechanics | **orchestrator** | `scheduler.ts`, a pure deterministic state machine |
@@ -71,7 +71,7 @@ flowchart TB
         runner["fleet/runner.ts<br/>runTasks"]
         registry["fleet/registry.ts<br/>getAgent"]
         review["critic/review.ts<br/>buildCriticPrompt, parseCriticOutput"]
-        loop["lykkja/loop.ts<br/>criteria/score vocabulary"]
+        loop["pdca/loop.ts<br/>criteria/score vocabulary"]
     end
 
     host["fleet/host.ts<br/>agent discovery,<br/>worktree root, transcript saver,<br/>spawn-tooling adapter"]
@@ -90,7 +90,7 @@ flowchart TB
     subgraph runtime["Runtime coupling (loose)"]
         bus["pi.events bus<br/>planner:set_plan,<br/>orchestrator:wave_start/end, fleet:*"]
         entries["session entry log<br/>planner-state (the plan),<br/>orchestrator-state (wave, stopped)"]
-        tools["model-level composition<br/>lykkja_start, lykkja_checkpoint,<br/>plan_create, plan_update"]
+        tools["model-level composition<br/>pdca_start, pdca_checkpoint,<br/>plan_create, plan_update"]
     end
 
     idx <--> bus
@@ -104,10 +104,10 @@ Three coupling rules follow from this picture:
    plan from the `planner-state` session entries and hands every mutation
    back to the planner extension by emitting `planner:set_plan` — so `/plan`
    dashboards, persistence, and planner events keep working untouched.
-2. **lykkja and planner tools are composed at the model level.** The
-   orchestrator never calls `lykkja_start` or `plan_create` itself; it
+2. **pdca and planner tools are composed at the model level.** The
+   orchestrator never calls `pdca_start` or `plan_create` itself; it
    instructs the model to. `/orchestrate` verifies up front that
-   `lykkja_start`, `lykkja_checkpoint`, `plan_create`, and `plan_update` are
+   `pdca_start`, `pdca_checkpoint`, `plan_create`, and `plan_update` are
    registered, and reports what is missing instead of failing mid-run.
 3. **Reviews ride the same runner as implementation tasks.** The critic is
    just another fleet agent definition dispatched through `runTasks` — same
@@ -125,7 +125,7 @@ sequenceDiagram
     autonumber
     participant U as User
     participant M as Model (orchestrating session)
-    participant L as lykkja
+    participant L as pdca
     participant P as planner
     participant O as orchestrate_step
     participant F as fleet runner
@@ -134,7 +134,7 @@ sequenceDiagram
     U->>M: /orchestrate (goal)
     Note over M: dependency check passed —<br/>run prompt injected
 
-    M->>L: lykkja_start(goal, goal-level criteria)
+    M->>L: pdca_start(goal, goal-level criteria)
     Note over M,L: strict criteria: "all plan tasks done",<br/>"end-to-end verification passes", goal-specific bars
 
     M->>P: plan_create(goal, task DAG)
@@ -149,7 +149,7 @@ sequenceDiagram
         C-->>O: ReviewResult (scores, pass/fail, weaknesses)
         O->>O: applyTaskResult / applyReview<br/>(retries with critic feedback)
         O-->>M: wave report + AUTOMATED NEXT STEP
-        M->>L: lykkja_checkpoint(scores from critic evidence)
+        M->>L: pdca_checkpoint(scores from critic evidence)
         L-->>M: verdict: ITERATING | FINAL | STOPPED
         opt tasks failed and verdict is ITERATING
             M->>P: plan_update — follow-up tasks or explicit descoping
@@ -161,19 +161,19 @@ sequenceDiagram
 
 ## The outer PDCA loop
 
-The run is one lykkja loop; every dispatch wave is one Plan-Do-Check-Act
+The run is one pdca loop; every dispatch wave is one Plan-Do-Check-Act
 pass. The model supplies judgment at exactly two points — checkpoint scoring
-and plan repair — and the lykkja verdict is the only thing that ends the run:
+and plan repair — and the pdca verdict is the only thing that ends the run:
 
 ```mermaid
 flowchart TB
-    start(["/orchestrate &lt;goal&gt;"]) --> deps{"lykkja_* and plan_*<br/>tools installed?"}
+    start(["/orchestrate &lt;goal&gt;"]) --> deps{"pdca_* and plan_*<br/>tools installed?"}
     deps -- no --> missing["report missing dependencies, abort"]
-    deps -- yes --> open["lykkja_start:<br/>goal + strict goal-level criteria"]
+    deps -- yes --> open["pdca_start:<br/>goal + strict goal-level criteria"]
     open --> plan["plan_create:<br/>task DAG with per-task criteria"]
     plan --> step["orchestrate_step<br/>(one dispatch wave — see below)"]
-    step --> cp["lykkja_checkpoint:<br/>score every goal criterion honestly<br/>from the critic verdicts in the wave report"]
-    cp --> verdict{"lykkja verdict"}
+    step --> cp["pdca_checkpoint:<br/>score every goal criterion honestly<br/>from the critic verdicts in the wave report"]
+    cp --> verdict{"pdca verdict"}
     verdict -- "ITERATING<br/>(criteria below threshold,<br/>iterations remain)" --> repair{"failed tasks<br/>in the plan?"}
     repair -- yes --> pu["plan_update:<br/>append follow-up tasks targeting<br/>recorded weaknesses, or descope explicitly"]
     repair -- no --> step
@@ -183,7 +183,7 @@ flowchart TB
     verdict -- "STOPPED<br/>(maxIterations runaway guard)" --> honest(["honest failure report:<br/>which criteria still fail, per-task state;<br/>nothing silently discarded"])
 ```
 
-Defaults that shape the loop (from lykkja): criteria are scored 0–10 with a
+Defaults that shape the loop (from pdca): criteria are scored 0–10 with a
 pass threshold of 8, and the loop hard-stops after 25 passes. The skill's
 standing orders to the model: *the critic's verdicts are the CHECK — never
 your own optimism* — and *do not implement plan tasks yourself; sub-agents do
@@ -205,7 +205,7 @@ flowchart TB
     noplan -- no --> err["error: create one with plan_create first"]
     noplan -- yes --> decide["nextActions(plan, policy)"]
     decide --> term{"terminal?"}
-    term -- complete --> rc["report: all tasks done<br/>NEXT STEP: merge branches, run end-to-end<br/>verification, lykkja_checkpoint"]
+    term -- complete --> rc["report: all tasks done<br/>NEXT STEP: merge branches, run end-to-end<br/>verification, pdca_checkpoint"]
     term -- blocked --> rb["report: failed tasks + what they block<br/>NEXT STEP: checkpoint, then plan_update<br/>repair, then orchestrate_step again"]
     term -- running --> wave["wave counter += 1 (persisted)<br/>emit orchestrator:wave_start"]
 
@@ -299,7 +299,7 @@ something the scheduler does silently.
 ## The critic gate
 
 Every completed task is scored by an independent, fresh-context critic
-against *that task's own* acceptance criteria — the same lykkja-shaped
+against *that task's own* acceptance criteria — the same pdca-shaped
 criteria the planner attached at decomposition time.
 
 Before the critic is dispatched, an execution-capable **evidence agent**
@@ -336,7 +336,7 @@ Properties by construction:
   "unscorable output" weakness.
 - **The rubric is the task's contract.** Criteria written at planning time
   are exactly what gets scored — one shared vocabulary
-  (lykkja's `Criterion`/`CriterionScore`) from plan to review to checkpoint.
+  (pdca's `Criterion`/`CriterionScore`) from plan to review to checkpoint.
 
 ## The integration gate: `orchestrate_verify`
 
@@ -366,11 +366,11 @@ Two more left-leg safeguards run before any wave is dispatched:
 ## Self-prompting: why the run never stalls
 
 Between `/orchestrate <goal>` and the final summary, no user turns are
-needed. The mechanism is the same one lykkja uses: **every tool result ends
+needed. The mechanism is the same one pdca uses: **every tool result ends
 with an explicit AUTOMATED NEXT STEP** telling the model exactly what to call
 next —
 
-- a normal wave report → "call `lykkja_checkpoint` now, scoring from the
+- a normal wave report → "call `pdca_checkpoint` now, scoring from the
   critic verdicts above; on ITERATING call `orchestrate_step` again (repair
   the plan first if tasks failed); on FINAL merge and summarize; on STOPPED
   report honestly";
@@ -423,7 +423,7 @@ discarded:
 | Partial wave failure | Completed tasks still proceed to review; the DAG holds back dependents of failed tasks; `blocked` surfaces the blockers for plan repair |
 | Critic output unparseable | One automatic re-run, then a failed review with an "unscorable output" weakness |
 | Critic vs. sub-agent disagreement | The critic wins by construction — it is the only source of CHECK scores |
-| lykkja `STOPPED` (25-pass cap) | Hard stop with a per-criterion, per-task failure report and any unmerged branches listed |
+| pdca `STOPPED` (25-pass cap) | Hard stop with a per-criterion, per-task failure report and any unmerged branches listed |
 | `/orchestrate stop` | The next `orchestrate_step` reports the stop instead of dispatching |
 | Session restart mid-run | See below — the next `orchestrate_step` resumes idempotently |
 | User abort (`ctx.signal`) | The runner aborts queued tasks and asks the spawn adapter to kill/stamp running spawn jobs; state entries record it |
@@ -451,7 +451,7 @@ path.
 - **`/orchestrate status`** (or bare `/orchestrate`) prints the wave counter,
   policy (concurrency, attempts, isolation), selected spawn backend / tmux
   session, plan progress, and a dependency check for the required
-  lykkja/planner tools.
+  pdca/planner tools.
 - **`/orchestrate stop`** sets a persisted `stopped` flag. It does not kill
   anything mid-flight: the *next* `orchestrate_step` call reports the stop
   instead of dispatching, and instructs the model to summarize the plan state

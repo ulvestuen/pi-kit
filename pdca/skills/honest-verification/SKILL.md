@@ -1,6 +1,6 @@
 ---
 name: honest-verification
-description: Score work brutally honestly during the CHECK step of a lykkja loop. Use when verifying or self-assessing output against success criteria, scoring 1-10, or deciding whether work truly meets the bar versus only appearing to.
+description: Score work brutally honestly during the CHECK step of a pdca loop. Use when verifying or self-assessing output against success criteria, scoring 1-10, or deciding whether work truly meets the bar versus only appearing to.
 ---
 
 # Honest verification
@@ -41,7 +41,7 @@ what is missing."
 
 For every criterion below its threshold, write one concrete sentence of what is
 still weak — the specific gap, not a restatement of the criterion. Pass this as
-`weakness` in `lykkja_checkpoint`. "Validation is weak" is useless; "rejects
+`weakness` in `pdca_checkpoint`. "Validation is weak" is useless; "rejects
 negative numbers but silently accepts NaN" tells the next pass exactly what to
 fix.
 
@@ -72,6 +72,6 @@ the weakness, not for reaching FINAL quickly.
 
 ## Then act
 
-Feed the honest scores into `lykkja_checkpoint`. Trust its ACT verdict: if it
+Feed the honest scores into `pdca_checkpoint`. Trust its ACT verdict: if it
 says ITERATING, the bar is genuinely not met — fix the weakest criterion it
 names and loop again. See the `pdca-loop` skill for the full cycle.

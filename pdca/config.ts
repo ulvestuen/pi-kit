@@ -8,17 +8,17 @@ import {
 } from "./loop.ts";
 
 /**
- * lykkja configuration. All fields are optional and have sensible defaults,
+ * pdca configuration. All fields are optional and have sensible defaults,
  * so the extension works with zero configuration.
  */
-export interface LykkjaConfig {
+export interface PdcaConfig {
   /** Default minimum score a criterion needs to pass. */
   passThreshold: number;
   /** Top of the scoring scale (scores run 1..scaleMax). */
   scaleMax: number;
   /** Safety cap on the number of loop passes before the loop self-stops. */
   maxIterations: number;
-  /** Whether to inject the lykkja discipline into the system prompt. */
+  /** Whether to inject the pdca discipline into the system prompt. */
   injectSystemPrompt: boolean;
   /** Whether to surface the loop status in the footer/status bar. */
   showStatus: boolean;
@@ -26,7 +26,7 @@ export interface LykkjaConfig {
   configPath?: string;
 }
 
-interface RawLykkjaConfig {
+interface RawPdcaConfig {
   passThreshold?: number | string;
   scaleMax?: number | string;
   maxIterations?: number | string;
@@ -42,8 +42,8 @@ function getDefaultPiAgentDir(): string {
 
 export function getConfigPath(): string {
   return (
-    process.env.LYKKJA_CONFIG_PATH ||
-    path.join(getDefaultPiAgentDir(), "extensions", "lykkja", "lykkja.json")
+    process.env.PDCA_CONFIG_PATH ||
+    path.join(getDefaultPiAgentDir(), "extensions", "pdca", "pdca.json")
   );
 }
 
@@ -72,27 +72,27 @@ function parseBoolean(
   return fallback;
 }
 
-function loadRawConfig(): { raw: RawLykkjaConfig; configPath?: string } {
+function loadRawConfig(): { raw: RawPdcaConfig; configPath?: string } {
   const configPath = getConfigPath();
   if (existsSync(configPath)) {
     const parsed = JSON.parse(readFileSync(configPath, "utf8"));
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error(`lykkja config ${configPath} must contain a JSON object`);
+      throw new Error(`pdca config ${configPath} must contain a JSON object`);
     }
-    return { raw: parsed as RawLykkjaConfig, configPath };
+    return { raw: parsed as RawPdcaConfig, configPath };
   }
   return {
     raw: {
-      passThreshold: process.env.LYKKJA_PASS_THRESHOLD,
-      scaleMax: process.env.LYKKJA_SCALE_MAX,
-      maxIterations: process.env.LYKKJA_MAX_ITERATIONS,
-      injectSystemPrompt: process.env.LYKKJA_INJECT_SYSTEM_PROMPT,
-      showStatus: process.env.LYKKJA_SHOW_STATUS,
+      passThreshold: process.env.PDCA_PASS_THRESHOLD,
+      scaleMax: process.env.PDCA_SCALE_MAX,
+      maxIterations: process.env.PDCA_MAX_ITERATIONS,
+      injectSystemPrompt: process.env.PDCA_INJECT_SYSTEM_PROMPT,
+      showStatus: process.env.PDCA_SHOW_STATUS,
     },
   };
 }
 
-export function loadConfig(): LykkjaConfig {
+export function loadConfig(): PdcaConfig {
   const { raw, configPath } = loadRawConfig();
 
   const scaleMax = parseNumber(raw.scaleMax, DEFAULT_SCALE_MAX, "scaleMax");

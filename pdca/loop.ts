@@ -1,5 +1,5 @@
 /**
- * lykkja loop engine — pure, dependency-free state model for a
+ * pdca loop engine — pure, dependency-free state model for a
  * Plan-Do-Check-Act self-checking loop.
  *
  * This module has no pi or Node dependencies so it can be unit tested in
@@ -398,15 +398,15 @@ export function summarizeLoop(state: LoopState): LoopSummary {
 export function statusLine(state: LoopState): string {
   const s = summarizeLoop(state);
   if (s.status === "final") {
-    return `lykkja: FINAL after ${s.iterationCount} pass${s.iterationCount === 1 ? "" : "es"}`;
+    return `pdca: FINAL after ${s.iterationCount} pass${s.iterationCount === 1 ? "" : "es"}`;
   }
   if (s.status === "stopped") {
-    return `lykkja: stopped at safety limit (${s.iterationCount}/${s.maxIterations})`;
+    return `pdca: stopped at safety limit (${s.iterationCount}/${s.maxIterations})`;
   }
   if (!s.latest) {
-    return `lykkja: pass 1 — plan the first step`;
+    return `pdca: pass 1 — plan the first step`;
   }
   return s.weakest
-    ? `lykkja: pass ${s.iterationCount + 1} — fix "${s.weakest}"`
-    : `lykkja: pass ${s.iterationCount + 1}`;
+    ? `pdca: pass ${s.iterationCount + 1} — fix "${s.weakest}"`
+    : `pdca: pass ${s.iterationCount + 1}`;
 }

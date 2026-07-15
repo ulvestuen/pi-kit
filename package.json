@@ -9,7 +9,7 @@
   "workspaces": [
     "agent-types",
     "threema",
-    "lykkja",
+    "pdca",
     "exa",
     "kagi",
     "fleet",
@@ -25,7 +25,7 @@
   "pi": {
     "extensions": [
       "./threema",
-      "./lykkja",
+      "./pdca",
       "./exa",
       "./kagi",
       "./fleet",
@@ -35,7 +35,7 @@
       "./spawn"
     ],
     "skills": [
-      "./lykkja/skills",
+      "./pdca/skills",
       "./planner/skills",
       "./critic/skills",
       "./orchestrator/skills"

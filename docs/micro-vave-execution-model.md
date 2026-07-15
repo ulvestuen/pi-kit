@@ -3,7 +3,7 @@
 This document links the pi-kit multi-agent stack — task orchestration
 ([`orchestrator/`](../orchestrator/) + [`planner/`](../planner/)), sub-agent
 spawning ([`fleet/`](../fleet/) + [`spawn/`](../spawn/)), and PDCA looping
-([`lykkja/`](../lykkja/) + [`critic/`](../critic/)) — to the **Micro-V'ave
+([`pdca/`](../pdca/) + [`critic/`](../critic/)) — to the **Micro-V'ave
 execution model**
 ([Excalidraw board](https://link.excalidraw.com/l/5vpHZkNnyYu/8NTS5XyN6Lo),
 the source of truth for the model itself).
@@ -56,12 +56,12 @@ pi-kit implements both properties by construction, as shown below.
 Each task dispatched by the orchestrator is one micro-V. The left leg is
 built by the orchestrating session at planning time; the vertex is a spawned
 sub-agent; the right leg ascends through the critic gate, DAG-order merges,
-end-to-end verification, and the lykkja checkpoint.
+end-to-end verification, and the pdca checkpoint.
 
 ```mermaid
 flowchart TB
     subgraph left["Left leg — specify (write the contracts)"]
-        sr["Stakeholder Requirements<br/><em>the /orchestrate goal +<br/>lykkja_start goal-level criteria</em>"]
+        sr["Stakeholder Requirements<br/><em>the /orchestrate goal +<br/>pdca_start goal-level criteria</em>"]
         sys["System Requirements<br/><em>goal decomposed by plan_create:<br/>what the task DAG must add up to</em>"]
         hld["High-Level Design<br/><em>the task DAG: tasks, agents,<br/>dependsOn edges, file scopes</em>"]
         dd["Detailed Design<br/><em>the self-contained task brief:<br/>goal context + description +<br/>acceptance criteria with thresholds</em>"]
@@ -73,7 +73,7 @@ flowchart TB
         ut["Unit Testing<br/><em>evidence agent re-runs the task's checks,<br/>then the critic gate scores the task against<br/>its own criteria from that executed evidence</em>"]
         it["Integration Testing<br/><em>serial merges of reviewed-passing branches<br/>in DAG order, then the orchestrate_verify<br/>integration gate runs the configured check</em>"]
         st["System Testing<br/><em>goal-level end-to-end verification<br/>after the plan completes</em>"]
-        at["Acceptance Testing<br/><em>lykkja_checkpoint: every goal criterion<br/>scored from critic evidence → verdict</em>"]
+        at["Acceptance Testing<br/><em>pdca_checkpoint: every goal criterion<br/>scored from critic evidence → verdict</em>"]
     end
 
     sr --> sys --> hld --> dd --> impl
@@ -89,15 +89,15 @@ The pairing of levels is exact, not decorative:
 
 | V level (down) | Written by | V level (up) | Checked by |
 |---|---|---|---|
-| Stakeholder Requirements — the goal and its strict, measurable bar | `lykkja_start` (goal-level criteria) | Acceptance Testing | `lykkja_checkpoint` — every criterion scored honestly from critic verdicts; only `FINAL` ends the run |
+| Stakeholder Requirements — the goal and its strict, measurable bar | `pdca_start` (goal-level criteria) | Acceptance Testing | `pdca_checkpoint` — every criterion scored honestly from critic verdicts; only `FINAL` ends the run |
 | System Requirements — what the decomposition must add up to | `plan_create` (the plan as data), with per-task `covers` tags tracing goal criteria into the DAG | System Testing | goal-level end-to-end verification, required before the final checkpoint; per-criterion coverage read off the plan |
 | High-Level Design — the task DAG and its dependency/merge order | planner DAG (`dependsOn`, per-task file scopes), verified up front by the `critic_advise` plan review gate | Integration Testing | serial DAG-order merges of passed branches, then the `orchestrate_verify` integration gate runs the configured check on the merged tree; a conflict or a failed gate is a recorded review failure |
 | Detailed Design — one task's brief and acceptance criteria | per-task criteria attached at decomposition time | Unit Testing | the evidence agent independently re-runs the task's verification commands, then the critic gate reviews against *that task's own* criteria from the executed evidence |
 | Software Implementation | fleet + spawn sub-agent | — the vertex — | the sub-agent's self-report is informational only; it can never pass its own work |
 
-One shared vocabulary holds the two legs together: lykkja's
-`Criterion`/`CriterionScore` types are used from `lykkja_start` through
-`plan_create` to `buildCriticPrompt` and back into `lykkja_checkpoint` — the
+One shared vocabulary holds the two legs together: pdca's
+`Criterion`/`CriterionScore` types are used from `pdca_start` through
+`plan_create` to `buildCriticPrompt` and back into `pdca_checkpoint` — the
 contract written on the way down is *literally the same object* scored on the
 way up.
 
@@ -108,8 +108,8 @@ and a **granularity** axis (stacked Vs behind each other). Both axes have a
 direct owner in pi-kit:
 
 - **Time axis = the outer PDCA loop.** Each `orchestrate_step` call is one
-  dispatch wave and one Plan-Do-Check-Act pass of the single lykkja loop
-  that *is* the run. Waves repeat until the lykkja verdict is `FINAL`
+  dispatch wave and one Plan-Do-Check-Act pass of the single pdca loop
+  that *is* the run. Waves repeat until the pdca verdict is `FINAL`
   (every goal criterion at threshold) or `STOPPED` (the honesty-preserving
   iteration cap).
 - **Granularity axis = the concurrent ready set.** Within a wave, the pure
@@ -135,7 +135,7 @@ flowchart LR
         direction TB
         v3a["micro-V: …"]
     end
-    w1 -- "lykkja_checkpoint<br/>ITERATING" --> w2
+    w1 -- "pdca_checkpoint<br/>ITERATING" --> w2
     w2 -- "ITERATING<br/>(+ plan_update repair)" --> w3
     w3 -- "FINAL" --> done["merge remaining passed branches,<br/>end-to-end verification, summary"]
 ```
@@ -187,12 +187,12 @@ engine that advances the V'ave. One wave maps phase by phase:
   selected spawn backend, concurrently.
 - **CHECK** — ascend the right leg: critic verdicts per task (never the
   sub-agent's own optimism), merges, end-to-end verification.
-- **ACT** — `lykkja_checkpoint` scores the goal criteria from that evidence
+- **ACT** — `pdca_checkpoint` scores the goal criteria from that evidence
   and its verdict selects what happens next: `ITERATING` starts the next
   wave, `FINAL` closes the run at the acceptance level, `STOPPED` reports
   honestly which contracts are still unmet.
 
-The lykkja rules ("the critic's verdicts are the CHECK — never your own
+The pdca rules ("the critic's verdicts are the CHECK — never your own
 optimism", "no soft passes", the 25-pass cap) are what keep the right leg of
 every micro-V honest; without them the V'ave degenerates into open-loop
 iteration.
@@ -201,7 +201,7 @@ iteration.
 
 | Micro-V'ave concept | pi-kit owner | Where |
 |---|---|---|
-| Goal + acceptance contract | lykkja | `lykkja_start`, goal-level criteria |
+| Goal + acceptance contract | pdca | `pdca_start`, goal-level criteria |
 | Scope slicing | planner | `plan_create`, `plan-decomposition` skill |
 | Micro-V left leg (design → brief) | orchestrator + planner | `orchestrate_step` brief building, per-task criteria |
 | Vertex (implementation) | fleet + spawn | `runTasks`, spawn backends, worktree isolation |
@@ -209,8 +209,8 @@ iteration.
 | Integration Testing | orchestrator | serial DAG-order merges of passed branches + the `orchestrate_verify` gate (`integrationCheck`) |
 | Design review (left-leg verification) | critic | the `critic_advise` plan review gate before the first wave |
 | Goal-criterion traceability | planner | per-task `covers` tags, `coverageByCriterion`, coverage in every wave report |
-| System + Acceptance Testing | lykkja | end-to-end verification + `lykkja_checkpoint` verdict |
-| Time axis (waves) | orchestrator + lykkja | one PDCA pass per `orchestrate_step`, verdict-driven |
+| System + Acceptance Testing | pdca | end-to-end verification + `pdca_checkpoint` verdict |
+| Time axis (waves) | orchestrator + pdca | one PDCA pass per `orchestrate_step`, verdict-driven |
 | Granularity axis (parallel stack) | fleet | concurrency pool, `maxConcurrent`, isolation |
 | Dashed verify-back edges (retries) | orchestrator scheduler | `applyTaskResult` / `applyReview` retry-with-feedback |
 | Product output chunks | orchestrator | merged, critic-passed branches per wave |

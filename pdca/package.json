@@ -1,7 +1,7 @@
 {
-  "name": "pi-lykkja",
+  "name": "pi-pdca",
   "version": "1.0.0",
-  "description": "Loop-based agentic development framework for the pi coding agent — a Plan-Do-Check-Act self-checking loop with tools, skills, and a single /lykkja command",
+  "description": "Loop-based agentic development framework for the pi coding agent — a Plan-Do-Check-Act self-checking loop with tools, skills, and a single /pdca command",
   "type": "module",
   "scripts": {
     "test": "tsx --test test.ts"

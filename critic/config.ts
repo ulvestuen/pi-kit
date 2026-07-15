@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { DEFAULT_PASS_THRESHOLD } from "../lykkja/loop.ts";
+import { DEFAULT_PASS_THRESHOLD } from "../pdca/loop.ts";
 import { DEFAULT_TMUX_SESSION, type TmuxSettings } from "../fleet/tmux.ts";
 import { DEFAULT_SCALE_MAX } from "./review.ts";
 
