@@ -52,7 +52,7 @@ describe("createPlan", () => {
     assert.strictEqual(plan.createdAt, 1000);
   });
 
-  it("normalizes criteria with lykkja semantics", () => {
+  it("normalizes criteria with pdca semantics", () => {
     const plan = createPlan("g", [
       task("t1", { criteria: ["a", { name: "b", threshold: 9 }] }),
     ]);

@@ -105,7 +105,7 @@ const TASK_INPUT_SCHEMA = Type.Object({
   covers: Type.Optional(
     Type.Array(Type.String(), {
       description:
-        "Goal-level criterion names this task helps satisfy — the exact names from the lykkja goal loop, so goal-criterion coverage can be traced through the plan.",
+        "Goal-level criterion names this task helps satisfy — the exact names from the pdca goal loop, so goal-criterion coverage can be traced through the plan.",
     }),
   ),
 });

@@ -16,7 +16,7 @@
   },
   "include": [
     "**/*.ts",
-    "../lykkja/loop.ts",
+    "../pdca/loop.ts",
     "../fleet/**/*.ts",
     "../planner/plan.ts",
     "../critic/review.ts"

@@ -1,11 +1,11 @@
 ---
 name: success-criteria
-description: Write strict, measurable success criteria for a lykkja loop (or any task with a quality bar). Use when starting a loop, defining "done", or turning a vague goal into criteria that can be scored honestly and objectively.
+description: Write strict, measurable success criteria for a pdca loop (or any task with a quality bar). Use when starting a loop, defining "done", or turning a vague goal into criteria that can be scored honestly and objectively.
 ---
 
 # Writing strict success criteria
 
-A lykkja loop is only as good as its criteria. Vague criteria let you declare
+A pdca loop is only as good as its criteria. Vague criteria let you declare
 victory early; strict, checkable criteria force the work to actually clear the
 bar. This skill is about turning "make it good" into a set of criteria you can
 score 1-10 without lying to yourself.
@@ -66,7 +66,7 @@ the cost of scoring it on every loop pass.
 
 ## Then start the loop
 
-Once you have your criteria, call `lykkja_start` with the task and the list.
+Once you have your criteria, call `pdca_start` with the task and the list.
 Provide a `threshold` on any criterion that should differ from the default bar.
 See the `pdca-loop` skill for running the loop and `honest-verification` for
 scoring each pass.

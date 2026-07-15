@@ -6,13 +6,13 @@ and scores it against an explicit rubric. It is part of the pi-kit
 multi-agent stack (see
 [`docs/multi-agent-orchestration.md`](../docs/multi-agent-orchestration.md))
 but is a useful "second pair of eyes" in any session — including as the CHECK
-step of a plain lykkja loop.
+step of a plain pdca loop.
 
 ## What you get
 
 | Kind        | Name              | What it does                                                          |
 | ----------- | ----------------- | ---------------------------------------------------------------------- |
-| **Tool**    | `critic_review`   | Score a subject against criteria with a fresh-context read-only critic sub-agent; returns lykkja-shaped scores, a pass/fail verdict, and prioritized weaknesses. |
+| **Tool**    | `critic_review`   | Score a subject against criteria with a fresh-context read-only critic sub-agent; returns pdca-shaped scores, a pass/fail verdict, and prioritized weaknesses. |
 | **Tool**    | `critic_advise`   | Pre-implementation design feedback — prioritized concerns rather than scores. |
 | **Command** | `/critic`         | Show the agent definition, model, scale, and timeout in use.           |
 | **Skill**   | `advisory-review` | When to seek review, how to hand the critic enough context, how to act on weaknesses. |
@@ -33,12 +33,12 @@ cannot be parsed is a failed review, never a silent pass** (one automatic
 re-run is attempted first). `passed` is true only when every criterion met
 its threshold; `weaknesses` is prioritized worst-margin-first.
 
-## Composing with lykkja
+## Composing with pdca
 
-The critic emits `CriterionScore[]` in lykkja's exact shape, so external
-review drops straight into `lykkja_checkpoint`: run `critic_review` as the
+The critic emits `CriterionScore[]` in pdca's exact shape, so external
+review drops straight into `pdca_checkpoint`: run `critic_review` as the
 CHECK step and feed the returned scores to the checkpoint — independent
-scoring instead of self-report, with lykkja's `honest-verification` skill as
+scoring instead of self-report, with pdca's `honest-verification` skill as
 the fallback when the critic isn't installed.
 
 ## Agent definition
@@ -63,10 +63,10 @@ pi -e /absolute/path/to/pi-kit/critic/index.ts \
    --skills /absolute/path/to/pi-kit/critic/skills
 ```
 
-Note: critic imports the pure engines `lykkja/loop.ts`, `fleet/registry.ts`,
+Note: critic imports the pure engines `pdca/loop.ts`, `fleet/registry.ts`,
 `fleet/runner.ts`, and the `fleet/host.ts` discovery/spawn-tooling helpers via
 workspace-relative paths. Because `fleet/host.ts` delegates child execution to
-spawn tooling, a standalone copy of `critic/` must keep the `lykkja/`,
+spawn tooling, a standalone copy of `critic/` must keep the `pdca/`,
 `fleet/`, and `spawn/` folders alongside it or vendor those files.
 
 ## Configuration

@@ -4,7 +4,7 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 import { defineTool } from "@mariozechner/pi-coding-agent";
 import { Type } from "@mariozechner/pi-ai";
-import { getConfigPath, loadConfig, type LykkjaConfig } from "./config.ts";
+import { getConfigPath, loadConfig, type PdcaConfig } from "./config.ts";
 import {
   createLoop,
   recordCheckpoint,
@@ -14,24 +14,24 @@ import {
   type LoopState,
 } from "./loop.ts";
 
-const STATE_ENTRY_TYPE = "lykkja-state";
-const STATUS_KEY = "lykkja";
+const STATE_ENTRY_TYPE = "pdca-state";
+const STATUS_KEY = "pdca";
 
 /**
- * The lykkja discipline injected into the system prompt. Kept short on purpose:
+ * The pdca discipline injected into the system prompt. Kept short on purpose:
  * the detailed protocol lives in the `pdca-loop` skill, which the model can
  * pull in on demand.
  */
-function buildSystemPrompt(config: LykkjaConfig): string {
+function buildSystemPrompt(config: PdcaConfig): string {
   return [
-    "You have the lykkja loop framework for disciplined, loop-based work.",
-    "lykkja runs a Plan-Do-Check-Act self-checking loop until the work meets an explicit bar.",
+    "You have the pdca loop framework for disciplined, loop-based work.",
+    "pdca runs a Plan-Do-Check-Act self-checking loop until the work meets an explicit bar.",
     "",
     "When a task benefits from iteration to a quality bar (build/fix/refactor/write to a strict spec):",
-    `1. Call lykkja_start with the task and strict, measurable success criteria (default pass bar ${config.passThreshold}/${config.scaleMax}).`,
-    "2. Each pass: PLAN the single next step, DO the work, then call lykkja_checkpoint with that step, what changed, and an honest 1-" +
+    `1. Call pdca_start with the task and strict, measurable success criteria (default pass bar ${config.passThreshold}/${config.scaleMax}).`,
+    "2. Each pass: PLAN the single next step, DO the work, then call pdca_checkpoint with that step, what changed, and an honest 1-" +
       `${config.scaleMax} score for every criterion.`,
-    "3. lykkja_checkpoint returns the ACT verdict and an explicit next-step prompt. Follow that prompt immediately: iterate on the weakest criterion, finalize on FINAL, or report failure on STOPPED.",
+    "3. pdca_checkpoint returns the ACT verdict and an explicit next-step prompt. Follow that prompt immediately: iterate on the weakest criterion, finalize on FINAL, or report failure on STOPPED.",
     "4. Do not wait for the user between PDCA phases unless the user explicitly asked for a pause; the tool output prompts the next phase.",
     "",
     "Score brutally honestly — never inflate to end the loop. For the full protocol, use the pdca-loop skill.",
@@ -73,7 +73,7 @@ function restoreState(ctx: ExtensionContext): LoopState | null {
 function renderDashboard(state: LoopState): string {
   const s = summarizeLoop(state);
   const lines = [
-    `lykkja loop — ${s.status.toUpperCase()}`,
+    `pdca loop — ${s.status.toUpperCase()}`,
     `  Task:       ${s.task}`,
     `  Pass bar:   ${s.passThreshold}/${s.scaleMax}`,
     `  Passes:     ${s.iterationCount}/${s.maxIterations}`,
@@ -133,7 +133,7 @@ function renderAutomationPrompt(state: LoopState): string {
       "DO: Execute that step using the available tools.",
       "CHECK: Gather concrete evidence and score every criterion honestly:",
       criteria,
-      "ACT: Call lykkja_checkpoint with the PLAN, DO summary, and all scores."
+      "ACT: Call pdca_checkpoint with the PLAN, DO summary, and all scores."
     ].join("\n");
   }
 
@@ -144,14 +144,14 @@ function renderAutomationPrompt(state: LoopState): string {
     "DO: Execute that step using the available tools.",
     "CHECK: Re-gather evidence and score every criterion honestly:",
     criteria,
-    "ACT: Call lykkja_checkpoint again. Continue until the tool returns FINAL or STOPPED."
+    "ACT: Call pdca_checkpoint again. Continue until the tool returns FINAL or STOPPED."
   ].join("\n");
 }
 
-/** Prompt sent by `/lykkja <task>` — open and run a loop end to end. */
+/** Prompt sent by `/pdca <task>` — open and run a loop end to end. */
 function buildRunPrompt(task: string): string {
   return [
-    "Run a **lykkja self-checking loop** on the following task until it meets the bar.",
+    "Run a **pdca self-checking loop** on the following task until it meets the bar.",
     "",
     "TASK:",
     task,
@@ -159,18 +159,18 @@ function buildRunPrompt(task: string): string {
     "Follow the `pdca-loop` skill. Concretely:",
     "",
     "1. Restate the task in one precise sentence. If it is ambiguous, make a sensible assumption, state it, and proceed — do not stop to ask.",
-    "2. Define strict, measurable success criteria (use the `success-criteria` skill). Then call `lykkja_start` with the task and those criteria.",
-    "3. Follow the AUTOMATED prompt returned by `lykkja_start` and every later `lykkja_checkpoint` result. Do not wait for another user message between PLAN, DO, CHECK, and ACT.",
+    "2. Define strict, measurable success criteria (use the `success-criteria` skill). Then call `pdca_start` with the task and those criteria.",
+    "3. Follow the AUTOMATED prompt returned by `pdca_start` and every later `pdca_checkpoint` result. Do not wait for another user message between PLAN, DO, CHECK, and ACT.",
     "4. Each pass, score every criterion honestly against real evidence (use the `honest-verification` skill). On ITERATING, immediately fix the weakest criterion named. Only stop when the tool returns FINAL — or, on STOPPED, report honestly which criteria still fail and why; do not claim success.",
     "",
     "Do not ask me questions mid-loop. Make sensible assumptions, note them, and keep going until FINAL.",
   ].join("\n");
 }
 
-/** Prompt sent by `/lykkja plan <task>` — PLAN only, then pause for review. */
+/** Prompt sent by `/pdca plan <task>` — PLAN only, then pause for review. */
 function buildPlanPrompt(task: string): string {
   return [
-    "Run only the **PLAN** step of a lykkja loop. I want to review the criteria before any work starts.",
+    "Run only the **PLAN** step of a pdca loop. I want to review the criteria before any work starts.",
     "",
     "TASK:",
     task,
@@ -180,16 +180,16 @@ function buildPlanPrompt(task: string): string {
     "1. State exactly what should be produced, in one precise sentence.",
     "2. Surface the key assumptions and constraints. Where something is ambiguous, choose a sensible default and note it rather than asking.",
     "3. Define **3-6 strict, measurable success criteria** following the `success-criteria` skill. For each, give a one-line reason it is checkable and a threshold (default 8/10; raise for must-not-regress properties).",
-    "4. Call `lykkja_start` with the task and criteria so the loop is opened, then STOP.",
+    "4. Call `pdca_start` with the task and criteria so the loop is opened, then STOP.",
     "",
-    "I am explicitly requesting planning only: do NOT follow the AUTOMATED prompt in the `lykkja_start` result. Wait — I will send `/lykkja go` when I want the loop to run.",
+    "I am explicitly requesting planning only: do NOT follow the AUTOMATED prompt in the `pdca_start` result. Wait — I will send `/pdca go` when I want the loop to run.",
   ].join("\n");
 }
 
-/** Prompt sent by `/lykkja go` — continue the active loop from its current state. */
+/** Prompt sent by `/pdca go` — continue the active loop from its current state. */
 function buildGoPrompt(state: LoopState): string {
   return [
-    "Continue the active lykkja loop now.",
+    "Continue the active pdca loop now.",
     "",
     renderDashboard(state),
     "",
@@ -200,13 +200,13 @@ function buildGoPrompt(state: LoopState): string {
 }
 
 export default function (pi: ExtensionAPI) {
-  let config: LykkjaConfig;
+  let config: PdcaConfig;
   try {
     config = loadConfig();
   } catch (e: any) {
-    console.error(`[lykkja] ${e.message}`);
+    console.error(`[pdca] ${e.message}`);
     console.error(
-      `[lykkja] Using defaults. Fix ${getConfigPath()} or the LYKKJA_* env vars, then /reload.`,
+      `[pdca] Using defaults. Fix ${getConfigPath()} or the PDCA_* env vars, then /reload.`,
     );
     config = {
       passThreshold: 8,
@@ -230,16 +230,16 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerTool(
     defineTool({
-      name: "lykkja_start",
-      label: "lykkja: Start Loop",
+      name: "pdca_start",
+      label: "pdca: Start Loop",
       description:
-        "Begin a lykkja Plan-Do-Check-Act self-checking loop. Define the task and strict, measurable success criteria. Use for work that should iterate to an explicit quality bar.",
+        "Begin a Plan-Do-Check-Act (PDCA) self-checking loop. Define the task and strict, measurable success criteria. Use for work that should iterate to an explicit quality bar.",
       promptSnippet:
-        "lykkja_start: open a self-checking loop with a task and strict success criteria.",
+        "pdca_start: open a self-checking loop with a task and strict success criteria.",
       promptGuidelines: [
-        "Use lykkja_start when a task should be driven to a strict, measurable bar rather than done in one shot.",
+        "Use pdca_start when a task should be driven to a strict, measurable bar rather than done in one shot.",
         "Write criteria that can be scored honestly: avoid vague goals like 'good code'; prefer 'all tests pass', 'no type errors', 'handles empty input'.",
-        "After lykkja_start returns, follow its AUTOMATED PLAN→DO→CHECK PROMPT immediately unless the user explicitly requested planning only.",
+        "After pdca_start returns, follow its AUTOMATED PLAN→DO→CHECK PROMPT immediately unless the user explicitly requested planning only.",
       ],
       parameters: Type.Object({
         task: Type.String({
@@ -282,7 +282,7 @@ export default function (pi: ExtensionAPI) {
         updateStatus(ctx);
 
         const text =
-          `lykkja loop started.\n\n${renderDashboard(loop)}\n\n` +
+          `pdca loop started.\n\n${renderDashboard(loop)}\n\n` +
           renderAutomationPrompt(loop);
         return {
           content: [{ type: "text" as const, text }],
@@ -294,14 +294,14 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerTool(
     defineTool({
-      name: "lykkja_checkpoint",
-      label: "lykkja: Checkpoint",
+      name: "pdca_checkpoint",
+      label: "pdca: Checkpoint",
       description:
-        "Record one full PLAN/DO/CHECK pass of the active lykkja loop and get the ACT verdict. Provide the single step taken, what changed, and an honest score for every criterion. Returns FINAL (stop) or ITERATING (fix the weakest criterion and loop again).",
+        "Record one full PLAN/DO/CHECK pass of the active pdca loop and get the ACT verdict. Provide the single step taken, what changed, and an honest score for every criterion. Returns FINAL (stop) or ITERATING (fix the weakest criterion and loop again).",
       promptSnippet:
-        "lykkja_checkpoint: score the current pass against the criteria and get the ACT verdict/prompt.",
+        "pdca_checkpoint: score the current pass against the criteria and get the ACT verdict/prompt.",
       promptGuidelines: [
-        "Call lykkja_checkpoint once per loop pass, after doing the work, scoring every criterion honestly on the 1..scale range.",
+        "Call pdca_checkpoint once per loop pass, after doing the work, scoring every criterion honestly on the 1..scale range.",
         "Follow the AUTOMATED prompt in the tool result: ITERATING means immediately start the next pass on the weakest criterion; FINAL means finalize; STOPPED means report failure honestly.",
         "Do not wait for an extra user prompt between PDCA phases unless the user explicitly requested a pause.",
       ],
@@ -333,7 +333,7 @@ export default function (pi: ExtensionAPI) {
       }),
       async execute(_id, params, _signal, _onUpdate, ctx) {
         if (!loop) {
-          throw new Error("No active lykkja loop. Call lykkja_start first.");
+          throw new Error("No active pdca loop. Call pdca_start first.");
         }
 
         const { decision } = recordCheckpoint(loop, {
@@ -365,9 +365,9 @@ export default function (pi: ExtensionAPI) {
     updateStatus(ctx);
   });
 
-  pi.registerCommand("lykkja", {
+  pi.registerCommand("pdca", {
     description:
-      "lykkja loop. Args: <task> run a loop, 'plan <task>' plan only, 'go' continue the loop, (none) dashboard, 'reset' clear.",
+      "pdca loop. Args: <task> run a loop, 'plan <task>' plan only, 'go' continue the loop, (none) dashboard, 'reset' clear.",
     getArgumentCompletions: (prefix) => {
       const subcommands = [
         { value: "plan ", label: "plan <task> — define criteria only, pause for review" },
@@ -382,16 +382,16 @@ export default function (pi: ExtensionAPI) {
       const firstWord = raw.split(/\s+/, 1)[0]?.toLowerCase() ?? "";
       const rest = raw.slice(firstWord.length).trim();
 
-      // Bare /lykkja — dashboard (or usage help when no loop exists).
+      // Bare /pdca — dashboard (or usage help when no loop exists).
       if (!raw || ((firstWord === "status" || firstWord === "dashboard") && !rest)) {
         if (!loop) {
           ctx.ui.notify(
             [
-              "No active lykkja loop.",
-              "  /lykkja <task>       run a self-checking loop end to end",
-              "  /lykkja plan <task>  define criteria only, pause for review",
-              "  /lykkja go           continue the active loop",
-              "  /lykkja reset        clear the loop",
+              "No active pdca loop.",
+              "  /pdca <task>       run a self-checking loop end to end",
+              "  /pdca plan <task>  define criteria only, pause for review",
+              "  /pdca go           continue the active loop",
+              "  /pdca reset        clear the loop",
             ].join("\n"),
             "info",
           );
@@ -405,15 +405,15 @@ export default function (pi: ExtensionAPI) {
         loop = null;
         pi.appendEntry(STATE_ENTRY_TYPE, { tombstone: true } as unknown as LoopState);
         updateStatus(ctx);
-        ctx.ui.notify("lykkja loop cleared.", "info");
+        ctx.ui.notify("pdca loop cleared.", "info");
         return;
       }
 
-      // /lykkja go — nudge the agent to run the next PDCA pass of the active loop.
+      // /pdca go — nudge the agent to run the next PDCA pass of the active loop.
       if ((firstWord === "go" || firstWord === "continue" || firstWord === "resume") && !rest) {
         if (!loop) {
           ctx.ui.notify(
-            "No active lykkja loop to continue. Start one with /lykkja <task>.",
+            "No active pdca loop to continue. Start one with /pdca <task>.",
             "info",
           );
           return;
@@ -422,13 +422,13 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      // /lykkja plan <task> — PLAN only: open the loop, then pause for review.
+      // /pdca plan <task> — PLAN only: open the loop, then pause for review.
       if (firstWord === "plan" && rest) {
         pi.sendUserMessage(buildPlanPrompt(rest));
         return;
       }
 
-      // /lykkja <task> — open and run a loop end to end.
+      // /pdca <task> — open and run a loop end to end.
       pi.sendUserMessage(buildRunPrompt(raw));
     },
   });

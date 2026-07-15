@@ -1,14 +1,14 @@
 ---
 name: pdca-loop
-description: Run the lykkja Plan-Do-Check-Act self-checking loop to drive a task to an explicit quality bar. Use when the work should be iterated to strict, measurable success criteria rather than produced in a single shot — building a feature to spec, fixing a flaky behaviour, refactoring to a standard, or writing something that must clear a checklist.
+description: Run the pdca extension's Plan-Do-Check-Act self-checking loop to drive a task to an explicit quality bar. Use when the work should be iterated to strict, measurable success criteria rather than produced in a single shot — building a feature to spec, fixing a flaky behaviour, refactoring to a standard, or writing something that must clear a checklist.
 ---
 
-# The lykkja loop (Plan-Do-Check-Act)
+# The pdca loop (Plan-Do-Check-Act)
 
-lykkja drives a task to a strict, explicit bar by looping. It combines the
+pdca drives a task to a strict, explicit bar by looping. It combines the
 Plan-Do-Check-Act cycle from systems engineering with a brutally honest
-self-scoring protocol. You run the loop yourself; the `lykkja_start` and
-`lykkja_checkpoint` tools keep the score and return the next automated prompt
+self-scoring protocol. You run the loop yourself; the `pdca_start` and
+`pdca_checkpoint` tools keep the score and return the next automated prompt
 for the following PDCA phase.
 
 ## When to use this
@@ -29,7 +29,7 @@ pays off when iteration and an explicit bar add value.
 ### 0. Open the loop
 
 State the task precisely, then choose strict success criteria. Call
-`lykkja_start` with the task and criteria. See the `success-criteria` skill for
+`pdca_start` with the task and criteria. See the `success-criteria` skill for
 how to write criteria that can be scored honestly. Default pass bar is 8/10;
 override per criterion when something must be stronger or is allowed to be
 weaker.
@@ -43,7 +43,7 @@ weaker.
 3. **CHECK** — Score the result on every criterion, 1 to 10, honestly. List
    exactly what is still weak for anything below its threshold. See the
    `honest-verification` skill.
-4. **ACT** — Call `lykkja_checkpoint` with the step (PLAN), what changed
+4. **ACT** — Call `pdca_checkpoint` with the step (PLAN), what changed
    (DO), and the scores (CHECK). The tool returns both the ACT verdict and an
    `AUTOMATED ... PROMPT`; follow that prompt immediately:
    - **FINAL** — every criterion met its threshold. Run ACT: state `FINAL`, say
@@ -71,14 +71,14 @@ weaker.
 
 Task: "Add a `parseDuration(str)` helper that turns `'1h30m'` into seconds."
 
-Criteria via `lykkja_start`:
+Criteria via `pdca_start`:
 - `parses compound units` (h/m/s combined), threshold 8
 - `rejects invalid input` with a clear error, threshold 8
 - `unit tests cover edge cases` (empty, zero, overflow), threshold 8
 
 - Pass 1 — PLAN: write a first version + happy-path tests. DO: regex parse,
   three tests. CHECK: parses compound 8, rejects invalid 4 (silently returns
-  NaN), tests 6 (no edge cases). `lykkja_checkpoint` → ITERATING, weakest
+  NaN), tests 6 (no edge cases). `pdca_checkpoint` → ITERATING, weakest
   "rejects invalid input".
 - Pass 2 — PLAN: fix invalid-input handling. DO: throw on unmatched input, add
   tests for it. CHECK: parses 8, rejects 8, tests 7 (still no overflow test).
@@ -90,6 +90,6 @@ Criteria via `lykkja_start`:
 
 - `success-criteria` — how to write strict, measurable criteria.
 - `honest-verification` — how to score 1-10 without fooling yourself.
-- `/lykkja <task>` — slash command that opens and runs a loop end to end;
-  `/lykkja plan <task>` plans only, `/lykkja go` continues the active loop, and
-  bare `/lykkja` shows the live dashboard.
+- `/pdca <task>` — slash command that opens and runs a loop end to end;
+  `/pdca plan <task>` plans only, `/pdca go` continues the active loop, and
+  bare `/pdca` shows the live dashboard.

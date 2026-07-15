@@ -7,11 +7,11 @@ This repository contains pi-related integrations and extensions.
 ### Core packages
 
 - [`agent-types/`](./agent-types/) – agent-native execution contracts (zero-dep types: `RunId`, `ArtifactRef`, `AgentTask`, `AgentResult`, `BackendCapabilities`, `KillResult`, `RunEvent`)
-- [`lykkja/`](./lykkja/) – loop-based agentic development framework for pi (a Plan-Do-Check-Act self-checking loop with tools, skills, and a single `/lykkja` command)
+- [`pdca/`](./pdca/) – loop-based agentic development framework for pi (a Plan-Do-Check-Act self-checking loop with tools, skills, and a single `/pdca` command)
 - [`fleet/`](./fleet/) – sub-agent runtime for pi (run concurrent child `pi` processes with per-agent role prompts, models, and tool restrictions; the `fleet_run` tool and `/fleet` command)
 - [`planner/`](./planner/) – plans as data for pi (a validated task DAG with per-task acceptance criteria; the `plan_create`/`plan_update` tools and `/plan` dashboard)
 - [`critic/`](./critic/) – independent advisor/reviewer for pi (fresh-context read-only review with the `critic_review`/`critic_advise` tools and `/critic` command)
-- [`orchestrator/`](./orchestrator/) – thin multi-agent composition layer for pi (`/orchestrate` drives planner + fleet + critic inside a lykkja loop)
+- [`orchestrator/`](./orchestrator/) – thin multi-agent composition layer for pi (`/orchestrate` drives planner + fleet + critic inside a pdca loop)
 - [`spawn/`](./spawn/) – detached sub-agent jobs for pi (launch child `pi` processes as background jobs in tmux windows, on [exe.dev](https://exe.dev) cloud VMs, or in [microsandbox](https://microsandbox.dev) microVMs; the `spawn_agent`/`spawn_jobs`/`spawn_output`/`spawn_kill` tools and `/spawn` command)
 
 ### Integrations
@@ -22,7 +22,7 @@ This repository contains pi-related integrations and extensions.
 
 ## Design documents
 
-- [`docs/multi-agent-orchestration.md`](./docs/multi-agent-orchestration.md) – design for the orchestrator, planner, critic, and sub-agent fleet extensions composed with lykkja (implemented by `fleet/`, `planner/`, `critic/`, and `orchestrator/`)
+- [`docs/multi-agent-orchestration.md`](./docs/multi-agent-orchestration.md) – design for the orchestrator, planner, critic, and sub-agent fleet extensions composed with pdca (implemented by `fleet/`, `planner/`, `critic/`, and `orchestrator/`)
 
 ## Architecture documents
 
@@ -38,7 +38,7 @@ The top-level README is intentionally minimal.
 
 For installation, configuration, usage, and troubleshooting, see the README inside the relevant child directory:
 
-- [`lykkja/README.md`](./lykkja/README.md)
+- [`pdca/README.md`](./pdca/README.md)
 - [`fleet/README.md`](./fleet/README.md)
 - [`planner/README.md`](./planner/README.md)
 - [`critic/README.md`](./critic/README.md)

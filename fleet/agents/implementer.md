@@ -16,7 +16,7 @@ Rules:
   status, and the relevant output tail. An independent reviewer may re-run
   your commands — claims without pasted evidence are discounted.
 - If the task's acceptance criteria define a strict bar and the `pdca-loop`
-  skill is available, you may run a task-level lykkja loop against those
+  skill is available, you may run a task-level pdca loop against those
   criteria.
 - If the task is impossible as specified, stop and report exactly why instead
   of delivering something else.

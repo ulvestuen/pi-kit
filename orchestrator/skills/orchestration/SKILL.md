@@ -1,13 +1,13 @@
 ---
 name: orchestration
-description: Run a multi-agent orchestration — plan a goal as a task DAG, dispatch waves of fleet sub-agents with orchestrate_step, gate every task behind an independent critic review, and drive the whole run inside a lykkja PDCA loop until the goal-level bar is met. Use for goals big enough to fan out across parallel sub-agents; triggered by /orchestrate.
+description: Run a multi-agent orchestration — plan a goal as a task DAG, dispatch waves of fleet sub-agents with orchestrate_step, gate every task behind an independent critic review, and drive the whole run inside the pdca extension's PDCA loop until the goal-level bar is met. Use for goals big enough to fan out across parallel sub-agents; triggered by /orchestrate.
 ---
 
 # Orchestration
 
 An orchestration run composes four extensions, each owning one concern:
 
-- **lykkja** — the goal-level stopping rule: the run *is* one lykkja loop.
+- **pdca** — the goal-level stopping rule: the run *is* one pdca loop.
 - **planner** — the plan as data: a task DAG with per-task criteria.
 - **fleet** — execution: waves of concurrent sub-agent child processes.
 - **critic** — judgment: fresh-context review of every completed task.
@@ -21,7 +21,7 @@ decomposition, checkpoint scoring, and plan repair.
 1. **Open the goal loop.** Derive strict goal-level criteria (see
    `success-criteria`): typically `all plan tasks done`,
    `end-to-end verification passes`, plus goal-specific bars. Call
-   `lykkja_start`. Ignore its single-agent automated prompt — the wave cycle
+   `pdca_start`. Ignore its single-agent automated prompt — the wave cycle
    below is the loop body.
 2. **Plan.** Decompose the goal with `plan_create` following
    `plan-decomposition`: self-contained briefs, minimal dependencies, strict
@@ -48,7 +48,7 @@ decomposition, checkpoint scoring, and plan repair.
    testing — only the gate's observed command output is. A failed gate is
    CHECK evidence and a plan-repair trigger, exactly like a failed review.
 6. **Checkpoint.** Follow the wave report's AUTOMATED NEXT STEP: call
-   `lykkja_checkpoint`, scoring the goal-level criteria from the critic
+   `pdca_checkpoint`, scoring the goal-level criteria from the critic
    verdicts, the integration-gate verdict, and the coverage report. The
    critic's verdicts are the CHECK — never your own optimism. Then act on
    the verdict:
@@ -87,7 +87,7 @@ is simpler and preferred.
 ## Related
 
 - `plan-decomposition` (planner) — task sizing, criteria, file scopes.
-- `success-criteria`, `pdca-loop`, `honest-verification` (lykkja).
+- `success-criteria`, `pdca-loop`, `honest-verification` (pdca).
 - `advisory-review` (critic) — reviews outside orchestration.
 - `/orchestrate <goal>` starts a run; `status` and `stop` manage it; `/plan`
   shows the live DAG.

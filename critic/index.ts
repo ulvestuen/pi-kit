@@ -12,7 +12,7 @@ import {
 import { DEFAULT_TMUX_SESSION } from "../fleet/tmux.ts";
 import type { AgentDefinition } from "../fleet/registry.ts";
 import { runTasks } from "../fleet/runner.ts";
-import { normalizeCriteria, type CriterionInput } from "../lykkja/loop.ts";
+import { normalizeCriteria, type CriterionInput } from "../pdca/loop.ts";
 import type { RunId, ArtifactRef } from "@pi-kit/agent-types";
 import { getConfigPath, loadConfig, type CriticConfig } from "./config.ts";
 import {
@@ -125,13 +125,13 @@ export default function (pi: ExtensionAPI) {
       name: "critic_review",
       label: "critic: Independent Review",
       description:
-        "Score work against explicit criteria using an independent critic agent with fresh context (a read-only spawn-backed child pi run). Provide the subject (diff, file list, artifact, or task result), optional context, and the rubric. Returns lykkja-shaped criterion scores, a pass/fail verdict, and prioritized weaknesses — usable directly as the CHECK step of a lykkja loop.",
+        "Score work against explicit criteria using an independent critic agent with fresh context (a read-only spawn-backed child pi run). Provide the subject (diff, file list, artifact, or task result), optional context, and the rubric. Returns pdca-shaped criterion scores, a pass/fail verdict, and prioritized weaknesses — usable directly as the CHECK step of a pdca loop.",
       promptSnippet:
         "critic_review: have an independent read-only critic score work against explicit criteria.",
       promptGuidelines: [
         "Use critic_review instead of grading your own work when the result matters: the critic has fresh context and no stake in the work passing.",
         "Hand the critic enough to verify independently: what changed, where it lives, and how each criterion can be checked.",
-        "The critic's scores win over self-assessment; feed them into lykkja_checkpoint when a loop is active.",
+        "The critic's scores win over self-assessment; feed them into pdca_checkpoint when a loop is active.",
       ],
       parameters: Type.Object({
         subject: Type.String({

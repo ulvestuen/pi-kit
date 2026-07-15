@@ -4,7 +4,7 @@ import * as path from "node:path";
 import {
   DEFAULT_PASS_THRESHOLD,
   DEFAULT_SCALE_MAX,
-} from "../lykkja/loop.ts";
+} from "../pdca/loop.ts";
 
 /**
  * planner configuration. All fields are optional with sensible defaults, so

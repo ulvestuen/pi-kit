@@ -1,6 +1,6 @@
 ---
 name: advisory-review
-description: Seek and act on independent review — when to use the critic_review and critic_advise tools, how to hand the critic enough context to verify work on its own, and how to act on the returned weakness list. Use when finishing significant work, before committing to a design, or as the CHECK step of a lykkja loop.
+description: Seek and act on independent review — when to use the critic_review and critic_advise tools, how to hand the critic enough context to verify work on its own, and how to act on the returned weakness list. Use when finishing significant work, before committing to a design, or as the CHECK step of a pdca loop.
 ---
 
 # Advisory review
@@ -17,8 +17,8 @@ scores it against the rubric.
   done.
 - **Before implementing** a non-trivial plan or design: run `critic_advise`
   and act on the concerns while changing course is still cheap.
-- **As the CHECK step of a lykkja loop**: the critic returns scores in
-  lykkja's exact `CriterionScore` shape — feed them into `lykkja_checkpoint`
+- **As the CHECK step of a pdca loop**: the critic returns scores in
+  pdca's exact `CriterionScore` shape — feed them into `pdca_checkpoint`
   instead of self-reported scores. Fall back to the `honest-verification`
   skill only when the critic is unavailable.
 
@@ -52,8 +52,8 @@ everything it cannot verify — by design.
 
 ## Related
 
-- `honest-verification` (lykkja) — self-scoring discipline for when no critic
+- `honest-verification` (pdca) — self-scoring discipline for when no critic
   is available.
-- `success-criteria` (lykkja) — writing rubrics a reviewer can score from
+- `success-criteria` (pdca) — writing rubrics a reviewer can score from
   evidence.
 - `/critic` — shows which agent definition, model, and scale are in use.

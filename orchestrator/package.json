@@ -1,7 +1,7 @@
 {
   "name": "pi-orchestrator",
   "version": "1.0.0",
-  "description": "Thin multi-agent composition layer for the pi coding agent — /orchestrate plans a goal as a task DAG, dispatches waves of fleet sub-agents, gates tasks behind independent critic review, and drives the run inside a lykkja PDCA loop",
+  "description": "Thin multi-agent composition layer for the pi coding agent — /orchestrate plans a goal as a task DAG, dispatches waves of fleet sub-agents, gates tasks behind independent critic review, and drives the run inside the pdca extension's PDCA loop",
   "type": "module",
   "scripts": {
     "test": "tsx --test test.ts"

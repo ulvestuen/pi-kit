@@ -1,8 +1,8 @@
 /**
  * planner plan engine — pure, dependency-free model of a plan as data:
- * a validated task DAG with per-task, lykkja-shaped acceptance criteria.
+ * a validated task DAG with per-task, pdca-shaped acceptance criteria.
  *
- * The only import is lykkja's pure loop engine, so this module stays free of
+ * The only import is pdca's pure loop engine, so this module stays free of
  * pi and Node APIs and can be unit tested in isolation and reused by the
  * extension and the orchestrator.
  */
@@ -13,7 +13,7 @@ import {
   normalizeCriteria,
   type Criterion,
   type CriterionInput,
-} from "../lykkja/loop.ts";
+} from "../pdca/loop.ts";
 import type { ArtifactRef } from "@pi-kit/agent-types";
 
 export const DEFAULT_AGENT = "implementer";
@@ -44,11 +44,11 @@ export interface PlanTask {
   dependsOn: string[];
   /** fleet agent name; defaults to "implementer". */
   agent?: string;
-  /** lykkja-shaped acceptance criteria. */
+  /** pdca-shaped acceptance criteria. */
   criteria: Criterion[];
   /**
    * Names of goal-level criteria this task helps satisfy (exact names from
-   * the lykkja goal loop). Optional: plans persisted before this field
+   * the pdca goal loop). Optional: plans persisted before this field
    * existed lack it entirely.
    */
   covers?: string[];

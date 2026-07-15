@@ -22,7 +22,7 @@ import {
   type ReviewRequest,
   type ReviewResult,
 } from "../critic/review.ts";
-import { DEFAULT_SCALE_MAX } from "../lykkja/loop.ts";
+import { DEFAULT_SCALE_MAX } from "../pdca/loop.ts";
 import {
   coverageByCriterion,
   getTask,
@@ -56,8 +56,8 @@ const PLAN_ENTRY_TYPE = "planner-state";
 
 /** Tools other extensions must provide for /orchestrate to run. */
 const REQUIRED_TOOLS = [
-  "lykkja_start",
-  "lykkja_checkpoint",
+  "pdca_start",
+  "pdca_checkpoint",
   "plan_create",
   "plan_update",
 ];
@@ -77,7 +77,7 @@ interface RunPromptOptions {
 function buildRunPrompt(goal: string, options: RunPromptOptions): string {
   let step = 1;
   const steps = [
-    "1. Open the goal loop: derive strict goal-level success criteria (use the `success-criteria` skill; typically \"all plan tasks done\", \"end-to-end verification passes\", plus goal-specific bars) and call `lykkja_start` with the goal and those criteria. Do NOT run the returned automated prompt's single-agent loop — the orchestration below is the loop body.",
+    "1. Open the goal loop: derive strict goal-level success criteria (use the `success-criteria` skill; typically \"all plan tasks done\", \"end-to-end verification passes\", plus goal-specific bars) and call `pdca_start` with the goal and those criteria. Do NOT run the returned automated prompt's single-agent loop — the orchestration below is the loop body.",
     `${++step}. Plan: decompose the goal into a task DAG with \`plan_create\`, following the \`plan-decomposition\` skill. Every task needs a self-contained brief, an agent, dependencies, strict acceptance criteria, and a \`covers\` list naming the exact goal-level criteria it helps satisfy — every goal criterion that tasks can advance should be covered by at least one task.`,
   ];
   if (options.planReviewGate) {
@@ -89,8 +89,8 @@ function buildRunPrompt(goal: string, options: RunPromptOptions): string {
     `${++step}. Dispatch: call \`orchestrate_step\`. It dispatches the ready wave to fleet sub-agents, gathers independent verification evidence, has an independent critic review each completed task against its own criteria, applies retries with critic feedback, and returns the wave report.`,
     `${++step}. Checkpoint: after each wave, follow the AUTOMATED NEXT STEP in the \`orchestrate_step\` result — ` +
       (options.integrationCheck
-        ? `merge the wave's passed branches, run the integration gate with \`orchestrate_verify\`, then call \`lykkja_checkpoint\` scoring the goal-level criteria honestly from the critic verdicts and the integration-gate verdict. `
-        : `call \`lykkja_checkpoint\` scoring the goal-level criteria honestly from the critic-derived evidence in the wave report. `) +
+        ? `merge the wave's passed branches, run the integration gate with \`orchestrate_verify\`, then call \`pdca_checkpoint\` scoring the goal-level criteria honestly from the critic verdicts and the integration-gate verdict. `
+        : `call \`pdca_checkpoint\` scoring the goal-level criteria honestly from the critic-derived evidence in the wave report. `) +
       "On ITERATING, call `orchestrate_step` again (repairing the plan first with `plan_update` if the report says so). On FINAL, finish and summarize. On STOPPED, report honestly what still fails.",
   );
   return [
@@ -330,7 +330,7 @@ export default function (pi: ExtensionAPI) {
                   config.integrationCheck
                     ? `2. Run the goal-level end-to-end verification: call orchestrate_verify (configured integration check: ${config.integrationCheck}).`
                     : "2. Run the goal-level end-to-end verification.",
-                  "3. Call lykkja_checkpoint scoring every goal-level criterion honestly from that evidence.",
+                  "3. Call pdca_checkpoint scoring every goal-level criterion honestly from that evidence.",
                 ].join("\n"),
               },
             ],
@@ -350,7 +350,7 @@ export default function (pi: ExtensionAPI) {
                   `The plan is BLOCKED: failed task(s) [${failed.join(", ")}] hold back [${summaryBefore.blocked.join(", ") || "none"}], and nothing is dispatchable.`,
                   "",
                   "AUTOMATED NEXT STEP:",
-                  "1. Call lykkja_checkpoint scoring the goal-level criteria honestly (they cannot all pass while the DAG is blocked).",
+                  "1. Call pdca_checkpoint scoring the goal-level criteria honestly (they cannot all pass while the DAG is blocked).",
                   "2. On ITERATING: repair the plan with plan_update — append follow-up tasks that address the recorded weaknesses of the failed tasks (their briefs carry the critic feedback), or mark abandoned work failed and reduce scope explicitly.",
                   "3. Then call orchestrate_step again. On STOPPED: report honestly which criteria still fail and why; nothing is silently discarded.",
                 ].join("\n"),
@@ -783,7 +783,7 @@ export default function (pi: ExtensionAPI) {
           );
         }
         lines.push(
-          `${++nextStep}. Call lykkja_checkpoint for this wave now: plan = "wave ${wave}: dispatch ${dispatched.map((t) => t.id).join(", ") || "(reviews only)"}", changes = a one-line wave summary, scores = every goal-level criterion scored honestly using the critic verdicts${config.integrationCheck && tasksLandedThisWave ? ", the integration-gate verdict," : ""} and the goal-criterion coverage above as evidence — do not inflate.`,
+          `${++nextStep}. Call pdca_checkpoint for this wave now: plan = "wave ${wave}: dispatch ${dispatched.map((t) => t.id).join(", ") || "(reviews only)"}", changes = a one-line wave summary, scores = every goal-level criterion scored honestly using the critic verdicts${config.integrationCheck && tasksLandedThisWave ? ", the integration-gate verdict," : ""} and the goal-criterion coverage above as evidence — do not inflate.`,
           `${++nextStep}. On ITERATING: call orchestrate_step again immediately` +
             (summary.counts.failed > 0
               ? " — but first repair the plan with plan_update (follow-up tasks addressing the recorded weaknesses, or explicit descoping) since tasks have failed."
@@ -815,7 +815,7 @@ export default function (pi: ExtensionAPI) {
       name: "orchestrate_verify",
       label: "orchestrator: Integration Gate",
       description:
-        "Run the configured integration check (orchestrator config integrationCheck, e.g. \"npm test\") in the working tree and report PASSED or FAILED with the command output. Call it after merging a wave's passed branches — and before lykkja_checkpoint — so integration-level verification is observed, not assumed.",
+        "Run the configured integration check (orchestrator config integrationCheck, e.g. \"npm test\") in the working tree and report PASSED or FAILED with the command output. Call it after merging a wave's passed branches — and before pdca_checkpoint — so integration-level verification is observed, not assumed.",
       promptSnippet:
         "orchestrate_verify: run the configured integration check in the working tree and report PASSED/FAILED.",
       promptGuidelines: [
@@ -883,11 +883,11 @@ export default function (pi: ExtensionAPI) {
         ];
         if (passed) {
           lines.push(
-            "Use this pass as the integration-level evidence when scoring the next lykkja_checkpoint.",
+            "Use this pass as the integration-level evidence when scoring the next pdca_checkpoint.",
           );
         } else {
           lines.push(
-            "1. This failure is integration-level CHECK evidence: the affected goal-level criteria cannot pass at the next lykkja_checkpoint while the gate fails — score them honestly.",
+            "1. This failure is integration-level CHECK evidence: the affected goal-level criteria cannot pass at the next pdca_checkpoint while the gate fails — score them honestly.",
             "2. Repair through the plan, never silently: use plan_update to re-queue the merged task(s) whose changes broke the gate (append the failing output to their briefs) or append a dedicated fix task, then call orchestrate_step again.",
           );
         }
@@ -947,8 +947,8 @@ export default function (pi: ExtensionAPI) {
           `  tmux:        ${spawnTmuxLive ? `sub-agent runner windows in session "${spawnConfig.tmuxSession}" (tmux attach -t ${spawnConfig.tmuxSession})` : spawnConfig.backend === "tmux" ? "spawn backend selected but tmux is not installed" : "not used by selected spawn backend"}`,
           `  Plan:        ${plan ? `${summarizePlan(plan).counts.done}/${plan.tasks.length} done — "${plan.goal}"` : "(none)"}`,
           missing.length > 0
-            ? `  MISSING dependencies: ${missing.join(", ")} — install the lykkja and planner packages.`
-            : "  Dependencies: lykkja + planner tools present.",
+            ? `  MISSING dependencies: ${missing.join(", ")} — install the pdca and planner packages.`
+            : "  Dependencies: pdca + planner tools present.",
         ];
         if (!raw) {
           lines.push("  Usage: /orchestrate <goal> | status | stop");
@@ -970,7 +970,7 @@ export default function (pi: ExtensionAPI) {
       const missing = missingDependencies();
       if (missing.length > 0) {
         ctx.ui.notify(
-          `Cannot orchestrate — missing tools: ${missing.join(", ")}. Install the lykkja and planner packages (pi-kit ships both), then /reload.`,
+          `Cannot orchestrate — missing tools: ${missing.join(", ")}. Install the pdca and planner packages (pi-kit ships both), then /reload.`,
           "error",
         );
         return;
