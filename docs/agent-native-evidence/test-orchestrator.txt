@@ -1,0 +1,68 @@
+▶ nextActions
+  ✔ dispatches the ready set up to free capacity (0.98175ms)
+  ✔ subtracts running tasks from capacity (0.214709ms)
+  ✔ lists tasks awaiting review (0.148ms)
+  ✔ reports complete when every task is done (0.130834ms)
+  ✔ reports blocked when failures hold back the rest of the DAG (0.140208ms)
+  ✔ rejects invalid policies (0.231791ms)
+✔ nextActions (2.389ms)
+▶ applyTaskResult
+  ✔ sends ok results to review (0.111458ms)
+  ✔ re-queues a first failure with the failure note in the brief (0.13675ms)
+  ✔ fails the task at the attempt cap (0.08425ms)
+  ✔ rejects unknown task ids (0.103541ms)
+✔ applyTaskResult (0.564209ms)
+▶ applyReview
+  ✔ marks passed reviews done (0.107375ms)
+  ✔ re-queues failed reviews with critic weaknesses appended to the brief (0.585875ms)
+  ✔ fails the task when review fails at the attempt cap (0.11025ms)
+  ✔ rejects reviews of tasks not awaiting review (0.075042ms)
+✔ applyReview (0.956666ms)
+▶ end-to-end simulation: 5-task DAG to FINAL
+  ✔ drives the plan to complete and the goal loop to FINAL (0.714583ms)
+  ✔ ends blocked and honest when a task exhausts its attempts (0.10425ms)
+✔ end-to-end simulation: 5-task DAG to FINAL (0.86175ms)
+▶ artifact propagation through review
+  ✔ applyReview + recordPassingArtifacts stores artifacts on the done task (0.084708ms)
+  ✔ downstream tasks see prerequisite artifacts in handoff section (0.071417ms)
+  ✔ artifacts survive serialization round-trip across plan persistence (0.092208ms)
+✔ artifact propagation through review (0.294625ms)
+▶ lifecycle retries with critic evidence
+  ✔ critic feedback is appended to the brief on retry (0.066041ms)
+  ✔ attempts count increments on each dispatch (0.047041ms)
+  ✔ task fails at attempt cap after review failure (0.041625ms)
+✔ lifecycle retries with critic evidence (0.200625ms)
+▶ worktree behavior
+  ✔ buildWorktreeArgs uses parentBranch when provided (2.459708ms)
+  ✔ TaskSpec accepts parentBranch field (0.033417ms)
+✔ worktree behavior (2.530667ms)
+▶ worktree commit after passing review
+  ✔ recordPassingArtifacts calls worktreeCommit when provided with a branch (0.545ms)
+  ✔ recordPassingArtifacts does not call worktreeCommit when no branch (0.3945ms)
+  ✔ recordPassingArtifacts swallows commit errors without blocking plan (0.417375ms)
+✔ worktree commit after passing review (1.4035ms)
+▶ parentBranch extraction from prerequisite artifacts
+  ✔ finds the branch from a done dependency's artifacts (0.470833ms)
+  ✔ returns undefined when no prerequisite has a branch artifact (0.446417ms)
+  ✔ returns undefined when dependency is not done (0.422ms)
+  ✔ picks the first done dependency's branch artifact (0.383ms)
+✔ parentBranch extraction from prerequisite artifacts (1.786209ms)
+▶ RunId and RunLog
+  ✔ RunId is carried through TaskSpec to TaskResult (0.046125ms)
+  ✔ TaskResult carries runId, outputArtifacts, and toolCalls (0.046958ms)
+✔ RunId and RunLog (0.130375ms)
+▶ end-to-end: legacy plain-text task → structured artifact handoff to dependent task
+  ✔ drives a 2-task DAG to FINAL: legacy task completes, dependent receives artifacts via brief without shared context, critic evidence persists on retry (0.314666ms)
+  ✔ buildHandoffSection returns empty when no dependencies have artifacts (0.053666ms)
+  ✔ buildHandoffSection returns empty when dependencies are not done (0.03775ms)
+  ✔ buildHandoffSection formats multiple prerequisite artifacts (0.081ms)
+✔ end-to-end: legacy plain-text task → structured artifact handoff to dependent task (0.536375ms)
+ℹ tests 37
+ℹ suites 11
+ℹ pass 37
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 147.341458
+EXIT: 0

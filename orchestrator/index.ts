@@ -24,10 +24,14 @@ import {
 } from "../critic/review.ts";
 import { DEFAULT_SCALE_MAX } from "../lykkja/loop.ts";
 import {
+  getTask,
+  setTaskStatus,
   summarizePlan,
   type Plan,
   type PlanTask,
 } from "../planner/plan.ts";
+import type { RunId, RunEvent, ArtifactRef } from "@pi-kit/agent-types";
+import { buildHandoffSection, findParentBranch, recordPassingArtifacts } from "./handoff.ts";
 import {
   applyReview,
   applyTaskResult,
@@ -75,10 +79,13 @@ function buildRunPrompt(goal: string): string {
   ].join("\n");
 }
 
+
+
 function buildTaskBrief(plan: Plan, task: PlanTask, scaleMax: number): string {
   const criteria = task.criteria
     .map((c) => `- ${c.name} (threshold ${c.threshold}/${scaleMax})`)
     .join("\n");
+  const handoff = buildHandoffSection(plan, task);
   return [
     "You are executing one task of a larger orchestrated plan.",
     "",
@@ -87,6 +94,7 @@ function buildTaskBrief(plan: Plan, task: PlanTask, scaleMax: number): string {
     "",
     `YOUR TASK (${task.id}): ${task.title}`,
     task.description,
+    ...handoff ? [handoff] : [],
     "",
     "ACCEPTANCE CRITERIA — an independent critic will score each one afterwards:",
     criteria,
@@ -109,6 +117,16 @@ function buildReviewSubject(task: PlanTask, result?: TaskResult): string {
     );
   } else {
     lines.push("", "The work is in the current working tree.");
+  }
+  if (result?.outputArtifacts && result.outputArtifacts.length > 0) {
+    lines.push("", "Implementer's output artifacts:");
+    for (const art of result.outputArtifacts)
+      lines.push(`  - ${art.type}: ${art.description}${art.location ? ` at ${art.location}` : ""}`);
+  }
+  if (task.artifacts.length > 0) {
+    lines.push("", "Recorded task artifacts:");
+    for (const art of task.artifacts)
+      lines.push(`  - ${art.type}: ${art.description}${art.location ? ` at ${art.location}` : ""}`);
   }
   return lines.join("\n");
 }
@@ -293,6 +311,15 @@ export default function (pi: ExtensionAPI) {
             task: buildTaskBrief(plan!, task, scaleMax),
             isolation: config.isolation,
             timeoutMs: config.taskTimeoutMs,
+            parentBranch: config.isolation === "worktree"
+              ? findParentBranch(plan!, task)
+              : undefined,
+            runId: {
+              runId: `${task.id}-w${wave}-a${task.attempts + 1}`,
+              taskId: task.id,
+              attempt: task.attempts + 1,
+              wave,
+            },
           }));
           const results = await runTasks(registry, specs, {
             ...runnerBase,
@@ -332,11 +359,20 @@ export default function (pi: ExtensionAPI) {
           const requests = new Map<string, ReviewRequest>();
           const reviewSpec = (task: PlanTask): TaskSpec => {
             const result = resultsById.get(task.id);
+            // Collect prerequisite artifacts for evidence context
+            const depArtifacts: ArtifactRef[] = [];
+            for (const depId of task.dependsOn) {
+              const dep = getTask(plan!, depId);
+              if (dep && dep.status === "done" && dep.artifacts.length > 0) {
+                depArtifacts.push(...dep.artifacts);
+              }
+            }
             const request: ReviewRequest = {
               subject: buildReviewSubject(task, result),
               context: `Goal: ${plan!.goal}\n\nTask brief:\n${task.description}`,
               criteria: task.criteria,
               scaleMax,
+              artifacts: depArtifacts.length > 0 ? depArtifacts : undefined,
             };
             requests.set(task.id, request);
             return {
@@ -392,6 +428,30 @@ export default function (pi: ExtensionAPI) {
               retry && retry.scores.length > 0 ? retry : firstPass.get(task.id)!;
             reviewsById.set(task.id, review);
             plan = applyReview(plan!, task.id, review, policy);
+            // Record artifacts and commit worktree when the review passes
+            if (review.passed) {
+              const result = resultsById.get(task.id);
+              const worktreeCommit = config.isolation === "worktree" && result?.worktreePath
+                ? async (_branch: string) => {
+                    // Best-effort: git add + commit in the worktree
+                    // Use a default signal if none provided (should not happen in practice).
+                    const commitSignal = signal ?? new AbortController().signal;
+                    await spawn({
+                      command: "git",
+                      args: ["add", "-A"],
+                      cwd: result.worktreePath!,
+                      signal: commitSignal,
+                    });
+                    await spawn({
+                      command: "git",
+                      args: ["commit", "-m", `[orchestrator] auto-commit task ${getTask(plan!, task.id)!.id} after passing review`],
+                      cwd: result.worktreePath!,
+                      signal: commitSignal,
+                    });
+                  }
+                : undefined;
+              plan = await recordPassingArtifacts(plan!, getTask(plan!, task.id)!, result, worktreeCommit);
+            }
           }
           publishPlan(plan);
         }
@@ -480,6 +540,22 @@ export default function (pi: ExtensionAPI) {
             results: Object.fromEntries(resultsById),
             reviews: Object.fromEntries(reviewsById),
             summary,
+            runLog: [
+              { timestamp: Date.now(), type: "wave_start", wave, runId: { runId: `wave-${wave}`, taskId: "", attempt: 0, wave }, payload: { dispatch: dispatched.map((t) => t.id) } },
+              ...[...resultsById.entries()].map(([id, r]) => ({
+                timestamp: Date.now(),
+                type: "task_end" as const,
+                runId: r.runId ?? { runId: `task-${id}`, taskId: id, attempt: 1, wave },
+                payload: { taskId: id, status: r.status, durationMs: r.durationMs },
+              })),
+              ...[...reviewsById.entries()].map(([id, rev]) => ({
+                timestamp: Date.now(),
+                type: "task_end" as const,
+                runId: { runId: `review-${id}`, taskId: id, attempt: 0, wave },
+                payload: { taskId: id, review: { passed: rev.passed, scoreCount: rev.scores.length } },
+              })),
+              { timestamp: Date.now(), type: "wave_end", wave, runId: { runId: `wave-${wave}-end`, taskId: "", attempt: 0, wave }, payload: {} },
+            ],
           },
         };
       },

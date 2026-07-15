@@ -77,9 +77,17 @@ export function nextActions(
   return { dispatch, reviews, terminal };
 }
 
-/** Mark a task dispatched: status "running", which counts the attempt. */
+/** Mark a task dispatched: status "running", which counts the attempt.
+ * Promotes pending → ready first so the lifecycle matches the ADR's
+ * transition table (pending → ready → running) without triggering a warning. */
 export function setPlanTaskRunning(plan: Plan, id: string): Plan {
-  return setTaskStatus(plan, id, "running");
+  const task = getTask(plan, id);
+  if (!task) throw new Error(`Unknown task id: ${id}`);
+  let p = plan;
+  if (task.status === "pending") {
+    p = setTaskStatus(p, id, "ready");
+  }
+  return setTaskStatus(p, id, "running");
 }
 
 /**

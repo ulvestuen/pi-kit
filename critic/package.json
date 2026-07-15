@@ -11,6 +11,7 @@
     "skills": ["./skills"]
   },
   "devDependencies": {
+    "@pi-kit/agent-types": "workspace:*",
     "@mariozechner/pi-ai": "^0.71.0",
     "@mariozechner/pi-coding-agent": "^0.71.0",
     "@types/node": "^22.0.0",

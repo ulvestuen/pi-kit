@@ -20,6 +20,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { AgentDefinition } from "../fleet/registry.ts";
+import type { BackendCapabilities, KillResult } from "@pi-kit/agent-types";
 
 export type SpawnBackendName = "tmux" | "exedev" | "microsandbox";
 
@@ -191,14 +192,31 @@ export interface SpawnBackend {
   refresh(job: SpawnJob): Promise<boolean>;
   output(job: SpawnJob, maxBytes: number): Promise<string>;
   errorOutput(job: SpawnJob, maxBytes: number): Promise<string>;
-  kill(job: SpawnJob): Promise<void>;
+  /** Best-effort stop. Returns KillResult confirming whether the stop succeeded. */
+  kill(job: SpawnJob): Promise<KillResult>;
+  /** Declares this backend's capabilities for contract negotiation. */
+  capabilities(): Promise<BackendCapabilities>;
 }
 
-const REGISTRY_VERSION = 1;
+export const REGISTRY_VERSION = 2;
 
 interface RegistryFile {
   version: number;
   jobs: SpawnJob[];
+}
+
+/** Schema-validate a single job record. Returns the validated record or null. */
+function validateJob(raw: any): SpawnJob | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  if (typeof raw.name !== "string" || !raw.name) return null;
+  if (!SPAWN_BACKEND_NAMES.includes(raw.backend)) return null;
+  if (typeof raw.agent !== "string") return null;
+  if (typeof raw.task !== "string") return null;
+  if (typeof raw.cwd !== "string") return null;
+  if (!"running done failed killed lost".includes(raw.status)) return null;
+  if (typeof raw.createdAt !== "number") return null;
+  if (typeof raw.updatedAt !== "number") return null;
+  return raw as SpawnJob;
 }
 
 /** Path of the persistent job registry inside the spawn log directory. */
@@ -223,10 +241,30 @@ export function loadJobs(
   }
   try {
     const parsed = JSON.parse(raw) as RegistryFile;
-    if (!parsed || !Array.isArray(parsed.jobs)) {
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new Error("not a job registry");
     }
-    return parsed.jobs;
+    const version = typeof parsed.version === "number" ? parsed.version : 0;
+    if (!Array.isArray(parsed.jobs)) {
+      throw new Error("not a job registry");
+    }
+    // Schema-validate each record; reject invalid ones with a warning.
+    const valid: SpawnJob[] = [];
+    let rejected = 0;
+    for (const raw of parsed.jobs) {
+      const job = validateJob(raw);
+      if (job) {
+        valid.push(job);
+      } else {
+        rejected++;
+      }
+    }
+    if (rejected > 0) {
+      onError?.(
+        `${rejected} invalid job record(s) in registry ${registryPath(logDir)} (v${version}); keeping ${valid.length} valid records`,
+      );
+    }
+    return valid;
   } catch (e: any) {
     onError?.(
       `unreadable job registry ${registryPath(logDir)} (${e?.message ?? e}); starting empty`,

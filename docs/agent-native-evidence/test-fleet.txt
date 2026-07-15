@@ -1,0 +1,100 @@
+▶ parseAgentDefinition
+  ✔ parses a full definition (0.963375ms)
+  ✔ leaves optional fields undefined (0.122083ms)
+  ✔ strips quotes and inline comments from values (0.07825ms)
+  ✔ rejects a missing frontmatter block (0.20825ms)
+  ✔ rejects unterminated frontmatter (0.063167ms)
+  ✔ rejects a missing name (0.054666ms)
+  ✔ rejects invalid agent names (0.053625ms)
+  ✔ rejects a missing description (0.063708ms)
+  ✔ rejects an empty body (0.05925ms)
+  ✔ rejects an invalid thinkingLevel (0.0905ms)
+  ✔ rejects an empty tools list (0.064459ms)
+✔ parseAgentDefinition (2.469458ms)
+▶ mergeRegistries
+  ✔ later layers win on name collision, case-insensitively (0.070375ms)
+  ✔ keeps non-colliding agents from all layers (0.036875ms)
+  ✔ getAgent matches case-insensitively with trimming (0.052ms)
+✔ mergeRegistries (0.216625ms)
+▶ buildPiArgs
+  ✔ builds the full non-interactive contract (0.078375ms)
+  ✔ omits optional flags when the definition has none (0.038667ms)
+✔ buildPiArgs (0.154541ms)
+▶ parsePiJsonOutput
+  ✔ extracts the last assistant message text (0.132833ms)
+  ✔ reports error stop reasons (0.051375ms)
+  ✔ reports missing assistant output (0.095375ms)
+✔ parsePiJsonOutput (0.330333ms)
+▶ capOutput
+  ✔ passes short output through untouched (0.075209ms)
+  ✔ truncates at the byte budget with a marker (0.04625ms)
+  ✔ counts multi-byte characters by UTF-8 size (0.035209ms)
+✔ capOutput (0.207208ms)
+▶ worktree helpers
+  ✔ builds git worktree add args (0.046833ms)
+  ✔ derives unique branch names from index and time (0.0295ms)
+✔ worktree helpers (0.109416ms)
+▶ runTasks
+  ✔ returns results in task order (0.487542ms)
+  ✔ rejects unknown agents with the known list (0.134583ms)
+  ✔ rejects batches over the cap (0.078625ms)
+  ✔ rejects empty task text (0.05625ms)
+  ✔ observes the concurrency limit (35.828916ms)
+  ✔ times out slow tasks (22.620667ms)
+  ✔ marks running tasks aborted on external abort (6.676959ms)
+  ✔ aborts queued tasks immediately once the signal fires (0.238042ms)
+  ✔ caps model-visible output and saves the full transcript (0.201ms)
+  ✔ reports child failures as error results (0.134792ms)
+  ✔ reports spawn exceptions as error results (0.088792ms)
+  ✔ emits task_start, task_update, and task_end events (0.1025ms)
+  ✔ requires a worktreeRoot for worktree isolation (0.055541ms)
+  ✔ creates a worktree, runs the child inside it, and reports the branch (0.115125ms)
+  ✔ fails the task when worktree creation fails (0.068959ms)
+✔ runTasks (67.150792ms)
+▶ tmux mirror
+  ✔ labels the pi child spawn but not auxiliary git spawns (0.087834ms)
+  ✔ sanitizes window names (0.089375ms)
+  ✔ quotes log paths for the tail command (0.040625ms)
+  ✔ splits chunks into lines and flushes the remainder (0.06825ms)
+  ✔ formats assistant messages and tool calls, suppresses noise (0.0915ms)
+  ✔ opens a session for the first window and reuses it after (0.302458ms)
+  ✔ mirrors formatted output and a footer into the window's log (0.078834ms)
+  ✔ still forwards output to the original onOutput (0.06675ms)
+  ✔ passes unlabeled requests through without touching tmux (0.046792ms)
+  ✔ kills the window by id when closeWindows is set (0.066417ms)
+  ✔ degrades to plain runs after the first tmux failure (0.089208ms)
+✔ tmux mirror (1.142ms)
+▶ agent-native: RunId propagation
+  ✔ propagates runId from TaskSpec to TaskResult (0.076167ms)
+  ✔ runId is undefined when TaskSpec omits it (backward compat) (0.043417ms)
+  ✔ propagates runId through abort path (0.103709ms)
+  ✔ propagates runId through timeout path (21.755291ms)
+  ✔ propagates runId through error path (child failure) (0.136792ms)
+✔ agent-native: RunId propagation (22.195083ms)
+▶ agent-native: parentBranch worktree
+  ✔ passes parentBranch to buildWorktreeArgs for prerequisite branch handoff (0.150208ms)
+  ✔ preserves runId when parentBranch worktree creation fails (0.087959ms)
+✔ agent-native: parentBranch worktree (0.278583ms)
+▶ agent-native: inputArtifacts and outputArtifacts
+  ✔ TaskSpec.inputArtifacts are accepted without error (0.072042ms)
+  ✔ TaskResult without agent-native fields has them as undefined (0.050333ms)
+✔ agent-native: inputArtifacts and outputArtifacts (0.151125ms)
+▶ agent-native: backward compatibility
+  ✔ plain TaskSpec with no agent-native fields produces a valid TaskResult (0.070166ms)
+  ✔ worktree isolation without parentBranch defaults to HEAD (0.075083ms)
+  ✔ all results retain legacy fields (agent, status, output, truncated, etc.) (0.070417ms)
+  ✔ legacy TaskResult destructuring still works (old consumer pattern) (0.06125ms)
+✔ agent-native: backward compatibility (0.317917ms)
+▶ agent-native: buildWorktreeArgs parentBranch
+  ✔ includes parentBranch when given (0.045834ms)
+  ✔ omits parentBranch when undefined (0.027541ms)
+✔ agent-native: buildWorktreeArgs parentBranch (0.103334ms)
+ℹ tests 65
+ℹ suites 13
+ℹ pass 65
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 208.5195
+EXIT: 0

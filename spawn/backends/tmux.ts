@@ -24,6 +24,7 @@ import type {
   SpawnBackend,
   SpawnJob,
 } from "../jobs.ts";
+import type { BackendCapabilities, KillResult } from "@pi-kit/agent-types";
 import {
   localJobDir,
   readErrTail,
@@ -210,10 +211,49 @@ export function createTmuxBackend(
       return readErrTail(job.errPath, maxBytes);
     },
 
-    async kill(job: SpawnJob): Promise<void> {
+    async kill(job: SpawnJob): Promise<KillResult> {
+      // Backend KillResult contract (called by killAndStamp, cleanupSpawnToolingJobs, spawn_kill):
+      //
+      //  - stopped=true:  process confirmed dead (pane_alive was false before kill-window,
+      //    or kill-window succeeded).  Caller stamps "killed" immediately.
+      //  - alreadyComplete=true, stopped=false:  process was already dead before the kill
+      //    attempt (pane_dead on first probe, or race between alive check and kill-window).
+      //    Caller refreshes from done marker to discover the real terminal status.
+      //  - stopped=false, no alreadyComplete:  kill-window failed and re-probe shows the
+      //    pane is still alive.  This is "warned / unconfirmed" — the caller tries to
+      //    refresh from done markers and marks "lost" if still nonterminal.
+      //  - stopped=false, no alreadyComplete, no window id:  no tmuxWindowId on the job.
+      //    Same warned/unconfirmed path in the caller.
       if (job.tmuxWindowId) {
-        await exec("tmux", ["kill-window", "-t", job.tmuxWindowId]);
+        const alive = await paneAlive(job.tmuxWindowId);
+        if (!alive) {
+          return { stopped: false, alreadyComplete: true, message: "pane already dead" };
+        }
+        const killResult = await exec("tmux", ["kill-window", "-t", job.tmuxWindowId]);
+        if (killResult.exitCode !== 0) {
+          // Race: the pane may have died between the alive check and
+          // kill-window; re-probe to distinguish a real failure from a
+          // benign race.
+          const aliveAfter = await paneAlive(job.tmuxWindowId);
+          if (!aliveAfter) {
+            return { stopped: false, alreadyComplete: true, message: "pane died during kill" };
+          }
+          return { stopped: false, message: killResult.stderr.trim() || "kill-window failed" };
+        }
+        return { stopped: true };
       }
+      return { stopped: false, message: "no tmux window id" };
+    },
+
+    async capabilities(): Promise<BackendCapabilities> {
+      return {
+        workspaceMount: true,
+        cursorOutput: false,
+        confirmedKill: false,
+        durableLogs: true,
+        networkAccess: true,
+        hardwareIsolation: false,
+      };
     },
   };
 }

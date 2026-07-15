@@ -8,6 +8,7 @@
  */
 
 import { getAgent, type AgentDefinition } from "./registry.ts";
+import type { RunId, ArtifactRef } from "@pi-kit/agent-types";
 
 export const DEFAULT_MAX_CONCURRENT = 4;
 export const DEFAULT_MAX_BATCH = 8;
@@ -27,6 +28,12 @@ export interface TaskSpec {
   isolation?: "none" | "worktree";
   /** Per-task timeout; defaults to the runner's defaultTimeoutMs. */
   timeoutMs?: number;
+  /** Stable run identity across the orchestration (agent-native contract). */
+  runId?: RunId;
+  /** Artifacts available as input to this task. */
+  inputArtifacts?: ArtifactRef[];
+  /** Parent branch to create worktrees from (default: current HEAD). */
+  parentBranch?: string;
 }
 
 export type TaskStatus = "ok" | "error" | "timeout" | "aborted";
@@ -45,6 +52,14 @@ export interface TaskResult {
   branch?: string;
   /** Worktree path, when the task ran with worktree isolation. */
   worktreePath?: string;
+  /** Stable run identity (agent-native contract). */
+  runId?: RunId;
+  /** Artifacts produced by this task. */
+  outputArtifacts?: ArtifactRef[];
+  /** Tool calls made during execution. */
+  toolCalls?: { tool: string; args: unknown; result: string }[];
+  /** Token usage, when available from the child. */
+  usage?: { promptTokens?: number; completionTokens?: number };
 }
 
 export type RunnerEvent =
@@ -134,9 +149,16 @@ export function buildPiArgs(def: AgentDefinition, spec: TaskSpec): string[] {
   return args;
 }
 
-/** git arguments that create a task worktree on a new branch. */
-export function buildWorktreeArgs(branch: string, path: string): string[] {
-  return ["worktree", "add", "-b", branch, path];
+/** git arguments that create a task worktree on a new branch.
+ * When parentBranch is given the worktree is forked from that branch
+ * instead of the current HEAD — enabling prerequisite branch handoff.
+ */
+export function buildWorktreeArgs(
+  branch: string,
+  path: string,
+  parentBranch?: string,
+): string[] {
+  return ["worktree", "add", "-b", branch, ...(parentBranch ? [parentBranch] : []), path];
 }
 
 /** Derive a unique branch name / worktree directory name for a task. */
@@ -321,6 +343,7 @@ async function runOneTask(
     const result: TaskResult = {
       agent: def.name,
       durationMs: opts.now() - startedAt,
+      runId: spec.runId,
       ...partial,
     };
     if (transcript && opts.saveFullOutput) {
@@ -348,7 +371,7 @@ async function runOneTask(
       worktreePath = `${opts.worktreeRoot}/${branch.replace(/\//g, "-")}`;
       const wt = await opts.spawn({
         command: "git",
-        args: buildWorktreeArgs(branch, worktreePath),
+        args: buildWorktreeArgs(branch, worktreePath, spec.parentBranch),
         cwd,
         signal: controller.signal,
       });
@@ -456,6 +479,7 @@ function abortedResult(
     output: "task aborted before start",
     truncated: false,
     durationMs: 0,
+    runId: spec.runId,
   };
   opts.onEvent?.({ type: "task_end", index, agent: spec.agent, result });
   return result;

@@ -13,6 +13,7 @@ import {
   type Criterion,
   type CriterionScore,
 } from "../lykkja/loop.ts";
+import type { ArtifactRef } from "@pi-kit/agent-types";
 
 export const DEFAULT_SCALE_MAX = 10;
 
@@ -25,6 +26,8 @@ export interface ReviewRequest {
   criteria: Criterion[];
   /** Top of the scoring scale. */
   scaleMax: number;
+  /** Artifacts from prerequisite tasks or the implementer for evidence context. */
+  artifacts?: ArtifactRef[];
 }
 
 export interface ReviewResult {
@@ -69,6 +72,15 @@ export function buildCriticPrompt(req: ReviewRequest): string {
     "SUBJECT:",
     req.subject.trim(),
     ...(req.context?.trim() ? ["", "CONTEXT:", req.context.trim()] : []),
+    ...(req.artifacts && req.artifacts.length > 0
+      ? [
+          "",
+          "PREREQUISITE ARTIFACTS (for evidence context):",
+          ...req.artifacts.map((a) =>
+            `  - ${a.type}: ${a.description}${a.location ? ` at ${a.location}` : ""}`,
+          ),
+        ]
+      : []),
     "",
     "RUBRIC (score every criterion, integers 1.." + req.scaleMax + "):",
     rubric,

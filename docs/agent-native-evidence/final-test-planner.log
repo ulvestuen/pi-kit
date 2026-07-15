@@ -1,0 +1,81 @@
+[planner] Warning: illegal status transition pending -> done on task "t1". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> done on task "t2". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> done on task "t3". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> running on task "t1". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> running on task "t1". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> running on task "t1". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> running on task "t1". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> done on task "t1". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> running on task "t2". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> done on task "t1". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> failed on task "t2". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> done on task "t1". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> done on task "t2". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> done on task "t3". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> done on task "t4". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> done on task "t1". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> running on task "t2". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> failed on task "t3". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> done on task "t1". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition running -> done on task "t1". Legal transitions from running: [review, ready, failed]. Proceeding anyway (manual override).
+▶ createPlan
+  ✔ creates a validated plan with pending tasks (0.586625ms)
+  ✔ normalizes criteria with lykkja semantics (0.353ms)
+  ✔ rejects an empty goal (0.170708ms)
+  ✔ rejects an empty task list (0.054208ms)
+  ✔ rejects duplicate ids case-insensitively (0.07575ms)
+  ✔ rejects dangling dependencies (0.06775ms)
+  ✔ rejects self-dependencies (0.377208ms)
+  ✔ rejects cycles (0.111917ms)
+  ✔ rejects tasks without criteria (0.073833ms)
+  ✔ rejects blank titles and descriptions (0.104833ms)
+✔ createPlan (2.560542ms)
+▶ readySet
+  ✔ returns only tasks whose dependencies are all done (0.523833ms)
+  ✔ excludes running, review, done, and failed tasks (0.091417ms)
+  ✔ includes tasks explicitly marked ready (0.067583ms)
+✔ readySet (0.745333ms)
+▶ setTaskStatus
+  ✔ returns a new plan without mutating the old one (0.077875ms)
+  ✔ counts dispatches as attempts (0.059333ms)
+  ✔ does not double-count staying in running (0.05925ms)
+  ✔ rejects unknown task ids (0.059625ms)
+  ✔ rejects invalid statuses (0.064416ms)
+✔ setTaskStatus (0.377417ms)
+▶ updateTask
+  ✔ edits briefs, agents, and criteria (0.111833ms)
+  ✔ rejects blanking required fields (0.057458ms)
+✔ updateTask (0.200833ms)
+▶ addTasks
+  ✔ appends follow-up tasks and re-validates the DAG (0.081875ms)
+  ✔ rejects follow-ups that collide or dangle (0.088375ms)
+✔ addTasks (0.208375ms)
+▶ summarizePlan
+  ✔ counts statuses and computes the ready set (0.197208ms)
+  ✔ reports transitive blockage behind failed tasks (0.10875ms)
+  ✔ computes the critical path over unfinished tasks (0.092458ms)
+✔ summarizePlan (0.445583ms)
+▶ statusLine
+  ✔ summarizes progress for the footer (0.108917ms)
+  ✔ reports completion (0.041541ms)
+✔ statusLine (0.185708ms)
+▶ PlanTask.artifacts
+  ✔ tasks are created with an empty artifacts array (0.047708ms)
+  ✔ artifacts survive createPlan → getTask round-trip (0.053875ms)
+  ✔ artifacts survive JSON round-trip (0.061791ms)
+  ✔ status transitions preserve artifacts (0.049625ms)
+✔ PlanTask.artifacts (0.258542ms)
+▶ setTaskStatus transition soft-check
+  ✔ does not warn on legal transitions (0.054666ms)
+  ✔ warns on illegal transition running → done (0.102625ms)
+  ✔ warns on illegal transition done → ready (0.05575ms)
+  ✔ warns on illegal transition failed → ready (0.047416ms)
+✔ setTaskStatus transition soft-check (0.30175ms)
+ℹ tests 35
+ℹ suites 9
+ℹ pass 35
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 104.528125

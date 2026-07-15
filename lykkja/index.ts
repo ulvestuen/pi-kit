@@ -38,13 +38,31 @@ function buildSystemPrompt(config: LykkjaConfig): string {
   ].join("\n");
 }
 
-/** Restore the most recent loop state from the session entry log. */
+/** Marker that signals a cleared/reset loop — distinct from a valid LoopState. */
+interface TombstoneEntry {
+  tombstone: true;
+}
+
+function isTombstone(data: unknown): data is TombstoneEntry {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    (data as any).tombstone === true
+  );
+}
+
+/** Restore the most recent loop state from the session entry log.
+ * When a tombstone (reset marker) is encountered, all prior entries
+ * are invalidated — the loop was explicitly cleared. */
 function restoreState(ctx: ExtensionContext): LoopState | null {
   let latest: LoopState | null = null;
   for (const entry of ctx.sessionManager.getEntries()) {
     if (entry.type === "custom" && entry.customType === STATE_ENTRY_TYPE) {
-      const data = entry.data as LoopState | undefined;
-      if (data && typeof data.task === "string") {
+      const data = entry.data as LoopState | TombstoneEntry | undefined;
+      if (isTombstone(data)) {
+        // Reset marker — discard everything seen so far
+        latest = null;
+      } else if (data && typeof data.task === "string") {
         latest = data;
       }
     }
@@ -385,7 +403,7 @@ export default function (pi: ExtensionAPI) {
 
       if ((firstWord === "reset" || firstWord === "clear") && !rest) {
         loop = null;
-        pi.appendEntry(STATE_ENTRY_TYPE, undefined);
+        pi.appendEntry(STATE_ENTRY_TYPE, { tombstone: true } as unknown as LoopState);
         updateStatus(ctx);
         ctx.ui.notify("lykkja loop cleared.", "info");
         return;

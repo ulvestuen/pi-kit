@@ -27,11 +27,19 @@ import {
   type SpawnBackendName,
   type SpawnJob,
 } from "./jobs.ts";
+import type { KillResult } from "@pi-kit/agent-types";
 
 const DEFAULT_POLL_INTERVAL_MS = 250;
 const DEFAULT_OUTPUT_MAX_BYTES = Number.POSITIVE_INFINITY;
 const ERROR_TAIL_BYTES = 16 * 1024;
 const NO_OUTPUT = "(no output yet)";
+
+/**
+ * After a kill command is sent to a backend with confirmedKill=false,
+ * the adapter waits this long for the job to reach a terminal state
+ * (via refresh from done markers) before stamping "killed".
+ */
+export const KILL_CONFIRMATION_WAIT_MS = 5_000;
 
 export interface SpawnToolingSpawnOptions {
   /** Spawn extension configuration shared with the selected backend. */
@@ -54,6 +62,10 @@ export interface SpawnToolingSpawnOptions {
    * not stale while this process lives. Defaults to process.pid.
    */
   parentPid?: number;
+  /** Hard deadline in ms. When the poll loop exceeds this, the job is killed
+   * and the outcome reports as timed out. Omit for no hard deadline.
+   */
+  deadlineMs?: number;
   /** Test hooks. */
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -164,16 +176,63 @@ export async function cleanupSpawnToolingJobs(
       continue;
     }
     try {
-      await backend.kill(job);
+      const kr = await backend.kill(job);
+      // KillResult branch 1 — stopped: backend confirmed the process is
+      // no longer running.  Stamp killed immediately.
+      if (kr.stopped) {
+        job.status = "killed";
+        job.updatedAt = now();
+        dirty = true;
+        cleaned++;
+      // KillResult branch 2 — alreadyComplete: backend says the process
+      // already exited before the kill.  Refresh from done marker to
+      // discover the real terminal status (done/failed).
+      } else if (kr.alreadyComplete) {
+        try {
+          await backend.refresh(job);
+        } catch {
+          // Best-effort.
+        }
+        if (!isTerminal(job.status)) {
+          // Backend confirmed completion but refresh could not resolve
+          // the status; mark lost so it does not stay "running" forever.
+          job.status = "lost";
+        }
+        job.updatedAt = now();
+        dirty = true;
+        cleaned++;
+      // KillResult branch 3 — warned / unconfirmed: kill signal sent but
+      // backend cannot confirm the process stopped.  Refresh from done
+      // markers; mark lost if still nonterminal.
+      } else {
+        try {
+          await backend.refresh(job);
+        } catch {
+          // Best-effort.
+        }
+        if (!isTerminal(job.status)) {
+          job.status = "lost";
+        }
+        job.updatedAt = now();
+        dirty = true;
+        cleaned++;
+        options.onError?.(
+          `could not kill stale spawn job ${job.name}: ${kr.message ?? "unknown"}`,
+        );
+      }
     } catch (e: any) {
+      // Kill threw — equivalent to branch 3 (warned/unconfirmed).
+      // Mark lost so the job does not stay "running" forever.
+      if (!isTerminal(job.status)) {
+        job.status = "lost";
+      }
+      job.updatedAt = now();
+      dirty = true;
+      cleaned++;
       options.onError?.(
         `could not kill stale spawn job ${job.name}: ${e?.message ?? e}`,
       );
     }
-    job.status = "killed";
-    job.updatedAt = now();
-    cleaned++;
-    dirty = true;
   }
   if (dirty) saveJobs(options.config.logDir, jobs);
   return cleaned;
@@ -194,6 +253,7 @@ export function createSpawnToolingSpawn(
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const outputMaxBytes = options.outputMaxBytes ?? DEFAULT_OUTPUT_MAX_BYTES;
   const parentPid = options.parentPid ?? process.pid;
+  const deadlineMs = options.deadlineMs;
   const now = options.now ?? Date.now;
   const sleep =
     options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
@@ -222,15 +282,88 @@ export function createSpawnToolingSpawn(
     });
   }
 
-  async function killAndStamp(job: SpawnJob): Promise<void> {
-    if (isTerminal(job.status)) return;
+  /**
+   * Send the kill command via the backend and stamp the registry.
+   *
+   * ADR §6/§9 define three exhaustive branches after backend.kill():
+   *
+   *  1. **stopped** (KillResult.stopped === true)
+   *     The backend confirmed the process is no longer running.
+   *     → Stamp "killed" immediately. No done-marker probe needed.
+   *
+   *  2. **alreadyComplete** (KillResult.alreadyComplete === true, stopped false)
+   *     The backend says the process already exited before the kill.
+   *     → Refresh from the done marker to discover the real terminal
+   *       status (done/failed). If the marker is missing or corrupt
+   *       (refresh cannot resolve), stamp "lost" so the job never
+   *       stays "running" forever.
+   *
+   *  3. **warned / unconfirmed** (both stopped and alreadyComplete false)
+   *     The kill signal was sent but the backend cannot confirm the
+   *     process stopped — it may still be running ("nonterminal") or
+   *     it may have exited during the race ("terminal" after refresh).
+   *     → Refresh from done markers. If still nonterminal, stamp "lost"
+   *       to prevent the job from staying "running" forever. If the
+   *       refresh resolves to a terminal status, use that.
+   *
+   * A thrown exception from backend.kill() is caught and converted to a
+   * warned/unconfirmed KillResult (stopped=false, no alreadyComplete),
+   * following the same path as branch 3.
+   */
+  async function killAndStamp(job: SpawnJob): Promise<KillResult> {
+    // Terminal jobs need no kill; treat as alreadyComplete.
+    if (isTerminal(job.status)) {
+      return { stopped: false, alreadyComplete: true };
+    }
+    let result: KillResult;
     try {
-      await backend.kill(job);
-    } finally {
+      result = await backend.kill(job);
+    } catch (e: any) {
+      // KillResult branch 3 entry: convert thrown error to warned/unconfirmed.
+      result = { stopped: false, message: e?.message ?? String(e) };
+    }
+    if (result.alreadyComplete && !result.stopped) {
+      // KillResult branch 2 — alreadyComplete: refresh from done marker to discover
+      // the real terminal status (done/failed).  If the marker cannot
+      // resolve, stamp lost so the job never stays "running".
+      try {
+        await backend.refresh(job);
+      } catch {
+        // Best-effort; the backend already confirmed completion.
+      }
+      if (!isTerminal(job.status)) {
+        // Backend confirmed completion but refresh could not resolve the
+        // status (missing/corrupt marker); mark lost.
+        job.status = "lost";
+      }
+      job.updatedAt = now();
+      await saveJob(job);
+      return result;
+    }
+    if (result.stopped) {
+      // KillResult branch 1 — stopped: backend confirms the process is gone.
+      // Stamp killed immediately per ADR §6/§9.
       job.status = "killed";
       job.updatedAt = now();
       await saveJob(job);
+      return result;
     }
+    // KillResult branch 3 — warned / unconfirmed: backend could not confirm stop
+    // and the job is not already complete.  The process may still be
+    // running (nonterminal) or may have exited during the race (terminal
+    // after refresh).  Refresh from done markers; if still nonterminal,
+    // stamp "lost" so the job does not stay "running" forever.
+    try {
+      await backend.refresh(job);
+    } catch {
+      // Best-effort.
+    }
+    if (!isTerminal(job.status)) {
+      job.status = "lost";
+    }
+    job.updatedAt = now();
+    await saveJob(job);
+    return result;
   }
 
   return async (request: SpawnRequest): Promise<SpawnOutcome> => {
@@ -275,6 +408,7 @@ export function createSpawnToolingSpawn(
 
     let stdout = "";
     let streamed = "";
+    const startedAt = now();
 
     const streamOutput = async () => {
       const latest = normalizeOutput(await backend.output(job, outputMaxBytes));
@@ -299,13 +433,16 @@ export function createSpawnToolingSpawn(
 
     try {
       for (;;) {
-        if (request.signal.aborted) {
+        if (request.signal.aborted || (deadlineMs !== undefined && now() - startedAt >= deadlineMs)) {
           await killAndStamp(job);
           await streamOutput();
+          const deadlineReason = request.signal.aborted
+            ? "spawn job aborted"
+            : `spawn job exceeded hard deadline of ${deadlineMs} ms`;
           return {
             exitCode: null,
             stdout,
-            stderr: await reportStderr(backend, job),
+            stderr: `${deadlineReason}\n${await reportStderr(backend, job)}`,
           };
         }
 

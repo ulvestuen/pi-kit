@@ -1,0 +1,42 @@
+ M README.md
+ M critic/index.ts
+ M critic/package.json
+ M critic/review.ts
+ M critic/test.ts
+ M fleet/index.ts
+ M fleet/package.json
+ M fleet/runner.ts
+ M fleet/test.ts
+ M lykkja/index.ts
+ M orchestrator/index.ts
+ M orchestrator/package.json
+ M orchestrator/scheduler.ts
+ M orchestrator/test.ts
+ M package-lock.json
+ M package.json
+ M planner/index.ts
+ M planner/package.json
+ M planner/plan.ts
+ M planner/test.ts
+ M spawn/backends/exedev.ts
+ M spawn/backends/microsandbox.ts
+ M spawn/backends/tmux.ts
+ M spawn/config.ts
+ M spawn/index.ts
+ M spawn/jobs.ts
+ M spawn/package.json
+ M spawn/runner-adapter.ts
+ M spawn/test.ts
+?? agent-types/
+?? docs/agent-native-architecture.md
+?? docs/agent-native-consolidated-verification.md
+?? docs/agent-native-control-audit.md
+?? docs/agent-native-evidence/
+?? docs/agent-native-final-acceptance.md
+?? docs/agent-native-fleet-audit.md
+?? docs/agent-native-fleet-verification.md
+?? docs/agent-native-integration-verification.md
+?? docs/agent-native-orchestrator-audit.md
+?? docs/agent-native-spawn-audit.md
+?? docs/agent-native-spawn-verification.md
+?? orchestrator/handoff.ts

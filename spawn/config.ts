@@ -70,6 +70,12 @@ export interface SpawnConfig {
   msbCpus?: number;
   /** Optional sandbox memory limit, e.g. "2G". */
   msbMemory?: string;
+  /** Mount workspace read-only inside the sandbox (default false for backward compat). */
+  sandboxReadonlyWorkspace?: boolean;
+  /** Regex pattern for stripping secrets from persisted job records. */
+  secretsFilter?: string;
+  /** HMAC key for registry integrity checks (optional, future use). */
+  registryHmac?: string;
   /** Resolved config file path, if one was loaded. */
   configPath?: string;
 }
@@ -95,6 +101,9 @@ interface RawSpawnConfig {
   msbRemoveSandbox?: boolean | string;
   msbCpus?: number | string;
   msbMemory?: string;
+  sandboxReadonlyWorkspace?: boolean | string;
+  secretsFilter?: string;
+  registryHmac?: string;
 }
 
 function getDefaultPiAgentDir(): string {
@@ -191,6 +200,9 @@ function loadRawConfig(): { raw: RawSpawnConfig; configPath?: string } {
       msbRemoveSandbox: process.env.SPAWN_MSB_REMOVE_SANDBOX,
       msbCpus: process.env.SPAWN_MSB_CPUS,
       msbMemory: process.env.SPAWN_MSB_MEMORY,
+      sandboxReadonlyWorkspace: process.env.SPAWN_SANDBOX_READONLY_WORKSPACE,
+      secretsFilter: process.env.SPAWN_SECRETS_FILTER,
+      registryHmac: process.env.SPAWN_REGISTRY_HMAC,
     },
   };
 }
@@ -215,6 +227,9 @@ export function defaultConfig(): SpawnConfig {
     msbMountCwd: true,
     msbForwardEnv: true,
     msbRemoveSandbox: true,
+    sandboxReadonlyWorkspace: false,
+    secretsFilter: undefined,
+    registryHmac: undefined,
   };
 }
 
@@ -265,6 +280,9 @@ export function loadConfig(): SpawnConfig {
     msbRemoveSandbox: parseBoolean(raw.msbRemoveSandbox, true),
     msbCpus: msbCpus === undefined ? undefined : Math.round(msbCpus),
     msbMemory: raw.msbMemory?.trim() || undefined,
+    sandboxReadonlyWorkspace: parseBoolean(raw.sandboxReadonlyWorkspace, false),
+    secretsFilter: raw.secretsFilter?.trim() || undefined,
+    registryHmac: raw.registryHmac?.trim() || undefined,
     configPath,
   };
 }

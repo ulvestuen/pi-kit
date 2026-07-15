@@ -14,6 +14,7 @@ import {
   type Criterion,
   type CriterionInput,
 } from "../lykkja/loop.ts";
+import type { ArtifactRef } from "@pi-kit/agent-types";
 
 export const DEFAULT_AGENT = "implementer";
 
@@ -48,6 +49,8 @@ export interface PlanTask {
   status: TaskStatus;
   /** Number of times the task has been dispatched. */
   attempts: number;
+  /** Artifacts produced by this task after passing review. */
+  artifacts: ArtifactRef[];
 }
 
 export interface Plan {
@@ -110,6 +113,7 @@ function buildTask(
     criteria,
     status: "pending",
     attempts: 0,
+    artifacts: [],
   };
 }
 
@@ -208,9 +212,36 @@ export function readySet(plan: Plan): PlanTask[] {
   );
 }
 
+/** Legal status transitions. Maps from current status to the set of
+ * allowed next statuses. Code-enforced with a console.warn on violation;
+ * does not throw so manual overrides remain possible. */
+const LEGAL_TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
+  pending: ["ready"],
+  ready: ["running"],
+  running: ["review", "ready", "failed"],
+  review: ["done", "ready", "failed"],
+  done: [],
+  failed: [],
+};
+
+function warnIllegalTransition(
+  from: TaskStatus,
+  to: TaskStatus,
+  taskId: string,
+): void {
+  console.warn(
+    `[planner] Warning: illegal status transition ${from} -> ${to} on task "${taskId}". ` +
+    `Legal transitions from ${from}: [${LEGAL_TRANSITIONS[from].join(", ")}]. ` +
+    `Proceeding anyway (manual override).`,
+  );
+}
+
 /**
  * Return a new plan with one task's status changed. Dispatching a task
  * (transition to "running") counts as an attempt.
+ *
+ * Logs a warning on illegal transitions but does not throw — manual
+ * overrides remain possible.
  */
 export function setTaskStatus(
   plan: Plan,
@@ -222,6 +253,9 @@ export function setTaskStatus(
     throw new Error(`Invalid task status: ${status}`);
   }
   const target = requireTask(plan, id);
+  if (target.status !== status && !LEGAL_TRANSITIONS[target.status]?.includes(status)) {
+    warnIllegalTransition(target.status, status, id);
+  }
   return {
     ...plan,
     updatedAt: now ?? Date.now(),
@@ -246,6 +280,8 @@ export interface PlanTaskPatch {
   description?: string;
   agent?: string;
   criteria?: CriterionInput[];
+  /** Artifacts produced by the task (set on passing review). */
+  artifacts?: ArtifactRef[];
 }
 
 /** Return a new plan with one task edited. */
@@ -278,6 +314,9 @@ export function updateTask(
       options.passThreshold ?? DEFAULT_PASS_THRESHOLD,
       options.scaleMax ?? DEFAULT_SCALE_MAX,
     );
+  }
+  if (patch.artifacts !== undefined) {
+    updated.artifacts = patch.artifacts;
   }
   return {
     ...plan,
