@@ -13,6 +13,7 @@ import { DEFAULT_TMUX_SESSION } from "../fleet/tmux.ts";
 import type { AgentDefinition } from "../fleet/registry.ts";
 import { runTasks } from "../fleet/runner.ts";
 import { normalizeCriteria, type CriterionInput } from "../lykkja/loop.ts";
+import type { RunId, ArtifactRef } from "@pi-kit/agent-types";
 import { getConfigPath, loadConfig, type CriticConfig } from "./config.ts";
 import {
   buildAdvisePrompt,
@@ -96,12 +97,13 @@ export default function (pi: ExtensionAPI) {
     cwd: string,
     prompt: string,
     signal: AbortSignal | undefined,
+    runId?: RunId,
   ): Promise<{ output: string; status: string }> {
     const def = criticAgent(cwd);
     const registry = new Map([[def.name.toLowerCase(), def]]);
     const [result] = await runTasks(
       registry,
-      [{ agent: def.name, task: prompt, timeoutMs: config.timeoutMs }],
+      [{ agent: def.name, task: prompt, timeoutMs: config.timeoutMs, runId }],
       {
         spawn,
         cwd,
@@ -153,6 +155,24 @@ export default function (pi: ExtensionAPI) {
           }),
           { description: "The rubric to score against.", minItems: 1 },
         ),
+        artifacts: Type.Optional(
+          Type.Array(
+            Type.Object({
+              type: Type.Union([
+                Type.Literal("path"),
+                Type.Literal("branch"),
+                Type.Literal("commit"),
+                Type.Literal("summary"),
+                Type.Literal("patch"),
+                Type.Literal("file-list"),
+              ]),
+              id: Type.String(),
+              description: Type.String(),
+              location: Type.Optional(Type.String()),
+            }),
+            { description: "Artifacts from prerequisite tasks for evidence context." },
+          ),
+        ),
       }),
       async execute(_id, params, signal, _onUpdate, ctx) {
         const request: ReviewRequest = {
@@ -164,6 +184,7 @@ export default function (pi: ExtensionAPI) {
             config.scaleMax,
           ),
           scaleMax: config.scaleMax,
+          artifacts: params.artifacts as ArtifactRef[] | undefined,
         };
         const prompt = buildCriticPrompt(request);
 

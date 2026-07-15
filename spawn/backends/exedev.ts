@@ -27,6 +27,7 @@ import {
   type SpawnBackend,
   type SpawnJob,
 } from "../jobs.ts";
+import type { BackendCapabilities, KillResult } from "@pi-kit/agent-types";
 
 /** Lifecycle commands go to the exe.dev "lobby", not a VM. */
 export const EXEDEV_LOBBY = "exe.dev";
@@ -331,9 +332,53 @@ export function createExedevBackend(
       return tail.exitCode === 0 ? tail.stdout : "";
     },
 
-    async kill(job: SpawnJob): Promise<void> {
-      if (!job.sshDest || !job.remoteDir) return;
+    async kill(job: SpawnJob): Promise<KillResult> {
+      // Backend KillResult contract (called by killAndStamp, cleanupSpawnToolingJobs, spawn_kill):
+      //
+      //  - stopped=true:  process confirmed dead after SIGTERM (probe shows dead post-kill).
+      //    Caller stamps "killed" immediately.
+      //  - alreadyComplete=true, stopped=false:  process was already dead before the kill
+      //    attempt (probe shows dead on first check).  Caller refreshes from done marker.
+      //  - stopped=false, no alreadyComplete:  kill signal was sent but the process is
+      //    still alive after re-probe ("unconfirmed"), OR the initial/confirm probe itself
+      //    failed due to SSH/network issues.  Caller tries to refresh from done markers
+      //    and marks "lost" if still nonterminal.
+      if (!job.sshDest || !job.remoteDir) {
+        return { stopped: false, message: "no ssh dest or remote dir" };
+      }
+      // Probe whether the process is still alive before killing.
+      const aliveProbe = `d=${remoteDirExpr(job.remoteDir)}; if [ -s "$d/pid" ] && kill -0 "$(cat "$d/pid")" 2>/dev/null; then echo alive; else echo dead; fi`;
+      const probe = await ssh(job.sshDest, aliveProbe);
+      if (probe.exitCode !== 0) {
+        return { stopped: false, message: `probe failed: ${probe.stderr.trim()}` };
+      }
+      if (probe.stdout.trim() === "dead") {
+        return { stopped: false, alreadyComplete: true, message: "process already exited" };
+      }
+      // Send SIGTERM to the process group.
       await ssh(job.sshDest, buildKillCommand(job.remoteDir));
+      // Re-probe to confirm the process actually stopped.
+      const confirmProbe = await ssh(job.sshDest, aliveProbe);
+      if (confirmProbe.exitCode !== 0) {
+        // Probe failed after kill — we sent the signal but cannot confirm.
+        return { stopped: false, message: `kill sent but probe failed after: ${confirmProbe.stderr.trim()}` };
+      }
+      if (confirmProbe.stdout.trim() === "dead") {
+        return { stopped: true };
+      }
+      // Process is still alive after SIGTERM — unconfirmed kill.
+      return { stopped: false, message: "kill sent but process still running" };
+    },
+
+    async capabilities(): Promise<BackendCapabilities> {
+      return {
+        workspaceMount: false,
+        cursorOutput: false,
+        confirmedKill: true,
+        durableLogs: true,
+        networkAccess: true,
+        hardwareIsolation: false,
+      };
     },
   };
 }

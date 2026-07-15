@@ -24,10 +24,18 @@ import {
 } from "../critic/review.ts";
 import { DEFAULT_SCALE_MAX } from "../lykkja/loop.ts";
 import {
+  getTask,
+  setTaskStatus,
   summarizePlan,
   type Plan,
   type PlanTask,
 } from "../planner/plan.ts";
+import type { RunId, RunEvent, ArtifactRef } from "@pi-kit/agent-types";
+import {
+  buildHandoffSection,
+  findParentBranch,
+  recordPassingArtifacts,
+} from "./handoff.ts";
 import {
   applyReview,
   applyTaskResult,
@@ -75,10 +83,18 @@ function buildRunPrompt(goal: string): string {
   ].join("\n");
 }
 
-function buildTaskBrief(plan: Plan, task: PlanTask, scaleMax: number): string {
+
+
+function buildTaskBrief(
+  plan: Plan,
+  task: PlanTask,
+  scaleMax: number,
+  parentBranch?: string,
+): string {
   const criteria = task.criteria
     .map((c) => `- ${c.name} (threshold ${c.threshold}/${scaleMax})`)
     .join("\n");
+  const handoff = buildHandoffSection(plan, task, parentBranch);
   return [
     "You are executing one task of a larger orchestrated plan.",
     "",
@@ -87,12 +103,22 @@ function buildTaskBrief(plan: Plan, task: PlanTask, scaleMax: number): string {
     "",
     `YOUR TASK (${task.id}): ${task.title}`,
     task.description,
+    ...handoff ? [handoff] : [],
     "",
     "ACCEPTANCE CRITERIA — an independent critic will score each one afterwards:",
     criteria,
     "",
     "Work only within this task's scope. End with a terse report: what changed (files touched), how a reviewer can verify each criterion, and any assumptions made.",
   ].join("\n");
+}
+
+function requireSuccessfulCommand(
+  label: string,
+  outcome: { exitCode: number | null; stdout: string; stderr: string },
+): void {
+  if (outcome.exitCode === 0) return;
+  const detail = outcome.stderr.trim() || outcome.stdout.trim() || "no diagnostic output";
+  throw new Error(`${label} failed (exit ${outcome.exitCode ?? "signal"}): ${detail}`);
 }
 
 function buildReviewSubject(task: PlanTask, result?: TaskResult): string {
@@ -109,6 +135,16 @@ function buildReviewSubject(task: PlanTask, result?: TaskResult): string {
     );
   } else {
     lines.push("", "The work is in the current working tree.");
+  }
+  if (result?.outputArtifacts && result.outputArtifacts.length > 0) {
+    lines.push("", "Implementer's output artifacts:");
+    for (const art of result.outputArtifacts)
+      lines.push(`  - ${art.type}: ${art.description}${art.location ? ` at ${art.location}` : ""}`);
+  }
+  if (task.artifacts.length > 0) {
+    lines.push("", "Recorded task artifacts:");
+    for (const art of task.artifacts)
+      lines.push(`  - ${art.type}: ${art.description}${art.location ? ` at ${art.location}` : ""}`);
   }
   return lines.join("\n");
 }
@@ -255,6 +291,19 @@ export default function (pi: ExtensionAPI) {
         state = { ...state, wave: state.wave + 1 };
         persistState();
         const wave = state.wave;
+        const runLog: RunEvent[] = [];
+        const appendRunEvent = (
+          type: RunEvent["type"],
+          runId: RunId,
+          payload: unknown,
+        ) => {
+          runLog.push({ timestamp: Date.now(), type, runId, payload });
+        };
+        appendRunEvent(
+          "wave_start",
+          { runId: `wave-${wave}`, taskId: "", attempt: 0, wave },
+          { dispatch: decision.dispatch.map((task) => task.id) },
+        );
         pi.events.emit("orchestrator:wave_start", {
           wave,
           dispatch: decision.dispatch.map((t) => t.id),
@@ -274,6 +323,7 @@ export default function (pi: ExtensionAPI) {
 
         const scaleMax = DEFAULT_SCALE_MAX;
         const resultsById = new Map<string, TaskResult>();
+        const artifactWarnings: string[] = [];
         const runnerBase = {
           spawn,
           cwd: ctx.cwd,
@@ -288,12 +338,24 @@ export default function (pi: ExtensionAPI) {
           progress(
             `dispatching ${dispatched.length} task(s): ${dispatched.map((t) => t.id).join(", ")}`,
           );
-          const specs: TaskSpec[] = dispatched.map((task) => ({
-            agent: task.agent ?? config.defaultAgent,
-            task: buildTaskBrief(plan!, task, scaleMax),
-            isolation: config.isolation,
-            timeoutMs: config.taskTimeoutMs,
-          }));
+          const specs: TaskSpec[] = dispatched.map((task) => {
+            const parentBranch = config.isolation === "worktree"
+              ? findParentBranch(plan!, task)
+              : undefined;
+            return {
+              agent: task.agent ?? config.defaultAgent,
+              task: buildTaskBrief(plan!, task, scaleMax, parentBranch),
+              isolation: config.isolation,
+              timeoutMs: config.taskTimeoutMs,
+              parentBranch,
+              runId: {
+                runId: `${task.id}-w${wave}-a${task.attempts + 1}`,
+                taskId: task.id,
+                attempt: task.attempts + 1,
+                wave,
+              },
+            };
+          });
           const results = await runTasks(registry, specs, {
             ...runnerBase,
             maxBatch: Math.max(specs.length, 1),
@@ -301,7 +363,23 @@ export default function (pi: ExtensionAPI) {
               config.isolation === "worktree"
                 ? createWorktreeRoot("pi-orchestrator")
                 : undefined,
-            onEvent: (e) => pi.events.emit(`fleet:${e.type}`, e),
+            onEvent: (event) => {
+              pi.events.emit(`fleet:${event.type}`, event);
+              const spec = specs[event.index];
+              const task = dispatched[event.index];
+              if (event.type === "task_start") {
+                appendRunEvent("task_start", spec.runId!, {
+                  taskId: task.id,
+                  agent: event.agent,
+                });
+              } else if (event.type === "task_end") {
+                appendRunEvent("task_end", event.result.runId ?? spec.runId!, {
+                  taskId: task.id,
+                  status: event.result.status,
+                  durationMs: event.result.durationMs,
+                });
+              }
+            },
           });
           results.forEach((result, i) => {
             const task = dispatched[i];
@@ -330,13 +408,22 @@ export default function (pi: ExtensionAPI) {
           const criticRegistry = new Map([[critic.name.toLowerCase(), critic]]);
 
           const requests = new Map<string, ReviewRequest>();
-          const reviewSpec = (task: PlanTask): TaskSpec => {
+          const reviewSpec = (task: PlanTask, attempt: number): TaskSpec => {
             const result = resultsById.get(task.id);
+            // Collect prerequisite artifacts for evidence context
+            const depArtifacts: ArtifactRef[] = [];
+            for (const depId of task.dependsOn) {
+              const dep = getTask(plan!, depId);
+              if (dep && dep.status === "done" && dep.artifacts.length > 0) {
+                depArtifacts.push(...dep.artifacts);
+              }
+            }
             const request: ReviewRequest = {
               subject: buildReviewSubject(task, result),
               context: `Goal: ${plan!.goal}\n\nTask brief:\n${task.description}`,
               criteria: task.criteria,
               scaleMax,
+              artifacts: depArtifacts.length > 0 ? depArtifacts : undefined,
             };
             requests.set(task.id, request);
             return {
@@ -344,34 +431,68 @@ export default function (pi: ExtensionAPI) {
               task: buildCriticPrompt(request),
               cwd: result?.worktreePath,
               timeoutMs: config.reviewTimeoutMs,
+              runId: {
+                runId: `review-${task.id}-w${wave}-a${attempt}`,
+                taskId: task.id,
+                attempt,
+                wave,
+              },
             };
           };
 
+          const parseReviewOutcome = (
+            task: PlanTask,
+            outcome: TaskResult,
+          ): ReviewResult => {
+            const request = requests.get(task.id)!;
+            return outcome.status === "ok"
+              ? parseCriticOutput(outcome.output, request)
+              : {
+                  scores: [],
+                  passed: false,
+                  weaknesses: [
+                    `unscorable output: critic run ${outcome.status}`,
+                  ],
+                  raw: outcome.output,
+                };
+          };
+
+          let reviewAttempt = 0;
           const runReviews = async (
             targets: PlanTask[],
           ): Promise<Map<string, ReviewResult>> => {
-            const specs = targets.map(reviewSpec);
+            const attempt = ++reviewAttempt;
+            const specs = targets.map((task) => reviewSpec(task, attempt));
             const outcomes = await runTasks(criticRegistry, specs, {
               ...runnerBase,
               maxBatch: Math.max(specs.length, 1),
+              onEvent: (event) => {
+                pi.events.emit(`fleet:${event.type}`, event);
+                const task = targets[event.index];
+                const runId = event.type === "task_end"
+                  ? event.result.runId ?? specs[event.index].runId!
+                  : specs[event.index].runId!;
+                if (event.type === "task_start") {
+                  appendRunEvent("review_start", runId, {
+                    taskId: task.id,
+                    reviewer: event.agent,
+                  });
+                } else if (event.type === "task_end") {
+                  const review = parseReviewOutcome(task, event.result);
+                  appendRunEvent("review_end", runId, {
+                    taskId: task.id,
+                    status: event.result.status,
+                    durationMs: event.result.durationMs,
+                    passed: review.passed,
+                    scoreCount: review.scores.length,
+                  });
+                }
+              },
             });
             const parsed = new Map<string, ReviewResult>();
             outcomes.forEach((outcome, i) => {
               const task = targets[i];
-              const request = requests.get(task.id)!;
-              parsed.set(
-                task.id,
-                outcome.status === "ok"
-                  ? parseCriticOutput(outcome.output, request)
-                  : {
-                      scores: [],
-                      passed: false,
-                      weaknesses: [
-                        `unscorable output: critic run ${outcome.status}`,
-                      ],
-                      raw: outcome.output,
-                    },
-              );
+              parsed.set(task.id, parseReviewOutcome(task, outcome));
             });
             return parsed;
           };
@@ -392,10 +513,46 @@ export default function (pi: ExtensionAPI) {
               retry && retry.scores.length > 0 ? retry : firstPass.get(task.id)!;
             reviewsById.set(task.id, review);
             plan = applyReview(plan!, task.id, review, policy);
+            // Record artifacts and commit worktree when the review passes
+            if (review.passed) {
+              const result = resultsById.get(task.id);
+              const worktreeCommit = config.isolation === "worktree" && result?.worktreePath
+                ? async (_branch: string) => {
+                    // Use a default signal if none provided (should not happen in practice).
+                    const commitSignal = signal ?? new AbortController().signal;
+                    const addOutcome = await spawn({
+                      command: "git",
+                      args: ["add", "-A"],
+                      cwd: result.worktreePath!,
+                      signal: commitSignal,
+                    });
+                    requireSuccessfulCommand("git add", addOutcome);
+                    const commitOutcome = await spawn({
+                      command: "git",
+                      args: ["commit", "-m", `[orchestrator] auto-commit task ${getTask(plan!, task.id)!.id} after passing review`],
+                      cwd: result.worktreePath!,
+                      signal: commitSignal,
+                    });
+                    requireSuccessfulCommand("git commit", commitOutcome);
+                  }
+                : undefined;
+              plan = await recordPassingArtifacts(
+                plan!,
+                getTask(plan!, task.id)!,
+                result,
+                worktreeCommit,
+                (warning) => artifactWarnings.push(`[${task.id}] ${warning}`),
+              );
+            }
           }
           publishPlan(plan);
         }
 
+        appendRunEvent(
+          "wave_end",
+          { runId: `wave-${wave}-end`, taskId: "", attempt: 0, wave },
+          {},
+        );
         pi.events.emit("orchestrator:wave_end", { wave });
 
         // --- Report the wave ----------------------------------------------
@@ -447,9 +604,19 @@ export default function (pi: ExtensionAPI) {
           }
         }
 
-        const branches = [...resultsById.entries()]
-          .filter(([id, r]) => r.branch && plan!.tasks.find((t) => t.id === id)?.status === "done")
-          .map(([id, r]) => `${r.branch} (${id})`);
+        if (artifactWarnings.length > 0) {
+          lines.push("", "Artifact handoff warnings:");
+          for (const warning of artifactWarnings) lines.push(`  - ${warning}`);
+        }
+
+        const branches = [...new Set([...resultsById.keys(), ...reviewsById.keys()])]
+          .flatMap((id) => {
+            const task = plan!.tasks.find((candidate) => candidate.id === id);
+            if (task?.status !== "done") return [];
+            return task.artifacts
+              .filter((artifact) => artifact.type === "branch")
+              .map((artifact) => `${artifact.location ?? artifact.id} (${id})`);
+          });
         if (branches.length > 0) {
           lines.push(
             "",
@@ -480,6 +647,8 @@ export default function (pi: ExtensionAPI) {
             results: Object.fromEntries(resultsById),
             reviews: Object.fromEntries(reviewsById),
             summary,
+            artifactWarnings,
+            runLog,
           },
         };
       },

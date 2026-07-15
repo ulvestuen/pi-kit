@@ -11,6 +11,7 @@ import {
   updateTask,
   type PlanTaskInput,
 } from "./plan.ts";
+import type { ArtifactRef } from "@pi-kit/agent-types";
 
 function task(
   id: string,
@@ -275,5 +276,130 @@ describe("statusLine", () => {
     let plan = createPlan("g", [task("t1")]);
     plan = setTaskStatus(plan, "t1", "done");
     assert.strictEqual(statusLine(plan), "plan: complete (1/1 done)");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Artifacts on PlanTask
+// ---------------------------------------------------------------------------
+
+describe("PlanTask.artifacts", () => {
+  it("tasks are created with an empty artifacts array", () => {
+    const plan = createPlan("g", [task("t1")]);
+    const t1 = getTask(plan, "t1")!;
+    assert.deepStrictEqual(t1.artifacts, []);
+  });
+
+  it("artifacts survive createPlan → getTask round-trip", () => {
+    const plan = createPlan("g", [task("t1")]);
+    const arts: ArtifactRef[] = [
+      { type: "branch", id: "feat-a", description: "feature branch", location: "fleet/task-1-100" },
+      { type: "summary", id: "review", description: "review summary" },
+    ];
+    const updated = updateTask(plan, "t1", { artifacts: arts });
+    const t1 = getTask(updated, "t1")!;
+    assert.strictEqual(t1.artifacts.length, 2);
+    assert.strictEqual(t1.artifacts[0].type, "branch");
+    assert.strictEqual(t1.artifacts[0].location, "fleet/task-1-100");
+  });
+
+  it("artifacts survive JSON round-trip", () => {
+    const plan = createPlan("g", [task("t1")]);
+    const arts: ArtifactRef[] = [
+      { type: "path", id: "file", description: "output file", location: "/tmp/out" },
+    ];
+    const updated = updateTask(plan, "t1", { artifacts: arts });
+    const json = JSON.stringify(updated);
+    const restored = JSON.parse(json);
+    const t1 = getTask(restored, "t1")!;
+    assert.deepStrictEqual(t1.artifacts, arts);
+  });
+
+  it("status transitions preserve artifacts", () => {
+    let plan = createPlan("g", [task("t1")]);
+    const arts: ArtifactRef[] = [
+      { type: "commit", id: "abc", description: "commit" },
+    ];
+    plan = updateTask(plan, "t1", { artifacts: arts });
+    plan = setTaskStatus(plan, "t1", "ready");
+    plan = setTaskStatus(plan, "t1", "running");
+    plan = setTaskStatus(plan, "t1", "done");
+    assert.deepStrictEqual(getTask(plan, "t1")!.artifacts, arts);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Transition soft-check: warns on illegal transitions
+// ---------------------------------------------------------------------------
+
+describe("setTaskStatus transition soft-check", () => {
+  it("does not warn on legal transitions", () => {
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: any[]) => warnings.push(args.join(" "));
+    try {
+      let plan = createPlan("g", [task("t1")]);
+      plan = setTaskStatus(plan, "t1", "ready");
+      plan = setTaskStatus(plan, "t1", "running");
+      plan = setTaskStatus(plan, "t1", "review");
+      plan = setTaskStatus(plan, "t1", "done");
+      assert.strictEqual(warnings.length, 0);
+    } finally {
+      console.warn = origWarn;
+    }
+  });
+
+  it("warns on illegal transition running → done", () => {
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: any[]) => warnings.push(args.join(" "));
+    try {
+      let plan = createPlan("g", [task("t1")]);
+      plan = setTaskStatus(plan, "t1", "ready");
+      plan = setTaskStatus(plan, "t1", "running");
+      // running → done is illegal
+      plan = setTaskStatus(plan, "t1", "done");
+      assert.ok(warnings.length >= 1);
+      assert.match(warnings[0], /running.*done/);
+      assert.match(warnings[0], /t1/);
+      // The transition still succeeds (manual override)
+      assert.strictEqual(getTask(plan, "t1")!.status, "done");
+    } finally {
+      console.warn = origWarn;
+    }
+  });
+
+  it("warns on illegal transition done → ready", () => {
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: any[]) => warnings.push(args.join(" "));
+    try {
+      let plan = createPlan("g", [task("t1")]);
+      plan = setTaskStatus(plan, "t1", "ready");
+      plan = setTaskStatus(plan, "t1", "done");
+      // done → ready is illegal
+      plan = setTaskStatus(plan, "t1", "ready");
+      assert.ok(warnings.length >= 1);
+      assert.match(warnings[0], /done.*ready/);
+    } finally {
+      console.warn = origWarn;
+    }
+  });
+
+  it("warns on illegal transition failed → ready", () => {
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: any[]) => warnings.push(args.join(" "));
+    try {
+      let plan = createPlan("g", [task("t1")]);
+      plan = setTaskStatus(plan, "t1", "ready");
+      plan = setTaskStatus(plan, "t1", "failed");
+      // failed → ready is illegal
+      plan = setTaskStatus(plan, "t1", "ready");
+      assert.ok(warnings.length >= 1);
+      assert.match(warnings[0], /failed.*ready/);
+    } finally {
+      console.warn = origWarn;
+    }
   });
 });

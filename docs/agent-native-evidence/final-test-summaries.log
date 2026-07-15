@@ -1,0 +1,47 @@
+===== agent-types (final-test-agent-types.log) =====
+ℹ tests 35
+ℹ suites 15
+ℹ pass 35
+ℹ fail 0
+
+===== lykkja (final-test-lykkja.log) =====
+ℹ tests 34
+ℹ suites 6
+ℹ pass 34
+ℹ fail 0
+
+===== fleet (final-test-fleet.log) =====
+ℹ tests 65
+ℹ suites 13
+ℹ pass 65
+ℹ fail 0
+
+===== planner (final-test-planner.log) =====
+ℹ tests 35
+ℹ suites 9
+ℹ pass 35
+ℹ fail 0
+
+===== critic (final-test-critic.log) =====
+ℹ tests 20
+ℹ suites 3
+ℹ pass 20
+ℹ fail 0
+
+===== orchestrator (final-test-orchestrator.log) =====
+ℹ tests 37
+ℹ suites 11
+ℹ pass 37
+ℹ fail 0
+
+===== spawn (final-test-spawn.log) =====
+ℹ tests 132
+ℹ suites 26
+ℹ pass 132
+ℹ fail 0
+
+===== TOTALS (verified arithmetic) =====
+ℹ tests 358
+ℹ suites 83
+ℹ pass 358
+ℹ fail 0

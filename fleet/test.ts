@@ -8,6 +8,7 @@ import {
 } from "./registry.ts";
 import {
   buildPiArgs,
+  buildTaskPrompt,
   buildWorktreeArgs,
   capOutput,
   parsePiJsonOutput,
@@ -15,8 +16,10 @@ import {
   worktreeBranchName,
   type SpawnFn,
   type SpawnRequest,
+  type TaskResult,
   type TaskSpec,
 } from "./runner.ts";
+import type { RunId, ArtifactRef } from "@pi-kit/agent-types";
 import {
   buildTailCommand,
   createLineSplitter,
@@ -222,6 +225,26 @@ describe("buildPiArgs", () => {
       "x prompt",
       "t",
     ]);
+  });
+
+  it("appends artifacts and parent run IDs to the child brief", () => {
+    const prompt = buildTaskPrompt({
+      agent: "x",
+      task: "implement the parser",
+      inputArtifacts: [
+        {
+          type: "branch",
+          id: "feature/parser",
+          description: "parser implementation",
+          location: "fleet/parser-1",
+        },
+      ],
+      parentRunIds: ["parser-w1-a1"],
+    });
+    assert.match(prompt, /^implement the parser/);
+    assert.match(prompt, /Input artifacts:/);
+    assert.match(prompt, /branch: parser implementation at fleet\/parser-1/);
+    assert.match(prompt, /Parent run IDs: parser-w1-a1/);
   });
 });
 
@@ -747,5 +770,326 @@ describe("tmux mirror", () => {
     const second = await spawn({ command: "pi", args: [], cwd: "/r", signal, label: "2-worker" });
     assert.strictEqual(second.exitCode, 0);
     assert.strictEqual(calls.length, callsBefore);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Agent-native contracts: RunId propagation, parentBranch, backward compat
+// ---------------------------------------------------------------------------
+
+describe("agent-native: RunId propagation", () => {
+  const registry = registryOf(def("worker"));
+
+  it("propagates runId from TaskSpec to TaskResult", async () => {
+    const runId: RunId = {
+      runId: "r-prop-1",
+      taskId: "t-prop-1",
+      attempt: 1,
+      wave: 1,
+    };
+    const [result] = await runTasks(
+      registry,
+      [{ agent: "worker", task: "t", runId }],
+      { spawn: okSpawn("done"), cwd: "/repo" },
+    );
+    assert.deepStrictEqual(result.runId, runId);
+  });
+
+  it("runId is undefined when TaskSpec omits it (backward compat)", async () => {
+    const [result] = await runTasks(
+      registry,
+      [{ agent: "worker", task: "t" }],
+      { spawn: okSpawn("ok"), cwd: "/repo" },
+    );
+    assert.strictEqual(result.runId, undefined);
+  });
+
+  it("propagates runId through abort path", async () => {
+    const controller = new AbortController();
+    const runId: RunId = {
+      runId: "r-abort",
+      taskId: "t-abort",
+      attempt: 1,
+      wave: 1,
+    };
+    const spawn: SpawnFn = async (req) => {
+      controller.abort();
+      return new Promise((resolve) => {
+        const finish = () => resolve({ exitCode: null, stdout: "", stderr: "" });
+        if (req.signal.aborted) return finish();
+        req.signal.addEventListener("abort", finish);
+      });
+    };
+    const [result] = await runTasks(
+      registry,
+      [{ agent: "worker", task: "t", runId }],
+      { spawn, cwd: "/repo", signal: controller.signal },
+    );
+    assert.deepStrictEqual(result.runId, runId);
+    assert.strictEqual(result.status, "aborted");
+  });
+
+  it("propagates runId through timeout path", async () => {
+    const runId: RunId = {
+      runId: "r-timeout",
+      taskId: "t-timeout",
+      attempt: 1,
+      wave: 2,
+    };
+    const spawn: SpawnFn = (req) =>
+      new Promise((resolve) => {
+        req.signal.addEventListener("abort", () =>
+          resolve({ exitCode: null, stdout: "", stderr: "" }),
+        );
+      });
+    const [result] = await runTasks(
+      registry,
+      [{ agent: "worker", task: "slow", runId, timeoutMs: 20 }],
+      { spawn, cwd: "/repo" },
+    );
+    assert.deepStrictEqual(result.runId, runId);
+    assert.strictEqual(result.status, "timeout");
+    assert.match(result.output, /timed out/);
+  });
+
+  it("propagates runId through error path (child failure)", async () => {
+    const runId: RunId = {
+      runId: "r-error",
+      taskId: "t-error",
+      attempt: 3,
+      wave: 1,
+    };
+    const spawn: SpawnFn = async () => ({
+      exitCode: 1,
+      stdout: "",
+      stderr: "kaboom",
+    });
+    const [result] = await runTasks(
+      registry,
+      [{ agent: "worker", task: "failing", runId }],
+      { spawn, cwd: "/repo" },
+    );
+    assert.deepStrictEqual(result.runId, runId);
+    assert.strictEqual(result.status, "error");
+    assert.strictEqual(result.exitCode, 1);
+  });
+});
+
+describe("agent-native: parentBranch worktree", () => {
+  const registry = registryOf(def("worker"));
+
+  it("passes parentBranch to buildWorktreeArgs for prerequisite branch handoff", async () => {
+    const calls: SpawnRequest[] = [];
+    const spawn: SpawnFn = async (req) => {
+      calls.push(req);
+      return { exitCode: 0, stdout: assistantLine("done"), stderr: "" };
+    };
+    const runId: RunId = {
+      runId: "r-wt",
+      taskId: "t-wt",
+      attempt: 1,
+      wave: 2,
+    };
+    const [result] = await runTasks(
+      registry,
+      [{
+        agent: "worker",
+        task: "continue",
+        isolation: "worktree",
+        parentBranch: "feat/prerequisite",
+        runId,
+      }],
+      {
+        spawn,
+        cwd: "/repo",
+        worktreeRoot: "/scratch/wt",
+        now: () => 100,
+      },
+    );
+    // git worktree add should include the parentBranch argument
+    assert.strictEqual(calls[0].command, "git");
+    assert.ok(calls[0].args.includes("feat/prerequisite"));
+    // The branch should be forked from the parent, not from HEAD
+    assert.deepStrictEqual(calls[0].args, [
+      "worktree", "add", "-b", "fleet/task-1-100",
+      "feat/prerequisite",
+      "/scratch/wt/fleet-task-1-100",
+    ]);
+    assert.strictEqual(result.status, "ok");
+    assert.deepStrictEqual(result.runId, runId);
+  });
+
+  it("preserves runId when parentBranch worktree creation fails", async () => {
+    const runId: RunId = {
+      runId: "r-wt-fail",
+      taskId: "t-wt-fail",
+      attempt: 1,
+      wave: 3,
+    };
+    const spawn: SpawnFn = async (req) => {
+      if (req.command === "git") {
+        return { exitCode: 128, stdout: "", stderr: "fatal: not a git repo" };
+      }
+      return { exitCode: 0, stdout: assistantLine("done"), stderr: "" };
+    };
+    const [result] = await runTasks(
+      registry,
+      [{
+        agent: "worker",
+        task: "t",
+        isolation: "worktree",
+        parentBranch: "feat/broken",
+        runId,
+      }],
+      { spawn, cwd: "/repo", worktreeRoot: "/scratch/wt" },
+    );
+    assert.strictEqual(result.status, "error");
+    assert.deepStrictEqual(result.runId, runId);
+    assert.match(result.output, /not a git repo/);
+  });
+});
+
+describe("agent-native: inputArtifacts and outputArtifacts", () => {
+  const registry = registryOf(def("worker"));
+
+  it("passes inputArtifacts and parentRunIds to the child prompt", async () => {
+    const inputArtifacts: ArtifactRef[] = [
+      { type: "branch", id: "feat-a", description: "prerequisite" },
+      { type: "summary", id: "rev-1", description: "review" },
+    ];
+    let childPrompt = "";
+    const [result] = await runTasks(
+      registry,
+      [{
+        agent: "worker",
+        task: "t",
+        inputArtifacts,
+        parentRunIds: ["parent-1"],
+      }],
+      {
+        spawn: okSpawn("ok", (request) => {
+          childPrompt = request.args.at(-1) ?? "";
+        }),
+        cwd: "/repo",
+      },
+    );
+    assert.strictEqual(result.status, "ok");
+    assert.match(childPrompt, /branch: prerequisite at feat-a/);
+    assert.match(childPrompt, /summary: review at rev-1/);
+    assert.match(childPrompt, /Parent run IDs: parent-1/);
+    // Structured result parsing is not implemented yet.
+    assert.strictEqual(result.outputArtifacts, undefined);
+  });
+
+  it("TaskResult without agent-native fields has them as undefined", async () => {
+    const [result] = await runTasks(
+      registry,
+      [{ agent: "worker", task: "t" }],
+      { spawn: okSpawn("done"), cwd: "/repo" },
+    );
+    // Legacy callers don't set agent-native fields; they come back undefined
+    assert.strictEqual(result.runId, undefined);
+    assert.strictEqual(result.outputArtifacts, undefined);
+    assert.strictEqual(result.toolCalls, undefined);
+    assert.strictEqual(result.usage, undefined);
+  });
+});
+
+describe("agent-native: backward compatibility", () => {
+  const registry = registryOf(def("worker"));
+
+  it("plain TaskSpec with no agent-native fields produces a valid TaskResult", async () => {
+    const [result] = await runTasks(
+      registry,
+      [{ agent: "worker", task: "do the thing" }],
+      { spawn: okSpawn("result text"), cwd: "/repo" },
+    );
+    assert.strictEqual(result.agent, "worker");
+    assert.strictEqual(result.status, "ok");
+    assert.strictEqual(result.output, "result text");
+    assert.strictEqual(result.truncated, false);
+    assert.ok(typeof result.durationMs === "number");
+    // No agent-native fields should be set
+    assert.strictEqual(result.runId, undefined);
+    assert.strictEqual(result.outputArtifacts, undefined);
+    assert.strictEqual(result.toolCalls, undefined);
+    assert.strictEqual(result.usage, undefined);
+  });
+
+  it("worktree isolation without parentBranch defaults to HEAD", async () => {
+    const calls: SpawnRequest[] = [];
+    const spawn: SpawnFn = async (req) => {
+      calls.push(req);
+      return { exitCode: 0, stdout: assistantLine("done"), stderr: "" };
+    };
+    const [result] = await runTasks(
+      registry,
+      [{ agent: "worker", task: "t", isolation: "worktree" }],
+      {
+        spawn,
+        cwd: "/repo",
+        worktreeRoot: "/scratch/wt",
+        now: () => 42,
+      },
+    );
+    // Without parentBranch, git worktree add gets just branch + path (no extra arg)
+    assert.deepStrictEqual(calls[0].args, [
+      "worktree", "add", "-b", "fleet/task-1-42",
+      "/scratch/wt/fleet-task-1-42",
+    ]);
+    assert.strictEqual(result.status, "ok");
+  });
+
+  it("all results retain legacy fields (agent, status, output, truncated, etc.)", async () => {
+    const results = await runTasks(
+      registry,
+      [
+        { agent: "worker", task: "t1" },
+        { agent: "worker", task: "t2" },
+      ],
+      { spawn: okSpawn("done"), cwd: "/repo" },
+    );
+    for (const r of results) {
+      assert.strictEqual(typeof r.agent, "string");
+      assert.ok(["ok", "error", "timeout", "aborted"].includes(r.status));
+      assert.strictEqual(typeof r.output, "string");
+      assert.strictEqual(typeof r.truncated, "boolean");
+      assert.ok(typeof r.durationMs === "number");
+    }
+  });
+
+  it("legacy TaskResult destructuring still works (old consumer pattern)", async () => {
+    const [result] = await runTasks(
+      registry,
+      [{ agent: "worker", task: "t" }],
+      { spawn: okSpawn("hello"), cwd: "/repo" },
+    );
+    // Old code pattern: destructure only legacy fields
+    const { agent, status, output, truncated, durationMs, exitCode } = result;
+    assert.strictEqual(agent, "worker");
+    assert.strictEqual(status, "ok");
+    assert.strictEqual(output, "hello");
+    assert.strictEqual(truncated, false);
+    assert.ok(typeof durationMs === "number");
+    assert.strictEqual(exitCode, 0);
+  });
+});
+
+describe("agent-native: buildWorktreeArgs parentBranch", () => {
+  it("includes parentBranch when given", () => {
+    const args = buildWorktreeArgs("fleet/task-1-42", "/wt/path", "feat/base");
+    assert.deepStrictEqual(args, [
+      "worktree", "add", "-b", "fleet/task-1-42",
+      "feat/base",
+      "/wt/path",
+    ]);
+  });
+
+  it("omits parentBranch when undefined", () => {
+    const args = buildWorktreeArgs("fleet/task-1-42", "/wt/path");
+    assert.deepStrictEqual(args, [
+      "worktree", "add", "-b", "fleet/task-1-42",
+      "/wt/path",
+    ]);
   });
 });

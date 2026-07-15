@@ -1,0 +1,34 @@
+▶ buildCriticPrompt
+  ✔ includes subject, context, rubric with thresholds, and JSON instructions (0.489958ms)
+  ✔ omits the context section when absent (0.070708ms)
+  ✔ omits the artifacts section when absent (0.067792ms)
+  ✔ includes prerequisite artifacts in the evidence section (0.080875ms)
+  ✔ omits artifacts section when array is empty (0.054ms)
+  ✔ rejects empty subjects and rubrics (0.178667ms)
+✔ buildCriticPrompt (1.454125ms)
+▶ buildAdvisePrompt
+  ✔ asks for prioritized concerns, not scores (0.114583ms)
+  ✔ rejects an empty subject (0.061958ms)
+✔ buildAdvisePrompt (0.259541ms)
+▶ parseCriticOutput
+  ✔ parses a well-formed fenced verdict (0.645791ms)
+  ✔ fails when a criterion is below threshold, with prioritized weaknesses (0.133416ms)
+  ✔ uses the last fenced JSON block (the verdict comes last) (0.104708ms)
+  ✔ accepts a bare unfenced JSON object (0.054334ms)
+  ✔ matches criterion names case-insensitively and returns canonical names (0.05575ms)
+  ✔ clamps out-of-range scores (0.0705ms)
+  ✔ fails loudly when no JSON block is found (0.383792ms)
+  ✔ fails loudly on malformed JSON (0.075917ms)
+  ✔ fails loudly when a criterion is not scored (0.058875ms)
+  ✔ ignores unknown extra criteria as long as the rubric is covered (0.039916ms)
+  ✔ fails entries with non-numeric scores as unscored criteria (0.036334ms)
+  ✔ synthesizes a weakness note when the critic omits one below threshold (0.033333ms)
+✔ parseCriticOutput (1.842417ms)
+ℹ tests 20
+ℹ suites 3
+ℹ pass 20
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 102.223208

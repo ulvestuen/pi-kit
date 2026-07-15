@@ -8,6 +8,7 @@
  */
 
 import { getAgent, type AgentDefinition } from "./registry.ts";
+import type { RunId, ArtifactRef } from "@pi-kit/agent-types";
 
 export const DEFAULT_MAX_CONCURRENT = 4;
 export const DEFAULT_MAX_BATCH = 8;
@@ -27,6 +28,14 @@ export interface TaskSpec {
   isolation?: "none" | "worktree";
   /** Per-task timeout; defaults to the runner's defaultTimeoutMs. */
   timeoutMs?: number;
+  /** Stable run identity across the orchestration (agent-native contract). */
+  runId?: RunId;
+  /** Artifacts available as input to this task. */
+  inputArtifacts?: ArtifactRef[];
+  /** Stable IDs of prerequisite runs, included in the child brief. */
+  parentRunIds?: string[];
+  /** Parent branch to create worktrees from (default: current HEAD). */
+  parentBranch?: string;
 }
 
 export type TaskStatus = "ok" | "error" | "timeout" | "aborted";
@@ -45,6 +54,23 @@ export interface TaskResult {
   branch?: string;
   /** Worktree path, when the task ran with worktree isolation. */
   worktreePath?: string;
+  /** Stable run identity (agent-native contract). */
+  runId?: RunId;
+  /**
+   * Reserved for structured child-result parsing. The current runner does not
+   * populate this field, so consumers must treat undefined as "not reported".
+   */
+  outputArtifacts?: ArtifactRef[];
+  /**
+   * Reserved for structured child-result parsing. The current runner does not
+   * populate this field, so consumers must treat undefined as "not reported".
+   */
+  toolCalls?: { tool: string; args: unknown; result: string }[];
+  /**
+   * Reserved for structured child-result parsing. The current runner does not
+   * populate this field, so consumers must treat undefined as "not reported".
+   */
+  usage?: { promptTokens?: number; completionTokens?: number };
 }
 
 export type RunnerEvent =
@@ -130,13 +156,41 @@ export function buildPiArgs(def: AgentDefinition, spec: TaskSpec): string[] {
   if (def.tools && def.tools.length > 0) {
     args.push("--tools", def.tools.join(","));
   }
-  args.push(spec.task);
+  args.push(buildTaskPrompt(spec));
   return args;
 }
 
-/** git arguments that create a task worktree on a new branch. */
-export function buildWorktreeArgs(branch: string, path: string): string[] {
-  return ["worktree", "add", "-b", branch, path];
+/** Add structured prerequisite metadata to the self-contained child brief. */
+export function buildTaskPrompt(spec: TaskSpec): string {
+  const artifacts = spec.inputArtifacts ?? [];
+  const parentRunIds = spec.parentRunIds ?? [];
+  if (artifacts.length === 0 && parentRunIds.length === 0) return spec.task;
+
+  const lines = [spec.task, "", "Structured prerequisite context:"];
+  if (artifacts.length > 0) {
+    lines.push("Input artifacts:");
+    for (const artifact of artifacts) {
+      lines.push(
+        `- ${artifact.type}: ${artifact.description} at ${artifact.location ?? artifact.id}`,
+      );
+    }
+  }
+  if (parentRunIds.length > 0) {
+    lines.push(`Parent run IDs: ${parentRunIds.join(", ")}`);
+  }
+  return lines.join("\n");
+}
+
+/** git arguments that create a task worktree on a new branch.
+ * When parentBranch is given the worktree is forked from that branch
+ * instead of the current HEAD — enabling prerequisite branch handoff.
+ */
+export function buildWorktreeArgs(
+  branch: string,
+  path: string,
+  parentBranch?: string,
+): string[] {
+  return ["worktree", "add", "-b", branch, ...(parentBranch ? [parentBranch] : []), path];
 }
 
 /** Derive a unique branch name / worktree directory name for a task. */
@@ -321,6 +375,7 @@ async function runOneTask(
     const result: TaskResult = {
       agent: def.name,
       durationMs: opts.now() - startedAt,
+      runId: spec.runId,
       ...partial,
     };
     if (transcript && opts.saveFullOutput) {
@@ -348,7 +403,7 @@ async function runOneTask(
       worktreePath = `${opts.worktreeRoot}/${branch.replace(/\//g, "-")}`;
       const wt = await opts.spawn({
         command: "git",
-        args: buildWorktreeArgs(branch, worktreePath),
+        args: buildWorktreeArgs(branch, worktreePath, spec.parentBranch),
         cwd,
         signal: controller.signal,
       });
@@ -456,6 +511,7 @@ function abortedResult(
     output: "task aborted before start",
     truncated: false,
     durationMs: 0,
+    runId: spec.runId,
   };
   opts.onEvent?.({ type: "task_end", index, agent: spec.agent, result });
   return result;

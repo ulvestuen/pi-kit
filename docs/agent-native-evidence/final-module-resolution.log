@@ -1,0 +1,30 @@
+Module resolution verification — 2026-07-11T12:03:09Z
+
+Method 1: tsc --noEmit for all 7 packages (verifies type imports resolve)
+  agent-types: exit 0
+  lykkja: exit 0
+  fleet: exit 0
+  planner: exit 0
+  critic: exit 0
+  orchestrator: exit 0
+  spawn: exit 0
+
+Method 2: ESM import at runtime via tsx
+OK: all agent-types exports resolve
+  exit: 0
+
+Method 3: npm workspace link resolution
+total 0
+drwxr-xr-x@   3 idar  staff    96 Jul 11 11:41 .
+drwxr-xr-x@ 165 idar  staff  5280 Jul 11 11:41 ..
+lrwxr-xr-x@   1 idar  staff    17 Jul 11 11:41 agent-types -> ../../agent-types
+
+Method 4: package.json metadata
+{
+  "name": "@pi-kit/agent-types",
+  "version": "1.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

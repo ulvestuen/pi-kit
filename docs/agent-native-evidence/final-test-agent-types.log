@@ -1,0 +1,73 @@
+▶ RunId
+  ✔ has all required fields (0.255666ms)
+✔ RunId (0.632541ms)
+▶ ArtifactRef
+  ✔ accepts every valid type (0.07175ms)
+  ✔ allows optional location (0.05025ms)
+✔ ArtifactRef (0.190291ms)
+▶ AgentTask
+  ✔ constructs with minimal required fields (0.079667ms)
+  ✔ accepts full constraints (0.067459ms)
+✔ AgentTask (0.211291ms)
+▶ AgentResult
+  ✔ constructs with ok status and all fields (0.082042ms)
+  ✔ allows all four status values (0.068625ms)
+  ✔ allows optional fullTranscriptPath (0.370291ms)
+✔ AgentResult (0.614583ms)
+▶ BackendCapabilities
+  ✔ declares all capability flags (0.049666ms)
+✔ BackendCapabilities (0.079209ms)
+▶ KillResult
+  ✔ reports stopped (0.069833ms)
+  ✔ reports alreadyComplete (0.03ms)
+  ✔ reports not stopped (0.033917ms)
+  ✔ all optional fields are truly optional (no-arg construction) (0.026333ms)
+✔ KillResult (0.210375ms)
+▶ RunEvent
+  ✔ carries runId and typed payload (0.031792ms)
+✔ RunEvent (0.05375ms)
+▶ ToolCallSummary
+  ✔ stores tool call info (0.028333ms)
+✔ ToolCallSummary (0.048042ms)
+▶ schema versioning
+  ✔ AgentTask version field distinguishes schema revisions (0.055958ms)
+  ✔ v0 data (no version field) is handled by downstream as version undefined (0.038ms)
+  ✔ AgentResult version field distinguishes schema revisions (0.0385ms)
+✔ schema versioning (0.176542ms)
+▶ structured artifact handoff
+  ✔ AgentTask carries inputArtifacts from prerequisite tasks (0.056708ms)
+  ✔ AgentResult records output artifacts and tool calls (0.040209ms)
+  ✔ AgentResult without usage has usage undefined (0.024459ms)
+✔ structured artifact handoff (0.167667ms)
+▶ RunId identity
+  ✔ RunId is unique across attempts within the same task (0.043333ms)
+  ✔ RunId distinguishes different waves (0.025042ms)
+✔ RunId identity (0.105542ms)
+▶ BackendCapabilities per-backend contracts
+  ✔ tmux: workspaceMount=true, confirmedKill=false, durableLogs=true (0.039584ms)
+  ✔ microsandbox: hardwareIsolation=true, workspaceMount=true (0.024667ms)
+  ✔ exedev: no workspace mount, durable logs in VM (0.023541ms)
+✔ BackendCapabilities per-backend contracts (0.121333ms)
+▶ KillResult protocol
+  ✔ stopped + alreadyComplete = finished before kill (0.043791ms)
+  ✔ stopped without alreadyComplete = killed actively (0.02925ms)
+  ✔ not stopped = kill failed (0.023042ms)
+✔ KillResult protocol (0.132291ms)
+▶ JSON round-trip
+  ✔ AgentTask survives JSON serialize/deserialize with all fields (0.348084ms)
+  ✔ AgentResult survives JSON serialize/deserialize with all fields (0.094167ms)
+  ✔ BackendCapabilities survives JSON round-trip (0.034292ms)
+  ✔ KillResult survives JSON round-trip with all optional fields (0.033417ms)
+✔ JSON round-trip (0.556375ms)
+▶ legacy consumer compatibility
+  ✔ legacy TaskResult shape has all original required fields (0.042125ms)
+  ✔ v0 AgentTask (no version field) round-trips through JSON without error (0.027542ms)
+✔ legacy consumer compatibility (0.096833ms)
+ℹ tests 35
+ℹ suites 15
+ℹ pass 35
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 100.96

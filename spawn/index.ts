@@ -150,7 +150,7 @@ export default function (pi: ExtensionAPI) {
           }),
         ),
       }),
-      async execute(_id, params, _signal, _onUpdate, ctx) {
+      async execute(_id, params, signal, _onUpdate, ctx) {
         const { registry, errors } = discoverAgents(ctx.cwd);
         const def = getAgent(registry, params.agent);
         if (!def) {
@@ -161,6 +161,11 @@ export default function (pi: ExtensionAPI) {
           throw new Error(
             `Unknown agent "${params.agent}". Known agents: ${known || "(none)"}`,
           );
+        }
+
+        // Abort before launch: do not start the job if already cancelled.
+        if (signal?.aborted) {
+          throw new Error("spawn_agent aborted before launch");
         }
 
         const backendName: SpawnBackendName = params.backend ?? config.backend;
@@ -320,11 +325,64 @@ export default function (pi: ExtensionAPI) {
           if (isTerminal(job.status)) {
             text = `Job "${job.name}" already finished: ${jobLine(job, Date.now())}`;
           } else {
-            await backends[job.backend].kill(job);
-            job.status = "killed";
-            job.updatedAt = Date.now();
-            dirty = true;
-            text = `Killed job "${job.name}".`;
+            // ADR §9: KillResult determines the outcome.
+            // KillResult branch 1 — stopped: backend confirmed the process
+            // is gone → stamp killed.
+            // KillResult branch 2 — alreadyComplete: process already exited
+            // → refresh from marker.
+            // KillResult branch 3 — warned/unconfirmed: kill sent but
+            // unconfirmed → refresh, mark lost.
+            let kr;
+            try {
+              kr = await backends[job.backend].kill(job);
+            } catch (e: any) {
+              // KillResult branch 3 (thrown): kill threw an error — surface as explicit
+              // error; do not stamp killed or lost so the caller can retry.
+              job.updatedAt = Date.now();
+              dirty = true;
+              text = `Kill failed for job "${job.name}": ${e?.message ?? String(e)}.`;
+              return {
+                result: {
+                  content: [{ type: "text" as const, text }],
+                  details: { job },
+                },
+                dirty,
+              };
+            }
+            if (kr.stopped) {
+              // KillResult branch 1 — stopped: backend confirms the process is gone.
+              // Stamp killed immediately per ADR §6/§9.
+              job.status = "killed";
+              job.updatedAt = Date.now();
+              dirty = true;
+              text = `Killed job "${job.name}".`;
+            } else if (kr.alreadyComplete) {
+              // KillResult branch 2 — alreadyComplete: refresh from the done marker to
+              // discover the real terminal status (done/failed).
+              try {
+                await backends[job.backend].refresh(job);
+              } catch {
+                // Best-effort; backend already confirmed completion.
+              }
+              job.updatedAt = Date.now();
+              dirty = true;
+              text = `Job "${job.name}" already completed: ${jobLine(job, Date.now())}`;
+            } else {
+              // KillResult branch 3 — warned / unconfirmed: kill sent but backend could
+              // not confirm stop.  Refresh from done markers; if still
+              // nonterminal, mark lost so the job never stays "running".
+              try {
+                await backends[job.backend].refresh(job);
+              } catch {
+                // Best-effort.
+              }
+              if (!isTerminal(job.status)) {
+                job.status = "lost";
+              }
+              job.updatedAt = Date.now();
+              dirty = true;
+              text = `Could not kill job "${job.name}": ${kr.message ?? "unknown error"}.`;
+            }
           }
           return {
             result: {
@@ -351,8 +409,12 @@ export default function (pi: ExtensionAPI) {
       const lines = [`spawn — default backend: ${config.backend}`];
       for (const name of SPAWN_BACKEND_NAMES) {
         const unavailable = await backends[name].available();
+        const caps = unavailable ? null : await backends[name].capabilities();
+        const capsText = caps
+          ? ` [mount=${caps.workspaceMount}, kill=${caps.confirmedKill}, logs=${caps.durableLogs}, net=${caps.networkAccess}, iso=${caps.hardwareIsolation}]`
+          : "";
         lines.push(
-          `  ${name}: ${unavailable ? `unavailable — ${unavailable}` : "available"}`,
+          `  ${name}: ${unavailable ? `unavailable — ${unavailable}` : `available${capsText}`}`,
         );
       }
       const jobs = loadJobs(config.logDir, warn);

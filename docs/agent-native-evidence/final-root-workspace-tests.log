@@ -1,0 +1,838 @@
+
+> @pi-kit/agent-types@1.0.0 test
+> tsx --test test.ts
+
+▶ RunId
+  ✔ has all required fields (0.261542ms)
+✔ RunId (0.633417ms)
+▶ ArtifactRef
+  ✔ accepts every valid type (0.071916ms)
+  ✔ allows optional location (0.048375ms)
+✔ ArtifactRef (0.193583ms)
+▶ AgentTask
+  ✔ constructs with minimal required fields (0.0755ms)
+  ✔ accepts full constraints (0.062584ms)
+✔ AgentTask (0.201208ms)
+▶ AgentResult
+  ✔ constructs with ok status and all fields (0.080292ms)
+  ✔ allows all four status values (0.064542ms)
+  ✔ allows optional fullTranscriptPath (0.050875ms)
+✔ AgentResult (0.286667ms)
+▶ BackendCapabilities
+  ✔ declares all capability flags (0.052209ms)
+✔ BackendCapabilities (0.086208ms)
+▶ KillResult
+  ✔ reports stopped (0.072083ms)
+  ✔ reports alreadyComplete (0.031833ms)
+  ✔ reports not stopped (0.034ms)
+  ✔ all optional fields are truly optional (no-arg construction) (0.028416ms)
+✔ KillResult (0.218542ms)
+▶ RunEvent
+  ✔ carries runId and typed payload (0.031583ms)
+✔ RunEvent (0.05225ms)
+▶ ToolCallSummary
+  ✔ stores tool call info (0.032167ms)
+✔ ToolCallSummary (0.053625ms)
+▶ schema versioning
+  ✔ AgentTask version field distinguishes schema revisions (0.059125ms)
+  ✔ v0 data (no version field) is handled by downstream as version undefined (0.036459ms)
+  ✔ AgentResult version field distinguishes schema revisions (0.032208ms)
+✔ schema versioning (0.166958ms)
+▶ structured artifact handoff
+  ✔ AgentTask carries inputArtifacts from prerequisite tasks (0.056167ms)
+  ✔ AgentResult records output artifacts and tool calls (0.041167ms)
+  ✔ AgentResult without usage has usage undefined (0.027666ms)
+✔ structured artifact handoff (0.167833ms)
+▶ RunId identity
+  ✔ RunId is unique across attempts within the same task (0.050792ms)
+  ✔ RunId distinguishes different waves (0.025916ms)
+✔ RunId identity (0.108625ms)
+▶ BackendCapabilities per-backend contracts
+  ✔ tmux: workspaceMount=true, confirmedKill=false, durableLogs=true (0.039084ms)
+  ✔ microsandbox: hardwareIsolation=true, workspaceMount=true (0.024792ms)
+  ✔ exedev: no workspace mount, durable logs in VM (0.0235ms)
+✔ BackendCapabilities per-backend contracts (0.122125ms)
+▶ KillResult protocol
+  ✔ stopped + alreadyComplete = finished before kill (0.034125ms)
+  ✔ stopped without alreadyComplete = killed actively (0.02325ms)
+  ✔ not stopped = kill failed (0.023875ms)
+✔ KillResult protocol (0.118541ms)
+▶ JSON round-trip
+  ✔ AgentTask survives JSON serialize/deserialize with all fields (0.369708ms)
+  ✔ AgentResult survives JSON serialize/deserialize with all fields (0.095125ms)
+  ✔ BackendCapabilities survives JSON round-trip (0.034875ms)
+  ✔ KillResult survives JSON round-trip with all optional fields (0.036625ms)
+✔ JSON round-trip (0.586291ms)
+▶ legacy consumer compatibility
+  ✔ legacy TaskResult shape has all original required fields (0.040917ms)
+  ✔ v0 AgentTask (no version field) round-trips through JSON without error (0.027709ms)
+✔ legacy consumer compatibility (0.094333ms)
+ℹ tests 35
+ℹ suites 15
+ℹ pass 35
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 115.772667
+
+> pi-threema@1.0.0 test
+> tsx --test test.ts
+
+▶ hexToBytes
+  ✔ converts empty string (0.624041ms)
+  ✔ converts a single byte (0.073ms)
+  ✔ converts multi-byte hex (0.044666ms)
+  ✔ handles leading zeros (0.042125ms)
+  ✔ handles uppercase hex (0.057458ms)
+  ✔ round-trips with bytesToHex (0.076625ms)
+  ✔ rejects odd-length hex (0.159041ms)
+  ✔ rejects invalid hex (0.044166ms)
+✔ hexToBytes (1.637209ms)
+▶ bytesToHex
+  ✔ converts empty array (0.091959ms)
+  ✔ converts bytes with leading zeros (0.065ms)
+  ✔ produces lowercase hex (0.040833ms)
+✔ bytesToHex (0.294541ms)
+▶ parseFormBody
+  ✔ parses simple key=value pairs (0.178833ms)
+  ✔ decodes URL-encoded values (0.037ms)
+  ✔ handles values containing '=' (0.032667ms)
+  ✔ handles empty value (0.038958ms)
+  ✔ handles URL-encoded keys (0.038334ms)
+  ✔ treats '+' as a space (0.032334ms)
+✔ parseFormBody (0.423709ms)
+▶ removePkcs7Padding
+  ✔ returns empty for empty input (0.0595ms)
+  ✔ removes padding of length 1 (0.038ms)
+  ✔ removes padding of length 4 (0.02525ms)
+  ✔ removes full-block padding (0.026917ms)
+  ✔ handles data where last byte happens to look like padding (0.028917ms)
+✔ removePkcs7Padding (0.228458ms)
+▶ verifyMac
+  ✔ verifies a correct MAC (0.7715ms)
+  ✔ rejects an incorrect MAC (0.034792ms)
+  ✔ rejects when a field is tampered (0.049416ms)
+  ✔ accepts uppercase MAC hex (0.038083ms)
+  ✔ rejects when secret differs (0.045458ms)
+  ✔ MAC changes when any field changes (0.0565ms)
+✔ verifyMac (1.059792ms)
+▶ x25519PublicKey
+  ✔ produces 32-byte public key (4.278125ms)
+  ✔ is deterministic for same private key (1.717041ms)
+  ✔ different private keys give different public keys (1.781875ms)
+✔ x25519PublicKey (7.821791ms)
+▶ naclBox / naclBoxOpen
+  ✔ round-trips a short message (3.962042ms)
+  ✔ round-trips an empty message (2.202458ms)
+  ✔ round-trips a 1-byte message (2.167875ms)
+  ✔ round-trips exactly 64 bytes (one Salsa20 block boundary) (2.178416ms)
+  ✔ round-trips 65 bytes (crosses block boundary) (2.171541ms)
+  ✔ round-trips 200 bytes (multi-block) (2.2065ms)
+  ✔ round-trips 1000 bytes (2.688208ms)
+  ✔ round-trips UTF-8 text with multibyte characters (2.106709ms)
+  ✔ ciphertext length is plaintext + 16 (tag) (1.5785ms)
+  ✔ same plaintext + same nonce + same keys = same ciphertext (2.108458ms)
+  ✔ different nonces produce different ciphertext (2.040958ms)
+  ✔ ECDH is symmetric: alice->bob and bob->alice share secret (3.145917ms)
+✔ naclBox / naclBoxOpen (28.673334ms)
+▶ naclBoxOpen authentication
+  ✔ rejects tampered tag (2.086041ms)
+  ✔ rejects tampered ciphertext (2.055041ms)
+  ✔ rejects wrong sender public key (2.521291ms)
+  ✔ rejects wrong recipient private key (2.535541ms)
+  ✔ rejects wrong nonce (2.143ms)
+  ✔ rejects truncated ciphertext (2.160542ms)
+  ✔ rejects appended data (2.223458ms)
+✔ naclBoxOpen authentication (15.802834ms)
+▶ buildThreemaTextPayload
+  ✔ starts with 0x01 type byte (0.140917ms)
+  ✔ contains the text after the type byte (0.027208ms)
+  ✔ pads the inner message data to at least 32 bytes (0.024625ms)
+  ✔ applies PKCS#7 padding (0.044917ms)
+  ✔ round-trips through removePkcs7Padding (0.029875ms)
+  ✔ handles long messages (> 31 bytes of text) (0.031042ms)
+  ✔ handles empty text (0.025666ms)
+  ✔ handles UTF-8 multibyte text (0.026375ms)
+✔ buildThreemaTextPayload (0.416959ms)
+▶ decryptMessage
+  ✔ decrypts a valid Threema text message (2.279916ms)
+  ✔ decrypts a long message (2.530292ms)
+  ✔ decrypts UTF-8 message with emoji (2.048083ms)
+  ✔ rejects non-text message types (2.029625ms)
+  ✔ rejects delivery receipt type (0x80) (2.144208ms)
+  ✔ fails with wrong private key (2.684417ms)
+  ✔ fails with tampered box hex (2.048542ms)
+✔ decryptMessage (15.842709ms)
+▶ end-to-end webhook payload simulation
+  ✔ simulates a complete incoming Threema webhook message (1.982166ms)
+  ✔ simulates MAC rejection for tampered webhook (0.0355ms)
+  ✔ serializes and deserializes webhook form body correctly (0.068709ms)
+✔ end-to-end webhook payload simulation (2.118917ms)
+ℹ tests 68
+ℹ suites 11
+ℹ pass 68
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 228.98225
+
+> pi-lykkja@1.0.0 test
+> tsx --test test.ts
+
+▶ normalizeCriteria
+  ✔ accepts bare string names with the default threshold (0.658291ms)
+  ✔ accepts per-criterion thresholds (0.069125ms)
+  ✔ trims names (0.068833ms)
+  ✔ rejects empty input (0.171375ms)
+  ✔ rejects blank names (0.055125ms)
+  ✔ rejects duplicate names case-insensitively (0.051042ms)
+  ✔ rejects thresholds above the scale (0.049833ms)
+  ✔ rejects thresholds below 1 (0.066417ms)
+✔ normalizeCriteria (1.72025ms)
+▶ clampScore
+  ✔ rounds to the nearest integer (0.122625ms)
+  ✔ clamps below 1 up to 1 (0.062667ms)
+  ✔ clamps above the scale down to the scale (0.04125ms)
+  ✔ rejects non-finite scores (0.058916ms)
+✔ clampScore (0.708792ms)
+▶ createLoop
+  ✔ starts active with no iterations (0.121791ms)
+  ✔ applies a custom pass threshold to bare criteria (0.068084ms)
+  ✔ rejects an empty task (0.040875ms)
+  ✔ rejects a pass threshold above the scale (0.037833ms)
+  ✔ rejects a scale below 2 (0.042792ms)
+✔ createLoop (0.369917ms)
+▶ recordCheckpoint
+  ✔ returns FINAL when every criterion meets its threshold (0.264959ms)
+  ✔ returns ITERATING and names the weakest failing criterion (0.074334ms)
+  ✔ orders failing criteria by smallest margin first (0.071833ms)
+  ✔ matches score names to criteria case-insensitively (0.052792ms)
+  ✔ clamps out-of-range scores (0.055541ms)
+  ✔ rejects missing scores (0.062958ms)
+  ✔ rejects unknown criteria (0.061625ms)
+  ✔ rejects duplicate scores for the same criterion (0.054917ms)
+  ✔ rejects an empty plan (0.060292ms)
+  ✔ rejects an empty changes summary (0.051583ms)
+  ✔ refuses to continue a finished loop (0.050125ms)
+  ✔ stops at the iteration safety limit (0.090666ms)
+  ✔ accumulates iteration history across passes (0.063667ms)
+✔ recordCheckpoint (1.124333ms)
+▶ failingScores
+  ✔ returns only criteria below threshold (0.043375ms)
+✔ failingScores (0.069958ms)
+▶ summarizeLoop / statusLine
+  ✔ summarizes a fresh loop (0.107125ms)
+  ✔ reports the weakest criterion in the status line while iterating (0.048042ms)
+  ✔ reports FINAL in the status line when done (0.038542ms)
+✔ summarizeLoop / statusLine (0.2295ms)
+ℹ tests 34
+ℹ suites 6
+ℹ pass 34
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 103.766834
+
+> pi-exa@1.0.0 test
+> tsx --test test.ts
+
+▶ parseNumber
+  ✔ returns fallback for undefined (0.335792ms)
+  ✔ returns fallback for empty string (0.054ms)
+  ✔ parses numeric strings (0.04175ms)
+  ✔ passes through numbers (0.049708ms)
+  ✔ throws on non-numeric (0.167833ms)
+✔ parseNumber (1.117667ms)
+▶ parseBoolean
+  ✔ returns fallback for undefined (0.092084ms)
+  ✔ passes through booleans (0.043833ms)
+  ✔ parses truthy strings (0.065834ms)
+  ✔ parses falsy strings (0.073416ms)
+  ✔ returns fallback for unrecognized strings (0.068416ms)
+✔ parseBoolean (0.470541ms)
+▶ parseSearchType
+  ✔ defaults when undefined (0.076042ms)
+  ✔ defaults for empty string (0.037583ms)
+  ✔ accepts valid types case-insensitively (0.042333ms)
+  ✔ throws on invalid type (0.046375ms)
+✔ parseSearchType (0.305666ms)
+▶ buildSearchRequest
+  ✔ builds a minimal request from config defaults (0.743834ms)
+  ✔ trims the query (0.045709ms)
+  ✔ throws on empty query (0.04875ms)
+  ✔ lets per-call numResults override config (0.032417ms)
+  ✔ rejects out-of-range numResults (0.054709ms)
+  ✔ omits contents when includeText is false (0.028833ms)
+  ✔ uses text: true when maxCharacters is 0 (0.038375ms)
+  ✔ includes optional filters when provided (0.0545ms)
+  ✔ falls back to config category (0.028917ms)
+  ✔ omits empty domain arrays (0.028209ms)
+✔ buildSearchRequest (1.2115ms)
+▶ formatResults
+  ✔ reports when there are no results (0.105791ms)
+  ✔ renders title, url and metadata (0.067041ms)
+  ✔ prefers summary over highlights over text (0.039292ms)
+  ✔ falls back to untitled (0.028958ms)
+✔ formatResults (0.297ms)
+▶ loadConfig
+  ✔ throws when no apiKey is configured (0.389166ms)
+  ✔ loads defaults from EXA_API_KEY alone (0.11075ms)
+  ✔ reads overrides from environment (0.11225ms)
+  ✔ rejects out-of-range numResults (0.082125ms)
+  ✔ rejects invalid searchType (0.076958ms)
+✔ loadConfig (0.826583ms)
+ℹ tests 33
+ℹ suites 6
+ℹ pass 33
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 116.650209
+
+> pi-kagi@1.0.0 test
+> tsx --test test.ts
+
+▶ parseNumber
+  ✔ returns fallback for undefined (0.321458ms)
+  ✔ returns fallback for empty string (0.048708ms)
+  ✔ parses numeric strings (0.041834ms)
+  ✔ passes through numbers (0.050334ms)
+  ✔ throws on non-numeric (0.180625ms)
+✔ parseNumber (1.100916ms)
+▶ parseBoolean
+  ✔ returns fallback for undefined (0.08375ms)
+  ✔ passes through booleans (0.047875ms)
+  ✔ parses truthy strings (0.066875ms)
+  ✔ parses falsy strings (0.0645ms)
+  ✔ returns fallback for unrecognized strings (0.078666ms)
+✔ parseBoolean (0.4695ms)
+▶ buildSearchParams
+  ✔ builds a minimal request from config defaults (0.478375ms)
+  ✔ trims the query (0.053791ms)
+  ✔ throws on empty query (0.071042ms)
+  ✔ lets per-call limit override config (0.043083ms)
+  ✔ rejects out-of-range limit (0.056333ms)
+✔ buildSearchParams (0.779459ms)
+▶ formatResults
+  ✔ reports when there are no results (0.1315ms)
+  ✔ renders title, url and metadata (0.061083ms)
+  ✔ ignores non-result items (related searches) in the result list (0.041833ms)
+  ✔ appends related searches when includeRelated is true (0.055333ms)
+  ✔ falls back to untitled (0.030667ms)
+  ✔ renders v1 object-shaped data.search responses (0.042833ms)
+✔ formatResults (0.425584ms)
+▶ getSearchResults
+  ✔ counts array-shaped current API responses (0.036417ms)
+  ✔ counts object-shaped v1 API responses without calling .filter on an object (0.025125ms)
+✔ getSearchResults (0.097042ms)
+▶ loadConfig
+  ✔ throws when no apiKey is configured (0.44525ms)
+  ✔ loads defaults from KAGI_API_KEY alone (0.103834ms)
+  ✔ reads overrides from environment (0.1ms)
+  ✔ rejects out-of-range limit (0.082583ms)
+✔ loadConfig (0.779334ms)
+ℹ tests 27
+ℹ suites 6
+ℹ pass 27
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 113.334708
+
+> pi-fleet@1.0.0 test
+> tsx --test test.ts
+
+▶ parseAgentDefinition
+  ✔ parses a full definition (0.760208ms)
+  ✔ leaves optional fields undefined (0.083416ms)
+  ✔ strips quotes and inline comments from values (0.070792ms)
+  ✔ rejects a missing frontmatter block (0.179417ms)
+  ✔ rejects unterminated frontmatter (0.056417ms)
+  ✔ rejects a missing name (0.054459ms)
+  ✔ rejects invalid agent names (0.049708ms)
+  ✔ rejects a missing description (0.058875ms)
+  ✔ rejects an empty body (0.059458ms)
+  ✔ rejects an invalid thinkingLevel (0.089083ms)
+  ✔ rejects an empty tools list (0.055083ms)
+✔ parseAgentDefinition (2.107542ms)
+▶ mergeRegistries
+  ✔ later layers win on name collision, case-insensitively (0.064917ms)
+  ✔ keeps non-colliding agents from all layers (0.0395ms)
+  ✔ getAgent matches case-insensitively with trimming (0.050042ms)
+✔ mergeRegistries (0.208834ms)
+▶ buildPiArgs
+  ✔ builds the full non-interactive contract (0.067208ms)
+  ✔ omits optional flags when the definition has none (0.034708ms)
+✔ buildPiArgs (0.133917ms)
+▶ parsePiJsonOutput
+  ✔ extracts the last assistant message text (0.109083ms)
+  ✔ reports error stop reasons (0.038959ms)
+  ✔ reports missing assistant output (0.063291ms)
+✔ parsePiJsonOutput (0.247542ms)
+▶ capOutput
+  ✔ passes short output through untouched (0.056167ms)
+  ✔ truncates at the byte budget with a marker (0.037667ms)
+  ✔ counts multi-byte characters by UTF-8 size (0.030375ms)
+✔ capOutput (0.166292ms)
+▶ worktree helpers
+  ✔ builds git worktree add args (0.041875ms)
+  ✔ derives unique branch names from index and time (0.026458ms)
+✔ worktree helpers (0.096834ms)
+▶ runTasks
+  ✔ returns results in task order (0.398667ms)
+  ✔ rejects unknown agents with the known list (0.524625ms)
+  ✔ rejects batches over the cap (0.086458ms)
+  ✔ rejects empty task text (0.058292ms)
+  ✔ observes the concurrency limit (35.281042ms)
+  ✔ times out slow tasks (22.429167ms)
+  ✔ marks running tasks aborted on external abort (6.629958ms)
+  ✔ aborts queued tasks immediately once the signal fires (0.178875ms)
+  ✔ caps model-visible output and saves the full transcript (0.182875ms)
+  ✔ reports child failures as error results (0.103167ms)
+  ✔ reports spawn exceptions as error results (0.093791ms)
+  ✔ emits task_start, task_update, and task_end events (0.10125ms)
+  ✔ requires a worktreeRoot for worktree isolation (0.057042ms)
+  ✔ creates a worktree, runs the child inside it, and reports the branch (0.107042ms)
+  ✔ fails the task when worktree creation fails (0.077542ms)
+✔ runTasks (66.524292ms)
+▶ tmux mirror
+  ✔ labels the pi child spawn but not auxiliary git spawns (0.104792ms)
+  ✔ sanitizes window names (0.08525ms)
+  ✔ quotes log paths for the tail command (0.039291ms)
+  ✔ splits chunks into lines and flushes the remainder (0.074458ms)
+  ✔ formats assistant messages and tool calls, suppresses noise (0.109666ms)
+  ✔ opens a session for the first window and reuses it after (0.310084ms)
+  ✔ mirrors formatted output and a footer into the window's log (0.105958ms)
+  ✔ still forwards output to the original onOutput (0.073834ms)
+  ✔ passes unlabeled requests through without touching tmux (0.04475ms)
+  ✔ kills the window by id when closeWindows is set (0.068ms)
+  ✔ degrades to plain runs after the first tmux failure (0.092083ms)
+✔ tmux mirror (1.227958ms)
+▶ agent-native: RunId propagation
+  ✔ propagates runId from TaskSpec to TaskResult (0.094208ms)
+  ✔ runId is undefined when TaskSpec omits it (backward compat) (0.052208ms)
+  ✔ propagates runId through abort path (0.113167ms)
+  ✔ propagates runId through timeout path (22.525916ms)
+  ✔ propagates runId through error path (child failure) (0.140083ms)
+✔ agent-native: RunId propagation (23.006333ms)
+▶ agent-native: parentBranch worktree
+  ✔ passes parentBranch to buildWorktreeArgs for prerequisite branch handoff (0.154875ms)
+  ✔ preserves runId when parentBranch worktree creation fails (0.082958ms)
+✔ agent-native: parentBranch worktree (0.2795ms)
+▶ agent-native: inputArtifacts and outputArtifacts
+  ✔ TaskSpec.inputArtifacts are accepted without error (0.071334ms)
+  ✔ TaskResult without agent-native fields has them as undefined (0.051542ms)
+✔ agent-native: inputArtifacts and outputArtifacts (0.150417ms)
+▶ agent-native: backward compatibility
+  ✔ plain TaskSpec with no agent-native fields produces a valid TaskResult (0.069167ms)
+  ✔ worktree isolation without parentBranch defaults to HEAD (0.075417ms)
+  ✔ all results retain legacy fields (agent, status, output, truncated, etc.) (0.068291ms)
+  ✔ legacy TaskResult destructuring still works (old consumer pattern) (0.067417ms)
+✔ agent-native: backward compatibility (0.32075ms)
+▶ agent-native: buildWorktreeArgs parentBranch
+  ✔ includes parentBranch when given (0.041791ms)
+  ✔ omits parentBranch when undefined (0.029875ms)
+✔ agent-native: buildWorktreeArgs parentBranch (0.097167ms)
+ℹ tests 65
+ℹ suites 13
+ℹ pass 65
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 194.447958
+
+> pi-planner@1.0.0 test
+> tsx --test test.ts
+
+[planner] Warning: illegal status transition pending -> done on task "t1". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> done on task "t2". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> done on task "t3". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> running on task "t1". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> running on task "t1". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> running on task "t1". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> running on task "t1". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> done on task "t1". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> running on task "t2". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> done on task "t1". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> failed on task "t2". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> done on task "t1". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> done on task "t2". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> done on task "t3". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> done on task "t4". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> done on task "t1". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> running on task "t2". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> failed on task "t3". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition pending -> done on task "t1". Legal transitions from pending: [ready]. Proceeding anyway (manual override).
+[planner] Warning: illegal status transition running -> done on task "t1". Legal transitions from running: [review, ready, failed]. Proceeding anyway (manual override).
+▶ createPlan
+  ✔ creates a validated plan with pending tasks (0.610958ms)
+  ✔ normalizes criteria with lykkja semantics (0.387042ms)
+  ✔ rejects an empty goal (0.195958ms)
+  ✔ rejects an empty task list (0.066083ms)
+  ✔ rejects duplicate ids case-insensitively (0.079416ms)
+  ✔ rejects dangling dependencies (0.069ms)
+  ✔ rejects self-dependencies (0.058833ms)
+  ✔ rejects cycles (0.087583ms)
+  ✔ rejects tasks without criteria (0.068541ms)
+  ✔ rejects blank titles and descriptions (0.105542ms)
+✔ createPlan (2.620416ms)
+▶ readySet
+  ✔ returns only tasks whose dependencies are all done (0.508458ms)
+  ✔ excludes running, review, done, and failed tasks (0.085583ms)
+  ✔ includes tasks explicitly marked ready (0.065542ms)
+✔ readySet (0.719083ms)
+▶ setTaskStatus
+  ✔ returns a new plan without mutating the old one (0.07275ms)
+  ✔ counts dispatches as attempts (0.061084ms)
+  ✔ does not double-count staying in running (0.048459ms)
+  ✔ rejects unknown task ids (0.054083ms)
+  ✔ rejects invalid statuses (0.058041ms)
+✔ setTaskStatus (0.351417ms)
+▶ updateTask
+  ✔ edits briefs, agents, and criteria (0.106167ms)
+  ✔ rejects blanking required fields (0.053458ms)
+✔ updateTask (0.191542ms)
+▶ addTasks
+  ✔ appends follow-up tasks and re-validates the DAG (0.084084ms)
+  ✔ rejects follow-ups that collide or dangle (0.08475ms)
+✔ addTasks (0.207209ms)
+▶ summarizePlan
+  ✔ counts statuses and computes the ready set (0.197875ms)
+  ✔ reports transitive blockage behind failed tasks (0.108208ms)
+  ✔ computes the critical path over unfinished tasks (0.09025ms)
+✔ summarizePlan (0.440291ms)
+▶ statusLine
+  ✔ summarizes progress for the footer (0.108ms)
+  ✔ reports completion (0.043667ms)
+✔ statusLine (0.183417ms)
+▶ PlanTask.artifacts
+  ✔ tasks are created with an empty artifacts array (0.050916ms)
+  ✔ artifacts survive createPlan → getTask round-trip (0.04175ms)
+  ✔ artifacts survive JSON round-trip (0.059083ms)
+  ✔ status transitions preserve artifacts (0.052833ms)
+✔ PlanTask.artifacts (0.249ms)
+▶ setTaskStatus transition soft-check
+  ✔ does not warn on legal transitions (0.056208ms)
+  ✔ warns on illegal transition running → done (0.100709ms)
+  ✔ warns on illegal transition done → ready (0.055917ms)
+  ✔ warns on illegal transition failed → ready (0.05075ms)
+✔ setTaskStatus transition soft-check (0.306875ms)
+ℹ tests 35
+ℹ suites 9
+ℹ pass 35
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 110.262542
+
+> pi-critic@1.0.0 test
+> tsx --test test.ts
+
+▶ buildCriticPrompt
+  ✔ includes subject, context, rubric with thresholds, and JSON instructions (0.498542ms)
+  ✔ omits the context section when absent (0.072125ms)
+  ✔ omits the artifacts section when absent (0.058208ms)
+  ✔ includes prerequisite artifacts in the evidence section (0.078125ms)
+  ✔ omits artifacts section when array is empty (0.056167ms)
+  ✔ rejects empty subjects and rubrics (0.177458ms)
+✔ buildCriticPrompt (1.437084ms)
+▶ buildAdvisePrompt
+  ✔ asks for prioritized concerns, not scores (0.1115ms)
+  ✔ rejects an empty subject (0.060875ms)
+✔ buildAdvisePrompt (0.254042ms)
+▶ parseCriticOutput
+  ✔ parses a well-formed fenced verdict (0.931875ms)
+  ✔ fails when a criterion is below threshold, with prioritized weaknesses (0.126917ms)
+  ✔ uses the last fenced JSON block (the verdict comes last) (0.090625ms)
+  ✔ accepts a bare unfenced JSON object (0.056792ms)
+  ✔ matches criterion names case-insensitively and returns canonical names (0.055875ms)
+  ✔ clamps out-of-range scores (0.072625ms)
+  ✔ fails loudly when no JSON block is found (0.050625ms)
+  ✔ fails loudly on malformed JSON (0.056542ms)
+  ✔ fails loudly when a criterion is not scored (0.048583ms)
+  ✔ ignores unknown extra criteria as long as the rubric is covered (0.040208ms)
+  ✔ fails entries with non-numeric scores as unscored criteria (0.035959ms)
+  ✔ synthesizes a weakness note when the critic omits one below threshold (0.036ms)
+✔ parseCriticOutput (1.740416ms)
+ℹ tests 20
+ℹ suites 3
+ℹ pass 20
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 104.426917
+
+> pi-orchestrator@1.0.0 test
+> tsx --test test.ts
+
+▶ nextActions
+  ✔ dispatches the ready set up to free capacity (0.881542ms)
+  ✔ subtracts running tasks from capacity (0.182416ms)
+  ✔ lists tasks awaiting review (0.128875ms)
+  ✔ reports complete when every task is done (0.109ms)
+  ✔ reports blocked when failures hold back the rest of the DAG (0.116125ms)
+  ✔ rejects invalid policies (0.213083ms)
+✔ nextActions (2.117083ms)
+▶ applyTaskResult
+  ✔ sends ok results to review (0.08625ms)
+  ✔ re-queues a first failure with the failure note in the brief (0.104166ms)
+  ✔ fails the task at the attempt cap (0.075875ms)
+  ✔ rejects unknown task ids (0.100542ms)
+✔ applyTaskResult (0.479792ms)
+▶ applyReview
+  ✔ marks passed reviews done (0.10775ms)
+  ✔ re-queues failed reviews with critic weaknesses appended to the brief (0.068ms)
+  ✔ fails the task when review fails at the attempt cap (0.0545ms)
+  ✔ rejects reviews of tasks not awaiting review (0.053ms)
+✔ applyReview (0.340958ms)
+▶ end-to-end simulation: 5-task DAG to FINAL
+  ✔ drives the plan to complete and the goal loop to FINAL (0.608042ms)
+  ✔ ends blocked and honest when a task exhausts its attempts (0.090333ms)
+✔ end-to-end simulation: 5-task DAG to FINAL (0.736458ms)
+▶ artifact propagation through review
+  ✔ applyReview + recordPassingArtifacts stores artifacts on the done task (0.07625ms)
+  ✔ downstream tasks see prerequisite artifacts in handoff section (0.064917ms)
+  ✔ artifacts survive serialization round-trip across plan persistence (0.080875ms)
+✔ artifact propagation through review (0.265083ms)
+▶ lifecycle retries with critic evidence
+  ✔ critic feedback is appended to the brief on retry (0.066083ms)
+  ✔ attempts count increments on each dispatch (0.414625ms)
+  ✔ task fails at attempt cap after review failure (0.043666ms)
+✔ lifecycle retries with critic evidence (0.567833ms)
+▶ worktree behavior
+  ✔ buildWorktreeArgs uses parentBranch when provided (3.364ms)
+  ✔ TaskSpec accepts parentBranch field (0.040125ms)
+✔ worktree behavior (3.445333ms)
+▶ worktree commit after passing review
+  ✔ recordPassingArtifacts calls worktreeCommit when provided with a branch (0.544167ms)
+  ✔ recordPassingArtifacts does not call worktreeCommit when no branch (0.438833ms)
+  ✔ recordPassingArtifacts swallows commit errors without blocking plan (0.446583ms)
+✔ worktree commit after passing review (1.483458ms)
+▶ parentBranch extraction from prerequisite artifacts
+  ✔ finds the branch from a done dependency's artifacts (0.455791ms)
+  ✔ returns undefined when no prerequisite has a branch artifact (0.418625ms)
+  ✔ returns undefined when dependency is not done (0.381958ms)
+  ✔ picks the first done dependency's branch artifact (0.393958ms)
+✔ parentBranch extraction from prerequisite artifacts (1.71375ms)
+▶ RunId and RunLog
+  ✔ RunId is carried through TaskSpec to TaskResult (0.045916ms)
+  ✔ TaskResult carries runId, outputArtifacts, and toolCalls (0.042917ms)
+✔ RunId and RunLog (0.126834ms)
+▶ end-to-end: legacy plain-text task → structured artifact handoff to dependent task
+  ✔ drives a 2-task DAG to FINAL: legacy task completes, dependent receives artifacts via brief without shared context, critic evidence persists on retry (0.282875ms)
+  ✔ buildHandoffSection returns empty when no dependencies have artifacts (0.045709ms)
+  ✔ buildHandoffSection returns empty when dependencies are not done (0.036375ms)
+  ✔ buildHandoffSection formats multiple prerequisite artifacts (0.073917ms)
+✔ end-to-end: legacy plain-text task → structured artifact handoff to dependent task (0.482042ms)
+ℹ tests 37
+ℹ suites 11
+ℹ pass 37
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 141.716291
+
+> pi-spawn@1.0.0 test
+> tsx --test test.ts
+
+▶ resolveStatus
+  ✔ maps a zero done marker to done (0.554916ms)
+  ✔ maps a non-zero done marker to failed (0.055708ms)
+  ✔ maps an unparseable marker to failed without an exit code (0.054708ms)
+  ✔ maps no marker to running or lost by runner aliveness (0.058334ms)
+✔ resolveStatus (1.157166ms)
+▶ isTerminal
+  ✔ treats everything but running as terminal (0.064125ms)
+✔ isTerminal (0.107542ms)
+▶ job names
+  ✔ sanitizes to dir/window/sandbox-safe names (0.117125ms)
+  ✔ appends a counter on collision (0.077958ms)
+✔ job names (0.269459ms)
+▶ job registry
+  ✔ round-trips jobs through jobs.json (0.830833ms)
+  ✔ treats a corrupt registry as empty and reports it (0.388375ms)
+  ✔ loads empty when no registry exists (0.360792ms)
+✔ job registry (1.650333ms)
+▶ local markers
+  ✔ reads missing and empty done markers as undefined (0.428458ms)
+  ✔ keeps a running job running while the runner is alive (0.40575ms)
+  ✔ moves to done when the marker lands (0.4735ms)
+  ✔ moves to lost when the runner died without a marker (0.183167ms)
+  ✔ prefers a marker published during the aliveness probe over lost (0.494625ms)
+  ✔ reads missing and empty stderr files as empty, tails the rest (0.593708ms)
+  ✔ tails logs with a truncation prefix (0.415542ms)
+✔ local markers (3.091084ms)
+▶ buildJobPiArgs
+  ✔ builds print-mode args with all agent settings (0.094292ms)
+  ✔ omits optional flags and quotes the shell form (0.10025ms)
+✔ buildJobPiArgs (0.236875ms)
+▶ buildEnvExports
+  ✔ exports only set, validly named variables, quoted (0.107ms)
+✔ buildEnvExports (0.140125ms)
+▶ tmux backend
+  ✔ writes a run script that captures pi's exit code, not tee's (0.102083ms)
+  ✔ launches into a new session, then windows of it (0.858583ms)
+  ✔ forwards API keys into the run script (the window inherits the tmux server's env) (1.043792ms)
+  ✔ uses a runner-provided command instead of building pi -p (0.411625ms)
+  ✔ refreshes from the pane and marker, and kills the window (0.405333ms)
+✔ tmux backend (2.886959ms)
+▶ exedev command builders
+  ✔ keeps job files under $HOME/.pi-spawn (0.0815ms)
+  ✔ probes done marker, pid, and lost in one round trip (0.032459ms)
+  ✔ kills the job's process group via its pid file (0.029667ms)
+  ✔ can read a full remote log when no output cap is requested (0.038042ms)
+  ✔ writes a run script that records its pid and exit code (0.076833ms)
+  ✔ tails the remote stderr file without a placeholder (0.040125ms)
+  ✔ parses both VM list shapes and rejects garbage (0.111375ms)
+✔ exedev command builders (0.483ms)
+▶ exedev backend
+  ✔ launches onto an existing VM by piping the run script (0.492666ms)
+  ✔ honors cwd for runner-provided commands on exe.dev (0.380583ms)
+  ✔ creates the VM when missing and waits for SSH (0.296ms)
+  ✔ refuses to create when exedevAutoCreate is off (0.355833ms)
+  ✔ refreshes from the probe and survives network failures (0.221458ms)
+✔ exedev backend (1.812333ms)
+▶ microsandbox backend
+  ✔ builds run args with mounts, resources, image, and command (0.328ms)
+  ✔ writes a guest script that installs pi and records the exit code (0.069583ms)
+  ✔ launches detached, refreshes from markers, and cleans up once (0.669875ms)
+  ✔ kills the host runner and force-stops the sandbox (0.336625ms)
+✔ microsandbox backend (1.450709ms)
+▶ spawn runner adapter
+  ✔ runs labeled pi children through a spawn backend and records the job (1.398541ms)
+  ✔ records this process as the internal job's parent (0.950667ms)
+  ✔ reports a failed child's captured stderr back to the runner (1.06825ms)
+  ✔ delegates unlabeled helper commands to the fallback (0.256792ms)
+  ✔ kills and stamps stale internal jobs during cleanup (1.377917ms)
+  ✔ kills and stamps a running spawn job when aborted (0.972083ms)
+✔ spawn runner adapter (6.091958ms)
+▶ config
+  ✔ loads a JSON config file (0.484291ms)
+  ✔ falls back to SPAWN_* env vars and rejects unknown backends (0.291959ms)
+✔ config (0.806208ms)
+▶ ADR backend capabilities
+  ✔ tmux declares: mount=true, cursor=false, kill=false, logs=true, net=true, iso=false (0.21725ms)
+  ✔ exedev declares: mount=false, cursor=false, kill=false, logs=true, net=true, iso=false (0.189958ms)
+  ✔ microsandbox declares: mount=configurable, cursor=false, kill=false, logs=true, net=true, iso=true (0.10025ms)
+  ✔ microsandbox workspaceMount follows config.msbMountCwd (0.151042ms)
+✔ ADR backend capabilities (0.696625ms)
+▶ ADR KillResult semantics per backend
+  ✔ tmux kill returns alreadyComplete when pane is dead (0.29175ms)
+  ✔ tmux kill returns stopped when pane is alive and kill-window succeeds (0.258041ms)
+  ✔ exedev kill returns alreadyComplete when probe shows dead (0.357542ms)
+  ✔ exedev kill returns stopped when probe shows alive and kill succeeds (0.342917ms)
+  ✔ microsandbox kill returns alreadyComplete when host pid is dead (0.453209ms)
+  ✔ microsandbox kill returns stopped when host pid is alive and kill succeeds (0.392875ms)
+✔ ADR KillResult semantics per backend (2.147333ms)
+▶ legacy persistence compatibility
+  ✔ loads a v0 registry (no version field) as valid jobs (0.232916ms)
+  ✔ saves as v2 format with version field (0.526125ms)
+  ✔ rejects invalid job records and keeps valid ones (0.443958ms)
+✔ legacy persistence compatibility (1.24475ms)
+▶ runner-adapter kill/cancellation semantics
+  ✔ kill alreadyComplete does NOT stamp 'killed' in the adapter (0.848333ms)
+  ✔ deadline timeout kills and reports timeout in stderr (5.738166ms)
+  ✔ abort before launch does not start the job (0.272375ms)
+  ✔ kill error falls back to "lost" status (0.738459ms)
+  ✔ cleanup respects alreadyComplete: refreshes from marker, no kill stamp (0.603459ms)
+  ✔ cleanup stamps lost when kill fails and refresh does not resolve (0.517083ms)
+  ✔ cleanup stamps killed when kill succeeds (stopped=true) (0.631ms)
+✔ runner-adapter kill/cancellation semantics (9.422916ms)
+▶ killAndStamp alreadyComplete refreshes from done marker
+  ✔ resolves to done when the marker exists (0.945666ms)
+  ✔ marks lost when refresh cannot resolve status (0.651292ms)
+✔ killAndStamp alreadyComplete refreshes from done marker (1.627ms)
+▶ killAndStamp stopped stamps killed directly
+  ✔ stamps killed without waiting for done marker even when confirmedKill is false (0.8255ms)
+✔ killAndStamp stopped stamps killed directly (0.848375ms)
+▶ tmux backend kill race condition
+  ✔ returns alreadyComplete when pane dies between alive check and kill-window (0.179958ms)
+  ✔ returns stopped when pane is alive and kill-window succeeds (0.14325ms)
+  ✔ returns alreadyComplete when pane is already dead (0.290583ms)
+  ✔ returns failure when no tmux window id is set (0.256333ms)
+✔ tmux backend kill race condition (0.92425ms)
+▶ exedev backend kill edge cases
+  ✔ returns failure when no ssh dest is set (0.186833ms)
+  ✔ returns alreadyComplete when probe shows dead (0.159916ms)
+  ✔ returns stopped when probe shows alive and kill succeeds (0.278625ms)
+  ✔ returns failure when probe itself fails (0.137666ms)
+✔ exedev backend kill edge cases (0.805667ms)
+▶ microsandbox backend kill edge cases
+  ✔ returns alreadyComplete when host pid is dead (0.983917ms)
+  ✔ returns stopped when host pid is alive and stop succeeds (0.584667ms)
+  ✔ returns stopped when no host pid (only sandbox stop) (0.41575ms)
+✔ microsandbox backend kill edge cases (2.016667ms)
+▶ cleanup alreadyComplete marks lost when refresh fails
+  ✔ marks lost when backend says alreadyComplete but refresh does not resolve (0.620708ms)
+  ✔ resolves to done when refresh succeeds after alreadyComplete (0.596125ms)
+✔ cleanup alreadyComplete marks lost when refresh fails (1.237792ms)
+▶ killAndStamp warned/unconfirmed
+  ✔ marks lost when kill returns stopped:false without alreadyComplete (0.9975ms)
+  ✔ resolves to done when refresh succeeds after warned/unconfirmed (1.056791ms)
+  ✔ converts a thrown kill error to warned/unconfirmed path (lost) (0.743792ms)
+✔ killAndStamp warned/unconfirmed (2.837041ms)
+▶ spawn_kill tool kill handling
+  ✔ stamps killed when kill returns stopped:true (0.602083ms)
+  ✔ does not stamp killed when kill returns alreadyComplete (0.646459ms)
+  ✔ marks lost when kill returns warned/unconfirmed and refresh fails (0.584833ms)
+  ✔ resolves to done when refresh succeeds after warned/unconfirmed (0.567708ms)
+  ✔ surfaces thrown kill as explicit error, no stamp (0.5865ms)
+  ✔ reports already-finished without attempting kill (0.277541ms)
+✔ spawn_kill tool kill handling (3.316833ms)
+▶ consolidated KillResult contract — all branches, consumers, and backends
+  ✔ [killAndStamp] stopped → stamps killed directly (0.740708ms)
+  ✔ [cleanup] stopped → stamps killed, persists to registry (0.61425ms)
+  ✔ [spawn_kill tool] stopped → stamps killed, persists to registry (0.515917ms)
+  ✔ [killAndStamp] alreadyComplete → refreshes from done marker to done (0.800541ms)
+  ✔ [killAndStamp] alreadyComplete → marks lost when refresh cannot resolve (0.760834ms)
+  ✔ [cleanup] alreadyComplete → refreshes to done, persists to registry (0.606459ms)
+  ✔ [cleanup] alreadyComplete → marks lost when refresh cannot resolve (0.565667ms)
+  ✔ [spawn_kill tool] alreadyComplete → refreshes to done (0.426209ms)
+  ✔ [spawn_kill tool] alreadyComplete → refresh failure leaves status unchanged (next poll resolves) (0.573917ms)
+  ✔ [killAndStamp] warned/unconfirmed → marks lost when refresh fails (nonterminal) (0.612166ms)
+  ✔ [killAndStamp] warned/unconfirmed → resolves to done when refresh succeeds (terminal) (0.750375ms)
+  ✔ [cleanup] warned/unconfirmed → marks lost when refresh fails (0.583792ms)
+  ✔ [spawn_kill tool] warned/unconfirmed → marks lost (0.442458ms)
+  ✔ [spawn_kill tool] warned/unconfirmed → resolves to done when refresh succeeds (0.440958ms)
+  ✔ [killAndStamp] thrown kill error → converts to warned/unconfirmed → lost (0.728583ms)
+  ✔ [cleanup] thrown kill error → marks lost (0.483666ms)
+  ✔ [spawn_kill tool] thrown kill error → surfaces error, no stamp (0.452625ms)
+  ✔ [tmux] kill: stopped (alive + kill-window succeeds) (0.142583ms)
+  ✔ [tmux] kill: alreadyComplete (pane already dead) (0.138417ms)
+  ✔ [tmux] kill: alreadyComplete (pane dies during kill race) (0.162ms)
+  ✔ [tmux] kill: warned/unconfirmed (no window id) (0.1355ms)
+  ✔ [exedev] kill: stopped (alive + SIGTERM + confirm dead) (0.297083ms)
+  ✔ [exedev] kill: alreadyComplete (process dead before kill) (0.138625ms)
+  ✔ [exedev] kill: warned/unconfirmed (probe failed) (0.13975ms)
+  ✔ [exedev] kill: warned/unconfirmed (no ssh dest) (0.135167ms)
+  ✔ [microsandbox] kill: stopped (host pid alive → killed → confirm dead) (0.489083ms)
+  ✔ [microsandbox] kill: alreadyComplete (host pid already dead) (0.339792ms)
+  ✔ [microsandbox] kill: warned/unconfirmed (host pid still alive after SIGTERM) (0.297542ms)
+  ✔ cleanup persists killed status to jobs.json and reloads (0.672542ms)
+  ✔ cleanup persists lost status to jobs.json and reloads (0.517042ms)
+  ✔ cleanup persists done status from refresh to jobs.json and reloads (0.62425ms)
+  ✔ cleanup kills orphaned jobs (dead parentPid) (0.471666ms)
+  ✔ cleanup preserves jobs with alive parentPid (0.440291ms)
+  ✔ cleanup treats jobs without parentPid as stale (legacy) (0.465125ms)
+  ✔ cleanup ignores non-prefixed jobs (0.280167ms)
+  ✔ v0 registry (no version field) loads without error (0.18125ms)
+  ✔ v2 registry round-trips with version field (0.296792ms)
+  ✔ invalid records rejected, valid records preserved (0.209042ms)
+✔ consolidated KillResult contract — all branches, consumers, and backends (16.917084ms)
+ℹ tests 132
+ℹ suites 26
+ℹ pass 132
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 200.909292

@@ -1,0 +1,37 @@
+=== tsc all packages ===
+--- agent-types ---
+exit: 0
+--- lykkja ---
+exit: 0
+--- fleet ---
+exit: 0
+--- planner ---
+exit: 0
+--- critic ---
+exit: 0
+--- orchestrator ---
+exit: 0
+--- spawn ---
+exit: 0
+
+=== Module resolution verification ===
+--- ESM import test ---
+ESM import OK: all types importable
+exit: 0
+
+--- CJS require test ---
+CJS require OK: package is loadable (types-only, no runtime exports)
+exit: 0
+
+--- Workspace link ---
+lrwxr-xr-x@ 1 idar  staff  17 Jul 11 11:41 node_modules/@pi-kit/agent-types -> ../../agent-types
+
+--- Package metadata ---
+{
+  "name": "@pi-kit/agent-types",
+  "version": "1.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

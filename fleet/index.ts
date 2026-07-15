@@ -17,6 +17,7 @@ import {
 import { DEFAULT_TMUX_SESSION } from "./tmux.ts";
 import type { AgentDefinition } from "./registry.ts";
 import { runTasks, type TaskResult, type TaskSpec } from "./runner.ts";
+import type { RunId, ArtifactRef } from "@pi-kit/agent-types";
 
 const STATE_ENTRY_TYPE = "fleet-state";
 
@@ -129,6 +130,46 @@ export default function (pi: ExtensionAPI) {
                 description: "Per-task timeout override in milliseconds.",
               }),
             ),
+            runId: Type.Optional(
+              Type.Object(
+                {
+                  runId: Type.String(),
+                  taskId: Type.String(),
+                  attempt: Type.Number(),
+                  wave: Type.Number(),
+                },
+                { description: "Stable run identity across the orchestration (agent-native contract)." },
+              ),
+            ),
+            inputArtifacts: Type.Optional(
+              Type.Array(
+                Type.Object({
+                  type: Type.Union([
+                    Type.Literal("path"),
+                    Type.Literal("branch"),
+                    Type.Literal("commit"),
+                    Type.Literal("summary"),
+                    Type.Literal("patch"),
+                    Type.Literal("file-list"),
+                  ]),
+                  id: Type.String(),
+                  description: Type.String(),
+                  location: Type.Optional(Type.String()),
+                }),
+                { description: "Artifacts appended to the sub-agent's task brief as structured prerequisite context." },
+              ),
+            ),
+            parentRunIds: Type.Optional(
+              Type.Array(Type.String(), {
+                description: "Run IDs of parent tasks, appended to the sub-agent's task brief.",
+              }),
+            ),
+            parentBranch: Type.Optional(
+              Type.String({
+                description:
+                  "Branch to create worktrees from instead of HEAD (for prerequisite branch handoff).",
+              }),
+            ),
           }),
           {
             description:
@@ -144,6 +185,10 @@ export default function (pi: ExtensionAPI) {
           task: t.task,
           isolation: t.isolation,
           timeoutMs: t.timeoutMs,
+          runId: t.runId,
+          inputArtifacts: t.inputArtifacts,
+          parentRunIds: t.parentRunIds,
+          parentBranch: t.parentBranch,
         }));
 
         const batchId = `batch-${Date.now()}-${++batchCounter}`;

@@ -70,6 +70,8 @@ export interface SpawnConfig {
   msbCpus?: number;
   /** Optional sandbox memory limit, e.g. "2G". */
   msbMemory?: string;
+  /** Mount workspace read-only inside the sandbox (default false for backward compat). */
+  sandboxReadonlyWorkspace?: boolean;
   /** Resolved config file path, if one was loaded. */
   configPath?: string;
 }
@@ -95,6 +97,7 @@ interface RawSpawnConfig {
   msbRemoveSandbox?: boolean | string;
   msbCpus?: number | string;
   msbMemory?: string;
+  sandboxReadonlyWorkspace?: boolean | string;
 }
 
 function getDefaultPiAgentDir(): string {
@@ -191,6 +194,7 @@ function loadRawConfig(): { raw: RawSpawnConfig; configPath?: string } {
       msbRemoveSandbox: process.env.SPAWN_MSB_REMOVE_SANDBOX,
       msbCpus: process.env.SPAWN_MSB_CPUS,
       msbMemory: process.env.SPAWN_MSB_MEMORY,
+      sandboxReadonlyWorkspace: process.env.SPAWN_SANDBOX_READONLY_WORKSPACE,
     },
   };
 }
@@ -215,6 +219,7 @@ export function defaultConfig(): SpawnConfig {
     msbMountCwd: true,
     msbForwardEnv: true,
     msbRemoveSandbox: true,
+    sandboxReadonlyWorkspace: false,
   };
 }
 
@@ -265,6 +270,7 @@ export function loadConfig(): SpawnConfig {
     msbRemoveSandbox: parseBoolean(raw.msbRemoveSandbox, true),
     msbCpus: msbCpus === undefined ? undefined : Math.round(msbCpus),
     msbMemory: raw.msbMemory?.trim() || undefined,
+    sandboxReadonlyWorkspace: parseBoolean(raw.sandboxReadonlyWorkspace, false),
     configPath,
   };
 }

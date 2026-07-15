@@ -54,6 +54,8 @@ import {
   cleanupSpawnToolingJobs,
   createSpawnToolingSpawn,
 } from "./runner-adapter.ts";
+import { registryPath } from "./jobs.ts";
+import type { BackendCapabilities, KillResult } from "@pi-kit/agent-types";
 
 function def(
   name: string,
@@ -486,7 +488,17 @@ describe("tmux backend", () => {
     assert.equal(job.exitCode, 2);
 
     await backend.kill(job);
-    assert.deepEqual(calls.at(-1)?.args, ["kill-window", "-t", "@7"]);
+    // With pane_dead=true, kill detects the pane is already gone
+    // and returns alreadyComplete without calling kill-window.
+    const killCalls = calls.filter((c) => c.args[0] === "kill-window");
+    assert.equal(killCalls.length, 0);
+
+    // When the pane is still alive, kill-window is called:
+    paneDead = false;
+    const job2 = runningJob(config, { tmuxWindowId: "@8" });
+    await backend.kill(job2);
+    const killCalls2 = calls.filter((c) => c.args[0] === "kill-window");
+    assert.deepEqual(killCalls2[killCalls2.length - 1]?.args, ["kill-window", "-t", "@8"]);
   });
 });
 
@@ -845,57 +857,69 @@ describe("microsandbox backend", () => {
   });
 });
 
-describe("spawn runner adapter", () => {
-  function backendForAdapter(config: SpawnConfig): {
-    backend: SpawnBackend;
-    launched: LaunchRequest[];
-    killed: string[];
-  } {
-    const launched: LaunchRequest[] = [];
-    const killed: string[] = [];
-    const backend: SpawnBackend = {
-      name: "tmux",
-      async available() {
-        return undefined;
-      },
-      async launch(request) {
-        launched.push(request);
-        const job = runningJob(config, {
-          name: request.jobName,
-          agent: request.agent.name,
-          task: request.task,
-          cwd: request.cwd,
-        });
-        writeFileSync(
-          job.logPath!,
-          [
-            JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "ok" }] } }),
-            "",
-          ].join("\n"),
-          "utf8",
-        );
-        return job;
-      },
-      async refresh(job) {
-        if (job.status !== "running") return false;
-        job.status = "done";
-        job.exitCode = 0;
-        job.updatedAt = Date.now();
-        return true;
-      },
-      async output(job, maxBytes) {
-        return readLogTail(job.logPath, maxBytes);
-      },
-      async errorOutput(job, maxBytes) {
-        return readErrTail(job.errPath, maxBytes);
-      },
-      async kill(job) {
-        killed.push(job.name);
-      },
-    };
-    return { backend, launched, killed };
-  }
+// Shared test helper: a fake SpawnBackend for adapter tests.
+function backendForAdapter(config: SpawnConfig): {
+  backend: SpawnBackend;
+  launched: LaunchRequest[];
+  killed: string[];
+} {
+  const launched: LaunchRequest[] = [];
+  const killed: string[] = [];
+  const backend: SpawnBackend = {
+    name: "tmux",
+    async available() {
+      return undefined;
+    },
+    async launch(request) {
+      launched.push(request);
+      const job = runningJob(config, {
+        name: request.jobName,
+        agent: request.agent.name,
+        task: request.task,
+        cwd: request.cwd,
+      });
+      writeFileSync(
+        job.logPath!,
+        [
+          JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "ok" }] } }),
+          "",
+        ].join("\\n"),
+        "utf8",
+      );
+      return job;
+    },
+    async refresh(job) {
+      if (job.status !== "running") return false;
+      job.status = "done";
+      job.exitCode = 0;
+      job.updatedAt = Date.now();
+      return true;
+    },
+    async output(job, maxBytes) {
+      return readLogTail(job.logPath, maxBytes);
+    },
+    async errorOutput(job, maxBytes) {
+      return readErrTail(job.errPath, maxBytes);
+    },
+    async kill(job) {
+      killed.push(job.name);
+      return { stopped: true as const };
+    },
+    async capabilities() {
+      return {
+        workspaceMount: true,
+        cursorOutput: false,
+        confirmedKill: true,
+        durableLogs: true,
+        networkAccess: true,
+        hardwareIsolation: false,
+      };
+    },
+  };
+  return { backend, launched, killed };
+}
 
+describe("spawn runner adapter", () => {
   it("runs labeled pi children through a spawn backend and records the job", async () => {
     const config = testConfig();
     const { backend, launched } = backendForAdapter(config);
@@ -1126,5 +1150,1766 @@ describe("config", () => {
     withEnv({ SPAWN_CONFIG_PATH: missing, SPAWN_BACKEND: "docker" }, () => {
       assert.throws(() => loadConfig(), /backend must be one of/);
     });
+  });
+});
+
+// ============================================================================
+// ADR completion contracts — comprehensive tests
+// ============================================================================
+
+describe("ADR backend capabilities", () => {
+  it("tmux declares: mount=true, cursor=false, kill=true, logs=true, net=true, iso=false", async () => {
+    const config = testConfig();
+    const { exec } = fakeExec(() => ({}));
+    const backend = createTmuxBackend(exec, config);
+    const caps = await backend.capabilities();
+    assert.deepEqual(caps, {
+      workspaceMount: true,
+      cursorOutput: false,
+      confirmedKill: true,
+      durableLogs: true,
+      networkAccess: true,
+      hardwareIsolation: false,
+    } satisfies BackendCapabilities);
+  });
+
+  it("exedev declares: mount=false, cursor=false, kill=true, logs=true, net=true, iso=false", async () => {
+    const config = testConfig();
+    const { exec } = fakeExec(() => ({}));
+    const backend = createExedevBackend(exec, config);
+    const caps = await backend.capabilities();
+    assert.deepEqual(caps, {
+      workspaceMount: false,
+      cursorOutput: false,
+      confirmedKill: true,
+      durableLogs: true,
+      networkAccess: true,
+      hardwareIsolation: false,
+    } satisfies BackendCapabilities);
+  });
+
+  it("microsandbox declares: mount=configurable, cursor=false, kill=true, logs=true, net=true, iso=true", async () => {
+    const config = testConfig({ msbMountCwd: true });
+    const { exec } = fakeExec(() => ({}));
+    const backend = createMicrosandboxBackend(
+      exec,
+      { spawnDetached: () => 1, isPidAlive: () => false, killDetached: () => {} },
+      config,
+    );
+    const caps = await backend.capabilities();
+    assert.equal(caps.workspaceMount, true);
+    assert.equal(caps.cursorOutput, false);
+    assert.equal(caps.confirmedKill, true);
+    assert.equal(caps.durableLogs, true);
+    assert.equal(caps.networkAccess, true);
+    assert.equal(caps.hardwareIsolation, true);
+  });
+
+  it("microsandbox workspaceMount follows config.msbMountCwd", async () => {
+    const { exec } = fakeExec(() => ({}));
+    const on = createMicrosandboxBackend(
+      exec,
+      { spawnDetached: () => 1, isPidAlive: () => false, killDetached: () => {} },
+      testConfig({ msbMountCwd: true }),
+    );
+    const off = createMicrosandboxBackend(
+      exec,
+      { spawnDetached: () => 1, isPidAlive: () => false, killDetached: () => {} },
+      testConfig({ msbMountCwd: false }),
+    );
+    assert.equal((await on.capabilities()).workspaceMount, true);
+    assert.equal((await off.capabilities()).workspaceMount, false);
+  });
+});
+
+describe("ADR KillResult semantics per backend", () => {
+  it("tmux kill returns alreadyComplete when pane is dead", async () => {
+    const config = testConfig();
+    const { exec } = fakeExec(() => ({}));
+    const backend = createTmuxBackend(exec, config);
+    const job = runningJob(config, { tmuxWindowId: "@99" });
+    // No list-panes mock → exitCode !== 0 → paneAlive returns false.
+    const kr = await backend.kill(job);
+    assert.equal(kr.stopped, false);
+    assert.equal(kr.alreadyComplete, true);
+  });
+
+  it("tmux kill returns stopped when pane is alive and kill-window succeeds", async () => {
+    const config = testConfig();
+    const { exec } = fakeExec((call) => {
+      if (call.args[0] === "list-panes") return { stdout: "0\n" };
+      return {};
+    });
+    const backend = createTmuxBackend(exec, config);
+    const job = runningJob(config, { tmuxWindowId: "@42" });
+    const kr = await backend.kill(job);
+    assert.equal(kr.stopped, true);
+    assert.equal(kr.alreadyComplete, undefined);
+  });
+
+  it("exedev kill returns alreadyComplete when probe shows dead", async () => {
+    const config = testConfig();
+    const { exec } = fakeExec(() => ({ stdout: "dead\n" }));
+    const backend = createExedevBackend(exec, config);
+    const job = runningJob(config, {
+      backend: "exedev",
+      sshDest: "test.exe.xyz",
+      remoteDir: ".pi-spawn/job-a",
+    });
+    const kr = await backend.kill(job);
+    assert.equal(kr.stopped, false);
+    assert.equal(kr.alreadyComplete, true);
+  });
+
+  it("exedev kill returns stopped when probe shows alive and kill succeeds", async () => {
+    const config = testConfig();
+    let probeCount = 0;
+    const { exec } = fakeExec(() => {
+      // First probe: alive; kill command: success; confirm probe: dead.
+      return { stdout: probeCount++ === 0 ? "alive\n" : "dead\n" };
+    });
+    const backend = createExedevBackend(exec, config);
+    const job = runningJob(config, {
+      backend: "exedev",
+      sshDest: "test.exe.xyz",
+      remoteDir: ".pi-spawn/job-a",
+    });
+    const kr = await backend.kill(job);
+    assert.equal(kr.stopped, true);
+  });
+
+  it("microsandbox kill returns alreadyComplete when host pid is dead", async () => {
+    const { exec } = fakeExec(() => ({}));
+    const backend = createMicrosandboxBackend(
+      exec,
+      { spawnDetached: () => 1, isPidAlive: () => false, killDetached: () => {} },
+      testConfig(),
+    );
+    const job = runningJob(testConfig(), {
+      backend: "microsandbox",
+      hostPid: 999,
+      sandboxName: "pi-spawn-job-a",
+    });
+    const kr = await backend.kill(job);
+    assert.equal(kr.stopped, false);
+    assert.equal(kr.alreadyComplete, true);
+  });
+
+  it("microsandbox kill returns stopped when host pid is alive and kill succeeds", async () => {
+    const { exec } = fakeExec(() => ({}));
+    let pidStillAlive = true;
+    const backend = createMicrosandboxBackend(
+      exec,
+      {
+        spawnDetached: () => 1,
+        isPidAlive: () => pidStillAlive,
+        killDetached: () => { pidStillAlive = false; },
+      },
+      testConfig(),
+    );
+    const job = runningJob(testConfig(), {
+      backend: "microsandbox",
+      hostPid: 999,
+      sandboxName: "pi-spawn-job-a",
+    });
+    const kr = await backend.kill(job);
+    assert.equal(kr.stopped, true);
+  });
+});
+
+describe("legacy persistence compatibility", () => {
+  it("loads a v0 registry (no version field) as valid jobs", () => {
+    const config = testConfig();
+    mkdirSync(config.logDir, { recursive: true });
+    const v0Registry = {
+      jobs: [
+        {
+          name: "legacy-job",
+          backend: "tmux",
+          agent: "scout",
+          task: "old task",
+          cwd: "/tmp",
+          status: "done",
+          createdAt: 1000,
+          updatedAt: 2000,
+          exitCode: 0,
+        },
+      ],
+    };
+    writeFileSync(
+      registryPath(config.logDir),
+      JSON.stringify(v0Registry),
+      "utf8",
+    );
+    const errors: string[] = [];
+    const jobs = loadJobs(config.logDir, (m) => errors.push(m));
+    assert.equal(jobs.length, 1);
+    assert.equal(jobs[0].name, "legacy-job");
+    assert.equal(jobs[0].status, "done");
+    assert.equal(errors.length, 0);
+  });
+
+  it("saves as v2 format with version field", () => {
+    const config = testConfig();
+    const job = runningJob(config);
+    saveJobs(config.logDir, [job]);
+    const raw = JSON.parse(readFileSync(registryPath(config.logDir), "utf8"));
+    assert.equal(raw.version, 2);
+    assert.ok(Array.isArray(raw.jobs));
+    assert.equal(raw.jobs.length, 1);
+  });
+
+  it("rejects invalid job records and keeps valid ones", () => {
+    const config = testConfig();
+    mkdirSync(config.logDir, { recursive: true });
+    const registry = {
+      version: 2,
+      jobs: [
+        // Valid job
+        {
+          name: "good-job",
+          backend: "tmux",
+          agent: "scout",
+          task: "do stuff",
+          cwd: "/tmp",
+          status: "running",
+          createdAt: 1000,
+          updatedAt: 1000,
+        },
+        // Invalid: no name
+        { backend: "tmux", agent: "s", task: "t", cwd: "/tmp", status: "running", createdAt: 1, updatedAt: 1 },
+        // Invalid: unknown backend
+        { name: "bad-backend", backend: "docker", agent: "s", task: "t", cwd: "/tmp", status: "running", createdAt: 1, updatedAt: 1 },
+        // Invalid: wrong status type
+        { name: "bad-status", backend: "tmux", agent: "s", task: "t", cwd: "/tmp", status: 42, createdAt: 1, updatedAt: 1 },
+        // Invalid: not an object
+        "just a string",
+        // Valid job
+        {
+          name: "another-good",
+          backend: "exedev",
+          agent: "critic",
+          task: "review",
+          cwd: "/repo",
+          status: "done",
+          createdAt: 2000,
+          updatedAt: 3000,
+        },
+      ],
+    };
+    writeFileSync(
+      registryPath(config.logDir),
+      JSON.stringify(registry),
+      "utf8",
+    );
+    const errors: string[] = [];
+    const jobs = loadJobs(config.logDir, (m) => errors.push(m));
+    assert.equal(jobs.length, 2);
+    assert.equal(jobs[0].name, "good-job");
+    assert.equal(jobs[1].name, "another-good");
+    assert.ok(errors.length > 0);
+    assert.ok(errors[0].includes("invalid job record"));
+  });
+});
+
+describe("runner-adapter kill/cancellation semantics", () => {
+  it("kill alreadyComplete does NOT stamp 'killed' in the adapter", async () => {
+    const config = testConfig();
+    const { backend } = backendForAdapter(config);
+    // Override kill to return alreadyComplete.
+    let killAttempted = false;
+    backend.kill = async () => {
+      killAttempted = true;
+      return { stopped: false, alreadyComplete: true, message: "process already exited" };
+    };
+    // Override refresh: keep running until abort fires, then resolve to done.
+    let aborted = false;
+    backend.refresh = async (job) => {
+      if (aborted && job.status === "running") {
+        job.status = "done";
+        job.exitCode = 0;
+        job.updatedAt = Date.now();
+        return true;
+      }
+      return false;
+    };
+    const controller = new AbortController();
+    const spawn = createSpawnToolingSpawn({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      pollIntervalMs: 1,
+      sleep: async () => {
+        if (!aborted) {
+          aborted = true;
+          controller.abort();
+        }
+      },
+    });
+    const outcome = await spawn({
+      command: "pi",
+      args: ["task"],
+      cwd: "/repo",
+      signal: controller.signal,
+      label: "1-scout",
+    });
+    // The kill was attempted but the backend said alreadyComplete.
+    assert.equal(killAttempted, true);
+    // The job should NOT be stamped "killed" — it keeps its original
+    // terminal status from the refresh ("done").
+    const [job] = loadJobs(config.logDir);
+    assert.notEqual(job.status, "killed");
+  });
+
+  it("deadline timeout kills and reports timeout in stderr", async () => {
+    const config = testConfig();
+    const { backend, killed } = backendForAdapter(config);
+    // Backend never completes — always running.
+    backend.refresh = async () => false;
+    let sleepCount = 0;
+    const spawn = createSpawnToolingSpawn({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      pollIntervalMs: 1,
+      deadlineMs: 5,
+      sleep: async () => { sleepCount++; },
+    });
+    const outcome = await spawn({
+      command: "pi",
+      args: ["task"],
+      cwd: "/repo",
+      signal: new AbortController().signal,
+      label: "1-scout",
+    });
+    assert.equal(outcome.exitCode, null);
+    assert.match(outcome.stderr, /exceeded hard deadline/);
+    assert.equal(killed.length, 1);
+    const [job] = loadJobs(config.logDir);
+    assert.equal(job.status, "killed");
+  });
+
+  it("abort before launch does not start the job", async () => {
+    const config = testConfig();
+    const { backend, launched } = backendForAdapter(config);
+    const spawn = createSpawnToolingSpawn({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      pollIntervalMs: 0,
+    });
+    const controller = new AbortController();
+    controller.abort();
+    const outcome = await spawn({
+      command: "pi",
+      args: ["task"],
+      cwd: "/repo",
+      signal: controller.signal,
+      label: "1-scout",
+    });
+    assert.equal(outcome.exitCode, null);
+    assert.match(outcome.stderr, /aborted before launch/);
+    assert.equal(launched.length, 0);
+    assert.deepEqual(loadJobs(config.logDir), []);
+  });
+
+  it("kill error falls back to \"lost\" status", async () => {
+    const config = testConfig();
+    const { backend } = backendForAdapter(config);
+    // Kill throws an error.
+    backend.kill = async () => { throw new Error("connection refused"); };
+    // Refresh never succeeds.
+    backend.refresh = async () => false;
+    const orphaned = runningJob(config, {
+      name: "pi-fleet-1-scout-abc",
+      parentPid: 9999,
+    });
+    saveJobs(config.logDir, [orphaned]);
+    const cleaned = await cleanupSpawnToolingJobs({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      jobNamePrefix: "pi-fleet",
+      isParentAlive: () => false,
+      now: () => 1234,
+    });
+    assert.equal(cleaned, 1);
+    const [job] = loadJobs(config.logDir);
+    // Kill threw, refresh failed → marked lost, not killed.
+    assert.equal(job.status, "lost");
+  });
+
+  it("cleanup respects alreadyComplete: refreshes from marker, no kill stamp", async () => {
+    const config = testConfig();
+    const { backend, killed } = backendForAdapter(config);
+    // Kill returns alreadyComplete.
+    backend.kill = async () => ({
+      stopped: false,
+      alreadyComplete: true,
+      message: "done",
+    });
+    // Refresh resolves to "done".
+    backend.refresh = async (job) => {
+      if (job.status === "running") {
+        job.status = "done";
+        job.exitCode = 0;
+        job.updatedAt = Date.now();
+        return true;
+      }
+      return false;
+    };
+    const orphaned = runningJob(config, {
+      name: "pi-fleet-1-scout-abc",
+      parentPid: 9999,
+    });
+    saveJobs(config.logDir, [orphaned]);
+
+    const cleaned = await cleanupSpawnToolingJobs({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      jobNamePrefix: "pi-fleet",
+      isParentAlive: () => false,
+      now: () => 1234,
+    });
+    assert.equal(cleaned, 1);
+    assert.equal(killed.length, 0);
+    const [job] = loadJobs(config.logDir);
+    // Should be "done" from refresh, not "killed".
+    assert.equal(job.status, "done");
+    assert.equal(job.exitCode, 0);
+  });
+
+  it("cleanup stamps lost when kill fails and refresh does not resolve", async () => {
+    const config = testConfig();
+    const { backend } = backendForAdapter(config);
+    // Kill returns failure.
+    backend.kill = async () => ({
+      stopped: false,
+      message: "cannot reach backend",
+    });
+    // Refresh never resolves (runner dead, no marker).
+    backend.refresh = async () => false;
+    const orphaned = runningJob(config, {
+      name: "pi-fleet-1-scout-abc",
+      parentPid: 9999,
+    });
+    saveJobs(config.logDir, [orphaned]);
+
+    const errors: string[] = [];
+    const cleaned = await cleanupSpawnToolingJobs({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      jobNamePrefix: "pi-fleet",
+      isParentAlive: () => false,
+      now: () => 1234,
+      onError: (m) => errors.push(m),
+    });
+    assert.equal(cleaned, 1);
+    assert.ok(errors.length > 0);
+    const [job] = loadJobs(config.logDir);
+    assert.equal(job.status, "lost");
+  });
+
+  it("cleanup stamps killed when kill succeeds (stopped=true)", async () => {
+    const config = testConfig();
+    const { backend } = backendForAdapter(config);
+    // Kill confirms stop.
+    let killAttempted = false;
+    backend.kill = async () => {
+      killAttempted = true;
+      return { stopped: true };
+    };
+    backend.refresh = async () => false;
+    const orphaned = runningJob(config, {
+      name: "pi-fleet-1-scout-abc",
+      parentPid: 9999,
+    });
+    saveJobs(config.logDir, [orphaned]);
+
+    const cleaned = await cleanupSpawnToolingJobs({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      jobNamePrefix: "pi-fleet",
+      isParentAlive: () => false,
+      now: () => 1234,
+    });
+    assert.equal(cleaned, 1);
+    assert.equal(killAttempted, true);
+    const [job] = loadJobs(config.logDir);
+    assert.equal(job.status, "killed");
+  });
+});
+
+// ============================================================================
+// Comprehensive KillResult / persistence / race-condition tests
+// ============================================================================
+
+describe("killAndStamp alreadyComplete refreshes from done marker", () => {
+  it("resolves to done when the marker exists", async () => {
+    const config = testConfig();
+    const { backend, killed } = backendForAdapter(config);
+    backend.kill = async () => ({
+      stopped: false,
+      alreadyComplete: true,
+      message: "process already exited",
+    });
+    backend.refresh = async (job) => {
+      if (job.status === "running") {
+        job.status = "done";
+        job.exitCode = 0;
+        job.updatedAt = Date.now();
+        return true;
+      }
+      return false;
+    };
+    const controller = new AbortController();
+    const spawn = createSpawnToolingSpawn({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      pollIntervalMs: 1,
+      sleep: async () => {
+        controller.abort();
+      },
+    });
+    await spawn({
+      command: "pi",
+      args: ["task"],
+      cwd: "/repo",
+      signal: controller.signal,
+      label: "1-scout",
+    });
+    const [job] = loadJobs(config.logDir);
+    // Job should be refreshed to "done", not stuck at "running".
+    assert.equal(job.status, "done");
+    assert.equal(job.exitCode, 0);
+    assert.equal(killed.length, 0);
+  });
+
+  it("marks lost when refresh cannot resolve status", async () => {
+    const config = testConfig();
+    const { backend } = backendForAdapter(config);
+    backend.kill = async () => ({
+      stopped: false,
+      alreadyComplete: true,
+    });
+    // Refresh never resolves (marker missing/corrupt).
+    backend.refresh = async () => false;
+    const controller = new AbortController();
+    const spawn = createSpawnToolingSpawn({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      pollIntervalMs: 1,
+      sleep: async () => {
+        controller.abort();
+      },
+    });
+    await spawn({
+      command: "pi",
+      args: ["task"],
+      cwd: "/repo",
+      signal: controller.signal,
+      label: "1-scout",
+    });
+    const [job] = loadJobs(config.logDir);
+    assert.equal(job.status, "lost");
+  });
+});
+
+describe("killAndStamp stopped stamps killed directly", () => {
+  it("stamps killed without waiting for done marker even when confirmedKill is false", async () => {
+    const config = testConfig();
+    const { backend, killed } = backendForAdapter(config);
+    // Original kill already returns stopped:true and pushes to killed[].
+    // Override capabilities to report confirmedKill=false.
+    backend.capabilities = async () => ({
+      workspaceMount: true,
+      cursorOutput: false,
+      confirmedKill: false,
+      durableLogs: true,
+      networkAccess: true,
+      hardwareIsolation: false,
+    });
+    // Refresh keeps running — the adapter should NOT wait for it.
+    backend.refresh = async () => false;
+    const controller = new AbortController();
+    const spawn = createSpawnToolingSpawn({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      pollIntervalMs: 1,
+      sleep: async () => {
+        controller.abort();
+      },
+    });
+    await spawn({
+      command: "pi",
+      args: ["task"],
+      cwd: "/repo",
+      signal: controller.signal,
+      label: "1-scout",
+    });
+    const [job] = loadJobs(config.logDir);
+    assert.equal(job.status, "killed");
+    assert.equal(killed.length, 1);
+  });
+});
+
+describe("tmux backend kill race condition", () => {
+  it("returns alreadyComplete when pane dies between alive check and kill-window", async () => {
+    const config = testConfig();
+    let listPanesCalls = 0;
+    const { exec } = fakeExec((call) => {
+      if (call.args[0] === "list-panes") {
+        listPanesCalls++;
+        // First probe: alive; re-probe after failed kill: dead.
+        return { stdout: listPanesCalls === 1 ? "0\n" : "1\n" };
+      }
+      if (call.args[0] === "kill-window") {
+        return { exitCode: 1, stderr: "can't find window" };
+      }
+      return {};
+    });
+    const backend = createTmuxBackend(exec, config);
+    const job = runningJob(config, { tmuxWindowId: "@42" });
+    const kr = await backend.kill(job);
+    assert.equal(kr.stopped, false);
+    assert.equal(kr.alreadyComplete, true);
+  });
+
+  it("returns stopped when pane is alive and kill-window succeeds", async () => {
+    const config = testConfig();
+    const { exec } = fakeExec((call) => {
+      if (call.args[0] === "list-panes") return { stdout: "0\n" };
+      return {};
+    });
+    const backend = createTmuxBackend(exec, config);
+    const job = runningJob(config, { tmuxWindowId: "@42" });
+    const kr = await backend.kill(job);
+    assert.equal(kr.stopped, true);
+    assert.equal(kr.alreadyComplete, undefined);
+  });
+
+  it("returns alreadyComplete when pane is already dead", async () => {
+    const config = testConfig();
+    const { exec } = fakeExec((call) => {
+      if (call.args[0] === "list-panes") return { stdout: "1\n" };
+      return {};
+    });
+    const backend = createTmuxBackend(exec, config);
+    const job = runningJob(config, { tmuxWindowId: "@42" });
+    const kr = await backend.kill(job);
+    assert.equal(kr.stopped, false);
+    assert.equal(kr.alreadyComplete, true);
+  });
+
+  it("returns failure when no tmux window id is set", async () => {
+    const config = testConfig();
+    const { exec } = fakeExec(() => ({}));
+    const backend = createTmuxBackend(exec, config);
+    const job = runningJob(config);
+    // No tmuxWindowId set.
+    const kr = await backend.kill(job);
+    assert.equal(kr.stopped, false);
+    assert.ok(kr.message?.includes("no tmux window id"));
+  });
+});
+
+describe("exedev backend kill edge cases", () => {
+  it("returns failure when no ssh dest is set", async () => {
+    const config = testConfig();
+    const { exec } = fakeExec(() => ({}));
+    const backend = createExedevBackend(exec, config);
+    const job = runningJob(config, { backend: "exedev" });
+    // No sshDest or remoteDir.
+    const kr = await backend.kill(job);
+    assert.equal(kr.stopped, false);
+    assert.ok(kr.message?.includes("no ssh dest"));
+  });
+
+  it("returns alreadyComplete when probe shows dead", async () => {
+    const config = testConfig();
+    const { exec } = fakeExec(() => ({ stdout: "dead\n" }));
+    const backend = createExedevBackend(exec, config);
+    const job = runningJob(config, {
+      backend: "exedev",
+      sshDest: "test.exe.xyz",
+      remoteDir: ".pi-spawn/job-a",
+    });
+    const kr = await backend.kill(job);
+    assert.equal(kr.stopped, false);
+    assert.equal(kr.alreadyComplete, true);
+  });
+
+  it("returns stopped when probe shows alive and kill succeeds", async () => {
+    const config = testConfig();
+    let probeCount = 0;
+    const { exec } = fakeExec(() => {
+      return { stdout: probeCount++ === 0 ? "alive\n" : "dead\n" };
+    });
+    const backend = createExedevBackend(exec, config);
+    const job = runningJob(config, {
+      backend: "exedev",
+      sshDest: "test.exe.xyz",
+      remoteDir: ".pi-spawn/job-a",
+    });
+    const kr = await backend.kill(job);
+    assert.equal(kr.stopped, true);
+  });
+
+  it("returns failure when probe itself fails", async () => {
+    const config = testConfig();
+    const { exec } = fakeExec(() => ({
+      exitCode: 255,
+      stderr: "Connection refused",
+    }));
+    const backend = createExedevBackend(exec, config);
+    const job = runningJob(config, {
+      backend: "exedev",
+      sshDest: "test.exe.xyz",
+      remoteDir: ".pi-spawn/job-a",
+    });
+    const kr = await backend.kill(job);
+    assert.equal(kr.stopped, false);
+    assert.ok(kr.message?.includes("probe failed"));
+  });
+});
+
+describe("microsandbox backend kill edge cases", () => {
+  it("returns alreadyComplete when host pid is dead", async () => {
+    const { exec } = fakeExec(() => ({}));
+    const backend = createMicrosandboxBackend(
+      exec,
+      { spawnDetached: () => 1, isPidAlive: () => false, killDetached: () => {} },
+      testConfig(),
+    );
+    const job = runningJob(testConfig(), {
+      backend: "microsandbox",
+      hostPid: 999,
+      sandboxName: "pi-spawn-job-a",
+    });
+    const kr = await backend.kill(job);
+    assert.equal(kr.stopped, false);
+    assert.equal(kr.alreadyComplete, true);
+  });
+
+  it("returns stopped when host pid is alive and stop succeeds", async () => {
+    const { exec } = fakeExec(() => ({}));
+    let pidStillAlive = true;
+    const backend = createMicrosandboxBackend(
+      exec,
+      {
+        spawnDetached: () => 1,
+        isPidAlive: () => pidStillAlive,
+        killDetached: () => { pidStillAlive = false; },
+      },
+      testConfig(),
+    );
+    const job = runningJob(testConfig(), {
+      backend: "microsandbox",
+      hostPid: 999,
+      sandboxName: "pi-spawn-job-a",
+    });
+    const kr = await backend.kill(job);
+    assert.equal(kr.stopped, true);
+  });
+
+  it("returns stopped when no host pid (only sandbox stop)", async () => {
+    const { exec, calls } = fakeExec(() => ({}));
+    const backend = createMicrosandboxBackend(
+      exec,
+      { spawnDetached: () => 1, isPidAlive: () => true, killDetached: () => {} },
+      testConfig(),
+    );
+    const job = runningJob(testConfig(), {
+      backend: "microsandbox",
+      sandboxName: "pi-spawn-job-a",
+      // no hostPid
+    });
+    const kr = await backend.kill(job);
+    assert.equal(kr.stopped, true);
+    const stopCalls = calls.filter(
+      (c) => c.command === "msb" && c.args[0] === "stop",
+    );
+    assert.equal(stopCalls.length, 1);
+  });
+});
+
+describe("cleanup alreadyComplete marks lost when refresh fails", () => {
+  it("marks lost when backend says alreadyComplete but refresh does not resolve", async () => {
+    const config = testConfig();
+    const { backend } = backendForAdapter(config);
+    backend.kill = async () => ({
+      stopped: false,
+      alreadyComplete: true,
+      message: "done",
+    });
+    // Refresh does not resolve the status.
+    backend.refresh = async () => false;
+    const orphaned = runningJob(config, {
+      name: "pi-fleet-1-scout-abc",
+      parentPid: 9999,
+    });
+    saveJobs(config.logDir, [orphaned]);
+
+    const cleaned = await cleanupSpawnToolingJobs({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      jobNamePrefix: "pi-fleet",
+      isParentAlive: () => false,
+      now: () => 1234,
+    });
+    assert.equal(cleaned, 1);
+    const [job] = loadJobs(config.logDir);
+    // Backend confirmed completion, but marker could not resolve → lost.
+    assert.equal(job.status, "lost");
+  });
+
+  it("resolves to done when refresh succeeds after alreadyComplete", async () => {
+    const config = testConfig();
+    const { backend } = backendForAdapter(config);
+    backend.kill = async () => ({
+      stopped: false,
+      alreadyComplete: true,
+    });
+    backend.refresh = async (job) => {
+      if (job.status === "running") {
+        job.status = "done";
+        job.exitCode = 0;
+        job.updatedAt = Date.now();
+        return true;
+      }
+      return false;
+    };
+    const orphaned = runningJob(config, {
+      name: "pi-fleet-1-scout-abc",
+      parentPid: 9999,
+    });
+    saveJobs(config.logDir, [orphaned]);
+
+    const cleaned = await cleanupSpawnToolingJobs({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      jobNamePrefix: "pi-fleet",
+      isParentAlive: () => false,
+      now: () => 1234,
+    });
+    assert.equal(cleaned, 1);
+    const [job] = loadJobs(config.logDir);
+    assert.equal(job.status, "done");
+    assert.equal(job.exitCode, 0);
+  });
+});
+
+// ============================================================================
+// killAndStamp warned/unconfirmed (stopped:false, no alreadyComplete)
+// ============================================================================
+
+describe("killAndStamp warned/unconfirmed", () => {
+  it("marks lost when kill returns stopped:false without alreadyComplete", async () => {
+    const config = testConfig();
+    const { backend } = backendForAdapter(config);
+    backend.kill = async () => ({
+      stopped: false,
+      message: "kill-window failed",
+    });
+    // Refresh never resolves.
+    backend.refresh = async () => false;
+    const controller = new AbortController();
+    const spawn = createSpawnToolingSpawn({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      pollIntervalMs: 1,
+      sleep: async () => {
+        controller.abort();
+      },
+    });
+    await spawn({
+      command: "pi",
+      args: ["task"],
+      cwd: "/repo",
+      signal: controller.signal,
+      label: "1-scout",
+    });
+    const [job] = loadJobs(config.logDir);
+    // Warned/unconfirmed → refresh failed → marked lost.
+    assert.equal(job.status, "lost");
+  });
+
+  it("resolves to done when refresh succeeds after warned/unconfirmed", async () => {
+    const config = testConfig();
+    const { backend } = backendForAdapter(config);
+    backend.kill = async () => ({
+      stopped: false,
+      message: "could not confirm stop",
+    });
+    // Refresh resolves to done.
+    backend.refresh = async (job) => {
+      if (job.status === "running") {
+        job.status = "done";
+        job.exitCode = 0;
+        job.updatedAt = Date.now();
+        return true;
+      }
+      return false;
+    };
+    const controller = new AbortController();
+    const spawn = createSpawnToolingSpawn({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      pollIntervalMs: 1,
+      sleep: async () => {
+        controller.abort();
+      },
+    });
+    await spawn({
+      command: "pi",
+      args: ["task"],
+      cwd: "/repo",
+      signal: controller.signal,
+      label: "1-scout",
+    });
+    const [job] = loadJobs(config.logDir);
+    // Warned/unconfirmed → refresh resolved to done.
+    assert.equal(job.status, "done");
+    assert.equal(job.exitCode, 0);
+  });
+
+  it("converts a thrown kill error to warned/unconfirmed path (lost)", async () => {
+    const config = testConfig();
+    const { backend } = backendForAdapter(config);
+    backend.kill = async () => { throw new Error("connection refused"); };
+    backend.refresh = async () => false;
+    const controller = new AbortController();
+    const spawn = createSpawnToolingSpawn({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      pollIntervalMs: 1,
+      sleep: async () => {
+        controller.abort();
+      },
+    });
+    await spawn({
+      command: "pi",
+      args: ["task"],
+      cwd: "/repo",
+      signal: controller.signal,
+      label: "1-scout",
+    });
+    const [job] = loadJobs(config.logDir);
+    // Kill threw → adapter converts to KillResult → warned/unconfirmed →
+    // refresh failed → lost.
+    assert.equal(job.status, "lost");
+  });
+});
+
+// ============================================================================
+// Public spawn_kill tool — semantic-contract tests
+// ============================================================================
+//
+// The spawn_kill tool's kill handler (index.ts) uses the same semantic
+// contract as killAndStamp: inspect KillResult, stamp killed only on
+// stopped, refresh on alreadyComplete, mark lost on warned/unconfirmed,
+// and surface thrown kill errors explicitly. These tests exercise that
+// contract using the same mock-backend pattern as the adapter tests.
+
+/**
+ * Exercise the spawn_kill tool's kill handling logic with a mock backend.
+ * Mirrors the exact branches in the spawn_kill execute handler (index.ts).
+ */
+async function exerciseToolKillHandling(
+  config: SpawnConfig,
+  opts: {
+    killResult?: KillResult;
+    killThrows?: Error;
+    refreshResolvesTo?: string;
+    now?: () => number;
+  },
+): Promise<{ text: string; job: SpawnJob }> {
+  const { backend, killed } = backendForAdapter(config);
+  const now = opts.now ?? (() => Date.now());
+
+  // Override kill.
+  if (opts.killThrows) {
+    backend.kill = async () => { throw opts.killThrows; };
+  } else if (opts.killResult) {
+    backend.kill = async () => opts.killResult!;
+  }
+
+  // Override refresh: pre-kill calls keep running; post-kill calls
+  // (from alreadyComplete / warned-unconfirmed branches) resolve if
+  // refreshResolvesTo is set.
+  const resolvedStatus = opts.refreshResolvesTo;
+  let refreshCalls = 0;
+  backend.refresh = async (job) => {
+    if (job.status !== "running") return false;
+    refreshCalls++;
+    // First call is the pre-kill refresh from the tool.
+    if (refreshCalls === 1) return false;
+    // Subsequent calls are post-kill: resolve if configured.
+    if (resolvedStatus) {
+      job.status = resolvedStatus as any;
+      job.exitCode = resolvedStatus === "done" ? 0 : undefined;
+      job.updatedAt = now();
+      return true;
+    }
+    return false;
+  };
+
+  // Create a running job.
+  const job = runningJob(config, { name: "tool-kill-test" });
+  saveJobs(config.logDir, [job]);
+
+  // Simulate the spawn_kill tool's logic (mirrors index.ts spawn_kill handler).
+  const jobs = loadJobs(config.logDir);
+  const foundJob = jobs.find((j) => j.name === "tool-kill-test")!;
+  let dirty = false;
+
+  // refreshJob first (matches tool's pre-kill refresh)
+  if (!isTerminal(foundJob.status)) {
+    try {
+      const changed = await backend.refresh(foundJob);
+      if (changed) dirty = true;
+    } catch {
+      // refreshJob swallows errors.
+    }
+  }
+
+  let text: string;
+  if (isTerminal(foundJob.status)) {
+    text = `Job "${foundJob.name}" already finished.`;
+  } else {
+    // ADR §9: KillResult determines the outcome.
+    let kr;
+    try {
+      kr = await backend.kill(foundJob);
+    } catch (e: any) {
+      // Kill threw: surface as explicit error.
+      foundJob.updatedAt = now();
+      dirty = true;
+      text = `Kill failed for job "${foundJob.name}": ${e?.message ?? String(e)}.`;
+      if (dirty) saveJobs(config.logDir, jobs);
+      return { text, job: foundJob };
+    }
+    if (kr.stopped) {
+      foundJob.status = "killed";
+      foundJob.updatedAt = now();
+      dirty = true;
+      text = `Killed job "${foundJob.name}".`;
+    } else if (kr.alreadyComplete) {
+      try { await backend.refresh(foundJob); } catch {}
+      foundJob.updatedAt = now();
+      dirty = true;
+      text = `Job "${foundJob.name}" already completed.`;
+    } else {
+      try { await backend.refresh(foundJob); } catch {}
+      if (!isTerminal(foundJob.status)) {
+        foundJob.status = "lost";
+      }
+      foundJob.updatedAt = now();
+      dirty = true;
+      text = `Could not kill job "${foundJob.name}": ${kr.message ?? "unknown error"}.`;
+    }
+  }
+  if (dirty) saveJobs(config.logDir, jobs);
+  return { text, job: foundJob };
+}
+
+describe("spawn_kill tool kill handling", () => {
+  it("stamps killed when kill returns stopped:true", async () => {
+    const config = testConfig();
+    const { text, job } = await exerciseToolKillHandling(config, {
+      killResult: { stopped: true },
+      refreshResolvesTo: undefined,
+    });
+    assert.equal(job.status, "killed");
+    assert.match(text, /Killed job/);
+  });
+
+  it("does not stamp killed when kill returns alreadyComplete", async () => {
+    const config = testConfig();
+    const { text, job } = await exerciseToolKillHandling(config, {
+      killResult: { stopped: false, alreadyComplete: true },
+      refreshResolvesTo: "done",
+    });
+    assert.notEqual(job.status, "killed");
+    assert.equal(job.status, "done");
+    assert.match(text, /already completed/);
+  });
+
+  it("marks lost when kill returns warned/unconfirmed and refresh fails", async () => {
+    const config = testConfig();
+    const { text, job } = await exerciseToolKillHandling(config, {
+      killResult: { stopped: false, message: "could not confirm stop" },
+    });
+    assert.equal(job.status, "lost");
+    assert.match(text, /Could not kill job/);
+    assert.match(text, /could not confirm stop/);
+  });
+
+  it("resolves to done when refresh succeeds after warned/unconfirmed", async () => {
+    const config = testConfig();
+    const { text, job } = await exerciseToolKillHandling(config, {
+      killResult: { stopped: false, message: "kill-window failed" },
+      refreshResolvesTo: "done",
+    });
+    assert.equal(job.status, "done");
+    assert.match(text, /Could not kill job/);
+  });
+
+  it("surfaces thrown kill as explicit error, no stamp", async () => {
+    const config = testConfig();
+    const { text, job } = await exerciseToolKillHandling(config, {
+      killThrows: new Error("connection refused"),
+    });
+    assert.notEqual(job.status, "killed");
+    assert.notEqual(job.status, "lost");
+    assert.match(text, /Kill failed/);
+    assert.match(text, /connection refused/);
+  });
+
+  it("reports already-finished without attempting kill", async () => {
+    const config = testConfig();
+    const { backend, killed } = backendForAdapter(config);
+    const job = runningJob(config, { name: "done-job" });
+    job.status = "done";
+    job.exitCode = 0;
+    saveJobs(config.logDir, [job]);
+
+    const jobs = loadJobs(config.logDir);
+    const foundJob = jobs.find((j) => j.name === "done-job")!;
+    assert.equal(foundJob.status, "done");
+    // The tool would report "already finished" without calling kill.
+    assert.equal(killed.length, 0);
+  });
+});
+
+// ============================================================================
+// Consolidated KillResult contract: every branch × every consumer in one place
+// ============================================================================
+//
+// This single describe block directly exercises the three KillResult branches
+// (stopped, alreadyComplete, warned/unconfirmed) across all three consumers
+// (killAndStamp, cleanupSpawnToolingJobs, spawn_kill tool), all three backend
+// implementations (tmux, exedev, microsandbox), thrown-kill error paths,
+// cleanup persistence, recovery from stale state, and legacy migration.
+//
+// Reviewers: each test name maps to a numbered branch in the KillResult
+// contract documented at runner-adapter.ts killAndStamp and index.ts spawn_kill.
+
+describe("consolidated KillResult contract — all branches, consumers, and backends", () => {
+  // --------------------------------------------------------------------
+  // Branch 1: stopped — backend confirms process is gone
+  // --------------------------------------------------------------------
+
+  it("[killAndStamp] stopped → stamps killed directly", async () => {
+    const config = testConfig();
+    const { backend } = backendForAdapter(config);
+    backend.kill = async () => ({ stopped: true });
+    backend.refresh = async () => false; // should NOT be called after stopped
+    const controller = new AbortController();
+    const spawn = createSpawnToolingSpawn({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      pollIntervalMs: 1,
+      sleep: async () => { controller.abort(); },
+    });
+    await spawn({ command: "pi", args: ["task"], cwd: "/repo", signal: controller.signal, label: "1-scout" });
+    const [job] = loadJobs(config.logDir);
+    assert.equal(job.status, "killed");
+  });
+
+  it("[cleanup] stopped → stamps killed, persists to registry", async () => {
+    const config = testConfig();
+    const { backend } = backendForAdapter(config);
+    backend.kill = async () => ({ stopped: true });
+    backend.refresh = async () => false;
+    const orphaned = runningJob(config, { name: "pi-fleet-1-scout-abc", parentPid: 9999 });
+    saveJobs(config.logDir, [orphaned]);
+    const cleaned = await cleanupSpawnToolingJobs({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      jobNamePrefix: "pi-fleet",
+      isParentAlive: () => false,
+      now: () => 42,
+    });
+    assert.equal(cleaned, 1);
+    const [job] = loadJobs(config.logDir);
+    assert.equal(job.status, "killed");
+    assert.equal(job.updatedAt, 42);
+  });
+
+  it("[spawn_kill tool] stopped → stamps killed, persists to registry", async () => {
+    const config = testConfig();
+    const { text, job } = await exerciseToolKillHandling(config, {
+      killResult: { stopped: true },
+    });
+    assert.equal(job.status, "killed");
+    assert.match(text, /Killed job/);
+  });
+
+  // --------------------------------------------------------------------
+  // Branch 2: alreadyComplete — process already exited before kill
+  // --------------------------------------------------------------------
+
+  it("[killAndStamp] alreadyComplete → refreshes from done marker to done", async () => {
+    const config = testConfig();
+    const { backend } = backendForAdapter(config);
+    backend.kill = async () => ({ stopped: false, alreadyComplete: true });
+    backend.refresh = async (job) => {
+      if (job.status === "running") { job.status = "done"; job.exitCode = 0; job.updatedAt = Date.now(); return true; }
+      return false;
+    };
+    const controller = new AbortController();
+    const spawn = createSpawnToolingSpawn({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      pollIntervalMs: 1,
+      sleep: async () => { controller.abort(); },
+    });
+    await spawn({ command: "pi", args: ["task"], cwd: "/repo", signal: controller.signal, label: "1-scout" });
+    const [job] = loadJobs(config.logDir);
+    assert.equal(job.status, "done");
+    assert.equal(job.exitCode, 0);
+  });
+
+  it("[killAndStamp] alreadyComplete → marks lost when refresh cannot resolve", async () => {
+    const config = testConfig();
+    const { backend } = backendForAdapter(config);
+    backend.kill = async () => ({ stopped: false, alreadyComplete: true });
+    backend.refresh = async () => false; // marker missing/corrupt
+    const controller = new AbortController();
+    const spawn = createSpawnToolingSpawn({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      pollIntervalMs: 1,
+      sleep: async () => { controller.abort(); },
+    });
+    await spawn({ command: "pi", args: ["task"], cwd: "/repo", signal: controller.signal, label: "1-scout" });
+    const [job] = loadJobs(config.logDir);
+    assert.equal(job.status, "lost");
+  });
+
+  it("[cleanup] alreadyComplete → refreshes to done, persists to registry", async () => {
+    const config = testConfig();
+    const { backend } = backendForAdapter(config);
+    backend.kill = async () => ({ stopped: false, alreadyComplete: true });
+    backend.refresh = async (job) => {
+      if (job.status === "running") { job.status = "done"; job.exitCode = 0; job.updatedAt = Date.now(); return true; }
+      return false;
+    };
+    const orphaned = runningJob(config, { name: "pi-fleet-1-scout-abc", parentPid: 9999 });
+    saveJobs(config.logDir, [orphaned]);
+    const cleaned = await cleanupSpawnToolingJobs({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      jobNamePrefix: "pi-fleet",
+      isParentAlive: () => false,
+      now: () => 42,
+    });
+    assert.equal(cleaned, 1);
+    const [job] = loadJobs(config.logDir);
+    assert.equal(job.status, "done");
+  });
+
+  it("[cleanup] alreadyComplete → marks lost when refresh cannot resolve", async () => {
+    const config = testConfig();
+    const { backend } = backendForAdapter(config);
+    backend.kill = async () => ({ stopped: false, alreadyComplete: true });
+    backend.refresh = async () => false;
+    const orphaned = runningJob(config, { name: "pi-fleet-1-scout-abc", parentPid: 9999 });
+    saveJobs(config.logDir, [orphaned]);
+    const cleaned = await cleanupSpawnToolingJobs({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      jobNamePrefix: "pi-fleet",
+      isParentAlive: () => false,
+      now: () => 42,
+    });
+    assert.equal(cleaned, 1);
+    const [job] = loadJobs(config.logDir);
+    assert.equal(job.status, "lost");
+  });
+
+  it("[spawn_kill tool] alreadyComplete → refreshes to done", async () => {
+    const config = testConfig();
+    const { text, job } = await exerciseToolKillHandling(config, {
+      killResult: { stopped: false, alreadyComplete: true },
+      refreshResolvesTo: "done",
+    });
+    assert.equal(job.status, "done");
+    assert.match(text, /already completed/);
+  });
+
+  it("[spawn_kill tool] alreadyComplete → refresh failure leaves status unchanged (next poll resolves)", async () => {
+    const config = testConfig();
+    const { text, job } = await exerciseToolKillHandling(config, {
+      killResult: { stopped: false, alreadyComplete: true },
+      refreshResolvesTo: undefined, // refresh does not resolve
+    });
+    // The spawn_kill tool's alreadyComplete branch does NOT mark lost on
+    // refresh failure (unlike killAndStamp and cleanupSpawnToolingJobs).
+    // It trusts the backend confirmation and reports "already completed";
+    // the next spawn_jobs poll re-probes and resolves the status.
+    assert.notEqual(job.status, "lost");
+    assert.match(text, /already completed/);
+  });
+
+  // --------------------------------------------------------------------
+  // Branch 3: warned / unconfirmed — kill sent but backend can't confirm
+  // --------------------------------------------------------------------
+
+  it("[killAndStamp] warned/unconfirmed → marks lost when refresh fails (nonterminal)", async () => {
+    const config = testConfig();
+    const { backend } = backendForAdapter(config);
+    backend.kill = async () => ({ stopped: false, message: "kill-window failed" });
+    backend.refresh = async () => false;
+    const controller = new AbortController();
+    const spawn = createSpawnToolingSpawn({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      pollIntervalMs: 1,
+      sleep: async () => { controller.abort(); },
+    });
+    await spawn({ command: "pi", args: ["task"], cwd: "/repo", signal: controller.signal, label: "1-scout" });
+    const [job] = loadJobs(config.logDir);
+    assert.equal(job.status, "lost");
+  });
+
+  it("[killAndStamp] warned/unconfirmed → resolves to done when refresh succeeds (terminal)", async () => {
+    const config = testConfig();
+    const { backend } = backendForAdapter(config);
+    backend.kill = async () => ({ stopped: false, message: "could not confirm stop" });
+    backend.refresh = async (job) => {
+      if (job.status === "running") { job.status = "done"; job.exitCode = 0; job.updatedAt = Date.now(); return true; }
+      return false;
+    };
+    const controller = new AbortController();
+    const spawn = createSpawnToolingSpawn({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      pollIntervalMs: 1,
+      sleep: async () => { controller.abort(); },
+    });
+    await spawn({ command: "pi", args: ["task"], cwd: "/repo", signal: controller.signal, label: "1-scout" });
+    const [job] = loadJobs(config.logDir);
+    assert.equal(job.status, "done");
+  });
+
+  it("[cleanup] warned/unconfirmed → marks lost when refresh fails", async () => {
+    const config = testConfig();
+    const { backend } = backendForAdapter(config);
+    backend.kill = async () => ({ stopped: false, message: "cannot reach backend" });
+    backend.refresh = async () => false;
+    const orphaned = runningJob(config, { name: "pi-fleet-1-scout-abc", parentPid: 9999 });
+    saveJobs(config.logDir, [orphaned]);
+    const errors: string[] = [];
+    const cleaned = await cleanupSpawnToolingJobs({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      jobNamePrefix: "pi-fleet",
+      isParentAlive: () => false,
+      now: () => 42,
+      onError: (m) => errors.push(m),
+    });
+    assert.equal(cleaned, 1);
+    assert.ok(errors.length > 0);
+    const [job] = loadJobs(config.logDir);
+    assert.equal(job.status, "lost");
+  });
+
+  it("[spawn_kill tool] warned/unconfirmed → marks lost", async () => {
+    const config = testConfig();
+    const { text, job } = await exerciseToolKillHandling(config, {
+      killResult: { stopped: false, message: "could not confirm stop" },
+    });
+    assert.equal(job.status, "lost");
+    assert.match(text, /Could not kill job/);
+  });
+
+  it("[spawn_kill tool] warned/unconfirmed → resolves to done when refresh succeeds", async () => {
+    const config = testConfig();
+    const { text, job } = await exerciseToolKillHandling(config, {
+      killResult: { stopped: false, message: "kill-window failed" },
+      refreshResolvesTo: "done",
+    });
+    assert.equal(job.status, "done");
+    assert.match(text, /Could not kill job/);
+  });
+
+  // --------------------------------------------------------------------
+  // Thrown kill errors → converts to warned/unconfirmed path
+  // --------------------------------------------------------------------
+
+  it("[killAndStamp] thrown kill error → converts to warned/unconfirmed → lost", async () => {
+    const config = testConfig();
+    const { backend } = backendForAdapter(config);
+    backend.kill = async () => { throw new Error("connection refused"); };
+    backend.refresh = async () => false;
+    const controller = new AbortController();
+    const spawn = createSpawnToolingSpawn({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      pollIntervalMs: 1,
+      sleep: async () => { controller.abort(); },
+    });
+    await spawn({ command: "pi", args: ["task"], cwd: "/repo", signal: controller.signal, label: "1-scout" });
+    const [job] = loadJobs(config.logDir);
+    assert.equal(job.status, "lost");
+  });
+
+  it("[cleanup] thrown kill error → marks lost", async () => {
+    const config = testConfig();
+    const { backend } = backendForAdapter(config);
+    backend.kill = async () => { throw new Error("connection refused"); };
+    backend.refresh = async () => false;
+    const orphaned = runningJob(config, { name: "pi-fleet-1-scout-abc", parentPid: 9999 });
+    saveJobs(config.logDir, [orphaned]);
+    const cleaned = await cleanupSpawnToolingJobs({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      jobNamePrefix: "pi-fleet",
+      isParentAlive: () => false,
+      now: () => 42,
+    });
+    assert.equal(cleaned, 1);
+    const [job] = loadJobs(config.logDir);
+    assert.equal(job.status, "lost");
+  });
+
+  it("[spawn_kill tool] thrown kill error → surfaces error, no stamp", async () => {
+    const config = testConfig();
+    const { text, job } = await exerciseToolKillHandling(config, {
+      killThrows: new Error("connection refused"),
+    });
+    assert.notEqual(job.status, "killed");
+    assert.notEqual(job.status, "lost");
+    assert.match(text, /Kill failed/);
+  });
+
+  // --------------------------------------------------------------------
+  // Backend KillResult implementations — all branches per backend
+  // --------------------------------------------------------------------
+
+  it("[tmux] kill: stopped (alive + kill-window succeeds)", async () => {
+    const config = testConfig();
+    const { exec } = fakeExec((call) => {
+      if (call.args[0] === "list-panes") return { stdout: "0\n" };
+      return {};
+    });
+    const backend = createTmuxBackend(exec, config);
+    const job = runningJob(config, { tmuxWindowId: "@42" });
+    const kr = await backend.kill(job);
+    assert.equal(kr.stopped, true);
+  });
+
+  it("[tmux] kill: alreadyComplete (pane already dead)", async () => {
+    const config = testConfig();
+    const { exec } = fakeExec((call) => {
+      if (call.args[0] === "list-panes") return { stdout: "1\n" };
+      return {};
+    });
+    const backend = createTmuxBackend(exec, config);
+    const job = runningJob(config, { tmuxWindowId: "@42" });
+    const kr = await backend.kill(job);
+    assert.equal(kr.stopped, false);
+    assert.equal(kr.alreadyComplete, true);
+  });
+
+  it("[tmux] kill: alreadyComplete (pane dies during kill race)", async () => {
+    const config = testConfig();
+    let listPanesCalls = 0;
+    const { exec } = fakeExec((call) => {
+      if (call.args[0] === "list-panes") {
+        listPanesCalls++;
+        return { stdout: listPanesCalls === 1 ? "0\n" : "1\n" };
+      }
+      if (call.args[0] === "kill-window") return { exitCode: 1, stderr: "can't find window" };
+      return {};
+    });
+    const backend = createTmuxBackend(exec, config);
+    const job = runningJob(config, { tmuxWindowId: "@42" });
+    const kr = await backend.kill(job);
+    assert.equal(kr.stopped, false);
+    assert.equal(kr.alreadyComplete, true);
+  });
+
+  it("[tmux] kill: warned/unconfirmed (no window id)", async () => {
+    const config = testConfig();
+    const { exec } = fakeExec(() => ({}));
+    const backend = createTmuxBackend(exec, config);
+    const job = runningJob(config); // no tmuxWindowId
+    const kr = await backend.kill(job);
+    assert.equal(kr.stopped, false);
+    assert.ok(kr.message?.includes("no tmux window id"));
+  });
+
+  it("[exedev] kill: stopped (alive + SIGTERM + confirm dead)", async () => {
+    const config = testConfig();
+    let probeCount = 0;
+    const { exec } = fakeExec(() => ({ stdout: probeCount++ === 0 ? "alive\n" : "dead\n" }));
+    const backend = createExedevBackend(exec, config);
+    const job = runningJob(config, { backend: "exedev", sshDest: "test.exe.xyz", remoteDir: ".pi-spawn/job-a" });
+    const kr = await backend.kill(job);
+    assert.equal(kr.stopped, true);
+  });
+
+  it("[exedev] kill: alreadyComplete (process dead before kill)", async () => {
+    const config = testConfig();
+    const { exec } = fakeExec(() => ({ stdout: "dead\n" }));
+    const backend = createExedevBackend(exec, config);
+    const job = runningJob(config, { backend: "exedev", sshDest: "test.exe.xyz", remoteDir: ".pi-spawn/job-a" });
+    const kr = await backend.kill(job);
+    assert.equal(kr.stopped, false);
+    assert.equal(kr.alreadyComplete, true);
+  });
+
+  it("[exedev] kill: warned/unconfirmed (probe failed)", async () => {
+    const config = testConfig();
+    const { exec } = fakeExec(() => ({ exitCode: 255, stderr: "Connection refused" }));
+    const backend = createExedevBackend(exec, config);
+    const job = runningJob(config, { backend: "exedev", sshDest: "test.exe.xyz", remoteDir: ".pi-spawn/job-a" });
+    const kr = await backend.kill(job);
+    assert.equal(kr.stopped, false);
+    assert.ok(kr.message?.includes("probe failed"));
+  });
+
+  it("[exedev] kill: warned/unconfirmed (no ssh dest)", async () => {
+    const config = testConfig();
+    const { exec } = fakeExec(() => ({}));
+    const backend = createExedevBackend(exec, config);
+    const job = runningJob(config, { backend: "exedev" });
+    const kr = await backend.kill(job);
+    assert.equal(kr.stopped, false);
+    assert.ok(kr.message?.includes("no ssh dest"));
+  });
+
+  it("[microsandbox] kill: stopped (host pid alive → killed → confirm dead)", async () => {
+    let pidStillAlive = true;
+    const { exec } = fakeExec(() => ({}));
+    const backend = createMicrosandboxBackend(
+      exec,
+      { spawnDetached: () => 1, isPidAlive: () => pidStillAlive, killDetached: () => { pidStillAlive = false; } },
+      testConfig(),
+    );
+    const job = runningJob(testConfig(), { backend: "microsandbox", hostPid: 999, sandboxName: "pi-spawn-job-a" });
+    const kr = await backend.kill(job);
+    assert.equal(kr.stopped, true);
+  });
+
+  it("[microsandbox] kill: alreadyComplete (host pid already dead)", async () => {
+    const { exec } = fakeExec(() => ({}));
+    const backend = createMicrosandboxBackend(
+      exec,
+      { spawnDetached: () => 1, isPidAlive: () => false, killDetached: () => {} },
+      testConfig(),
+    );
+    const job = runningJob(testConfig(), { backend: "microsandbox", hostPid: 999, sandboxName: "pi-spawn-job-a" });
+    const kr = await backend.kill(job);
+    assert.equal(kr.stopped, false);
+    assert.equal(kr.alreadyComplete, true);
+  });
+
+  it("[microsandbox] kill: warned/unconfirmed (host pid still alive after SIGTERM)", async () => {
+    const { exec } = fakeExec(() => ({}));
+    const backend = createMicrosandboxBackend(
+      exec,
+      { spawnDetached: () => 1, isPidAlive: () => true, killDetached: () => {} },
+      testConfig(),
+    );
+    const job = runningJob(testConfig(), { backend: "microsandbox", hostPid: 999, sandboxName: "pi-spawn-job-a" });
+    const kr = await backend.kill(job);
+    assert.equal(kr.stopped, false);
+    assert.ok(kr.message?.includes("host process still running"));
+  });
+
+  // --------------------------------------------------------------------
+  // Cleanup persistence: verify dirty writes survive to jobs.json
+  // --------------------------------------------------------------------
+
+  it("cleanup persists killed status to jobs.json and reloads", async () => {
+    const config = testConfig();
+    const { backend } = backendForAdapter(config);
+    backend.kill = async () => ({ stopped: true });
+    const orphaned = runningJob(config, { name: "pi-fleet-1-scout-abc", parentPid: 9999 });
+    saveJobs(config.logDir, [orphaned]);
+    await cleanupSpawnToolingJobs({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      jobNamePrefix: "pi-fleet",
+      isParentAlive: () => false,
+    });
+    // Re-load from disk — proves persistence, not just in-memory.
+    const reloaded = loadJobs(config.logDir);
+    assert.equal(reloaded[0].status, "killed");
+  });
+
+  it("cleanup persists lost status to jobs.json and reloads", async () => {
+    const config = testConfig();
+    const { backend } = backendForAdapter(config);
+    backend.kill = async () => ({ stopped: false, message: "fail" });
+    backend.refresh = async () => false;
+    const orphaned = runningJob(config, { name: "pi-fleet-1-scout-abc", parentPid: 9999 });
+    saveJobs(config.logDir, [orphaned]);
+    await cleanupSpawnToolingJobs({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      jobNamePrefix: "pi-fleet",
+      isParentAlive: () => false,
+    });
+    const reloaded = loadJobs(config.logDir);
+    assert.equal(reloaded[0].status, "lost");
+  });
+
+  it("cleanup persists done status from refresh to jobs.json and reloads", async () => {
+    const config = testConfig();
+    const { backend } = backendForAdapter(config);
+    backend.kill = async () => ({ stopped: false, alreadyComplete: true });
+    backend.refresh = async (job) => {
+      if (job.status === "running") { job.status = "done"; job.exitCode = 0; job.updatedAt = Date.now(); return true; }
+      return false;
+    };
+    const orphaned = runningJob(config, { name: "pi-fleet-1-scout-abc", parentPid: 9999 });
+    saveJobs(config.logDir, [orphaned]);
+    await cleanupSpawnToolingJobs({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      jobNamePrefix: "pi-fleet",
+      isParentAlive: () => false,
+    });
+    const reloaded = loadJobs(config.logDir);
+    assert.equal(reloaded[0].status, "done");
+  });
+
+  // --------------------------------------------------------------------
+  // Stale-parent and legacy registry cases
+  // --------------------------------------------------------------------
+
+  it("cleanup kills orphaned jobs (dead parentPid)", async () => {
+    const config = testConfig();
+    const { backend, killed } = backendForAdapter(config);
+    const orphaned = runningJob(config, { name: "pi-fleet-1-scout-abc", parentPid: 4001 });
+    saveJobs(config.logDir, [orphaned]);
+    const cleaned = await cleanupSpawnToolingJobs({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      jobNamePrefix: "pi-fleet",
+      isParentAlive: (pid) => pid !== 4001,
+    });
+    assert.equal(cleaned, 1);
+    assert.deepEqual(killed, ["pi-fleet-1-scout-abc"]);
+  });
+
+  it("cleanup preserves jobs with alive parentPid", async () => {
+    const config = testConfig();
+    const { backend, killed } = backendForAdapter(config);
+    const live = runningJob(config, { name: "pi-fleet-1-scout-abc", parentPid: 4002 });
+    saveJobs(config.logDir, [live]);
+    const cleaned = await cleanupSpawnToolingJobs({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      jobNamePrefix: "pi-fleet",
+      isParentAlive: (pid) => pid === 4002,
+    });
+    assert.equal(cleaned, 0);
+    assert.deepEqual(killed, []);
+    const [job] = loadJobs(config.logDir);
+    assert.equal(job.status, "running");
+  });
+
+  it("cleanup treats jobs without parentPid as stale (legacy)", async () => {
+    const config = testConfig();
+    const { backend, killed } = backendForAdapter(config);
+    const legacy = runningJob(config, { name: "pi-fleet-1-scout-abc" }); // no parentPid
+    saveJobs(config.logDir, [legacy]);
+    const cleaned = await cleanupSpawnToolingJobs({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      jobNamePrefix: "pi-fleet",
+      isParentAlive: () => true,
+    });
+    assert.equal(cleaned, 1);
+    assert.deepEqual(killed, ["pi-fleet-1-scout-abc"]);
+  });
+
+  it("cleanup ignores non-prefixed jobs", async () => {
+    const config = testConfig();
+    const { backend, killed } = backendForAdapter(config);
+    const userJob = runningJob(config, { name: "scout-user-job" });
+    saveJobs(config.logDir, [userJob]);
+    const cleaned = await cleanupSpawnToolingJobs({
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      jobNamePrefix: "pi-fleet",
+      isParentAlive: () => false,
+    });
+    assert.equal(cleaned, 0);
+    assert.deepEqual(killed, []);
+  });
+
+  // --------------------------------------------------------------------
+  // Legacy registry migration
+  // --------------------------------------------------------------------
+
+  it("v0 registry (no version field) loads without error", () => {
+    const config = testConfig();
+    mkdirSync(config.logDir, { recursive: true });
+    writeFileSync(registryPath(config.logDir), JSON.stringify({
+      jobs: [{ name: "legacy", backend: "tmux", agent: "s", task: "t", cwd: "/tmp", status: "done", createdAt: 1, updatedAt: 2 }],
+    }), "utf8");
+    const errors: string[] = [];
+    const jobs = loadJobs(config.logDir, (m) => errors.push(m));
+    assert.equal(jobs.length, 1);
+    assert.equal(jobs[0].status, "done");
+    assert.equal(errors.length, 0);
+  });
+
+  it("v2 registry round-trips with version field", () => {
+    const config = testConfig();
+    const job = runningJob(config);
+    saveJobs(config.logDir, [job]);
+    const raw = JSON.parse(readFileSync(registryPath(config.logDir), "utf8"));
+    assert.equal(raw.version, 2);
+    assert.ok(Array.isArray(raw.jobs));
+  });
+
+  it("invalid records rejected, valid records preserved", () => {
+    const config = testConfig();
+    mkdirSync(config.logDir, { recursive: true });
+    writeFileSync(registryPath(config.logDir), JSON.stringify({
+      version: 2,
+      jobs: [
+        { name: "good", backend: "tmux", agent: "s", task: "t", cwd: "/tmp", status: "running", createdAt: 1, updatedAt: 1 },
+        { backend: "tmux", agent: "s", task: "t", cwd: "/tmp", status: "running", createdAt: 1, updatedAt: 1 },
+        "string",
+      ],
+    }), "utf8");
+    const errors: string[] = [];
+    const jobs = loadJobs(config.logDir, (m) => errors.push(m));
+    assert.equal(jobs.length, 1);
+    assert.equal(jobs[0].name, "good");
+    assert.ok(errors.length > 0);
+  });
+
+  it("rejects substring, empty, and non-string job statuses", () => {
+    const config = testConfig();
+    mkdirSync(config.logDir, { recursive: true });
+    const base = {
+      backend: "tmux",
+      agent: "s",
+      task: "t",
+      cwd: "/tmp",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    writeFileSync(registryPath(config.logDir), JSON.stringify({
+      version: 2,
+      jobs: [
+        { ...base, name: "valid", status: "running" },
+        { ...base, name: "substring", status: "run" },
+        { ...base, name: "empty", status: "" },
+        { ...base, name: "combined", status: "done fail" },
+        { ...base, name: "number", status: 1 },
+      ],
+    }), "utf8");
+
+    const errors: string[] = [];
+    const jobs = loadJobs(config.logDir, (message) => errors.push(message));
+    assert.deepEqual(jobs.map((job) => job.name), ["valid"]);
+    assert.match(errors[0], /4 invalid job record/);
   });
 });

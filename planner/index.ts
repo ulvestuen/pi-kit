@@ -49,8 +49,11 @@ function renderDashboard(plan: Plan): string {
   for (const task of plan.tasks) {
     const deps = task.dependsOn.length > 0 ? ` <- [${task.dependsOn.join(", ")}]` : "";
     const attempts = task.attempts > 0 ? ` (attempt ${task.attempts})` : "";
+    const arts = task.artifacts.length > 0
+      ? ` {${task.artifacts.length} artifact(s)}`
+      : "";
     lines.push(
-      `    [${task.status.padEnd(7)}] ${task.id}: ${task.title}${deps}${attempts}`,
+      `    [${task.status.padEnd(7)}] ${task.id}: ${task.title}${deps}${attempts}${arts}`,
     );
   }
   return lines.join("\n");
@@ -200,6 +203,24 @@ export default function (pi: ExtensionAPI) {
               description: Type.Optional(Type.String()),
               agent: Type.Optional(Type.String()),
               criteria: Type.Optional(Type.Array(CRITERION_SCHEMA)),
+              artifacts: Type.Optional(
+                Type.Array(
+                  Type.Object({
+                    type: Type.Union([
+                      Type.Literal("path"),
+                      Type.Literal("branch"),
+                      Type.Literal("commit"),
+                      Type.Literal("summary"),
+                      Type.Literal("patch"),
+                      Type.Literal("file-list"),
+                    ]),
+                    id: Type.String(),
+                    description: Type.String(),
+                    location: Type.Optional(Type.String()),
+                  }),
+                  { description: "Artifacts produced by the task (set on passing review)." },
+                ),
+              ),
             }),
             { description: "Task edits to apply." },
           ),
@@ -236,6 +257,7 @@ export default function (pi: ExtensionAPI) {
               description: edit.description,
               agent: edit.agent,
               criteria: edit.criteria,
+              artifacts: edit.artifacts,
             },
             options,
           );

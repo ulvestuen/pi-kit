@@ -9,6 +9,9 @@
   "pi": {
     "extensions": ["./index.ts"]
   },
+  "dependencies": {
+    "@pi-kit/agent-types": "*"
+  },
   "devDependencies": {
     "@mariozechner/pi-ai": "^0.71.0",
     "@mariozechner/pi-coding-agent": "^0.71.0",

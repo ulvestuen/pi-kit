@@ -1,0 +1,109 @@
+===================================================================
+ FINAL EVIDENCE VALIDATION
+ 2026-07-11T14:16:41Z
+ Branch: feature/agent-native-orchestration
+===================================================================
+
+Inputs:
+  acceptance doc : docs/agent-native-final-acceptance.md
+  source lines   : docs/agent-native-evidence/final-source-lines.log
+  test summaries : docs/agent-native-evidence/final-test-summaries.log
+  git status log : docs/agent-native-evidence/final-git-status.log
+
+-------------------------------------------------------------------
+ CHECK 1: every concrete cited .ts/.json path exists and has a header
+-------------------------------------------------------------------
+
+Cited concrete .ts/.json paths (30):
+
+RESULT CHECK 1: PASS (all 30 cited paths exist and have exact headers)
+
+-------------------------------------------------------------------
+ CHECK 2: every header followed by nl -ba numbered content; no error
+-------------------------------------------------------------------
+
+  All source-lines log lines are either headers or numbered content.
+  No nl/usage: error lines present.
+  Header count in source-lines log: 30
+
+RESULT CHECK 2: PASS (every header followed by numbered content; no usage error)
+
+-------------------------------------------------------------------
+ CHECK 3: seven literal test summary blocks and arithmetic totals
+-------------------------------------------------------------------
+
+Seven literal per-package summary blocks:
+-------------------------------------------------------------------
+===== agent-types (final-test-agent-types.log) =====
+ℹ tests 35
+ℹ suites 15
+ℹ pass 35
+ℹ fail 0
+
+===== lykkja (final-test-lykkja.log) =====
+ℹ tests 34
+ℹ suites 6
+ℹ pass 34
+ℹ fail 0
+
+===== fleet (final-test-fleet.log) =====
+ℹ tests 65
+ℹ suites 13
+ℹ pass 65
+ℹ fail 0
+
+===== planner (final-test-planner.log) =====
+ℹ tests 35
+ℹ suites 9
+ℹ pass 35
+ℹ fail 0
+
+===== critic (final-test-critic.log) =====
+ℹ tests 20
+ℹ suites 3
+ℹ pass 20
+ℹ fail 0
+
+===== orchestrator (final-test-orchestrator.log) =====
+ℹ tests 37
+ℹ suites 11
+ℹ pass 37
+ℹ fail 0
+
+===== spawn (final-test-spawn.log) =====
+ℹ tests 132
+ℹ suites 26
+ℹ pass 132
+ℹ fail 0
+
+-------------------------------------------------------------------
+
+Summed across seven package blocks:
+  tests  = 358   (expect 358)
+  suites = 83  (expect 83)
+  pass   = 358    (expect 358)
+  fail   = 0   (expect 0)
+
+RESULT CHECK 3: PASS (disjoint arithmetic verified: 358/83/358/0)
+
+-------------------------------------------------------------------
+ CHECK 4: git inventory - 29 tracked modified, 13 untracked, clean
+-------------------------------------------------------------------
+
+  tracked modified files : 29 (expect 29)
+  untracked porcelain    : 13 (expect 13)
+  scaffolding files      : none present
+  log vs live git status : identical
+
+RESULT CHECK 4: PASS (current git inventory verified, no scaffolding)
+
+===================================================================
+ PER-CHECK VERDICT
+===================================================================
+  CHECK 1 (cited files + headers)        : PASS
+  CHECK 2 (numbered content, no error)   : PASS
+  CHECK 3 (test arithmetic)              : PASS
+  CHECK 4 (git inventory, no scaffold)   : PASS
+-------------------------------------------------------------------
+ OVERALL: PASS
+===================================================================

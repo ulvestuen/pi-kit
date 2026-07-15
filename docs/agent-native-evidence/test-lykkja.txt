@@ -1,0 +1,55 @@
+▶ normalizeCriteria
+  ✔ accepts bare string names with the default threshold (0.751584ms)
+  ✔ accepts per-criterion thresholds (0.091041ms)
+  ✔ trims names (0.116042ms)
+  ✔ rejects empty input (0.197583ms)
+  ✔ rejects blank names (0.11ms)
+  ✔ rejects duplicate names case-insensitively (0.26575ms)
+  ✔ rejects thresholds above the scale (0.165458ms)
+  ✔ rejects thresholds below 1 (0.175583ms)
+✔ normalizeCriteria (2.700459ms)
+▶ clampScore
+  ✔ rounds to the nearest integer (0.266792ms)
+  ✔ clamps below 1 up to 1 (0.160042ms)
+  ✔ clamps above the scale down to the scale (0.107375ms)
+  ✔ rejects non-finite scores (0.153958ms)
+✔ clampScore (0.931417ms)
+▶ createLoop
+  ✔ starts active with no iterations (0.203375ms)
+  ✔ applies a custom pass threshold to bare criteria (0.111833ms)
+  ✔ rejects an empty task (0.061292ms)
+  ✔ rejects a pass threshold above the scale (0.057625ms)
+  ✔ rejects a scale below 2 (0.047625ms)
+✔ createLoop (1.216042ms)
+▶ recordCheckpoint
+  ✔ returns FINAL when every criterion meets its threshold (0.489042ms)
+  ✔ returns ITERATING and names the weakest failing criterion (0.27525ms)
+  ✔ orders failing criteria by smallest margin first (0.22725ms)
+  ✔ matches score names to criteria case-insensitively (0.149125ms)
+  ✔ clamps out-of-range scores (0.168417ms)
+  ✔ rejects missing scores (0.163958ms)
+  ✔ rejects unknown criteria (0.201583ms)
+  ✔ rejects duplicate scores for the same criterion (0.083209ms)
+  ✔ rejects an empty plan (0.126208ms)
+  ✔ rejects an empty changes summary (0.097083ms)
+  ✔ refuses to continue a finished loop (0.12075ms)
+  ✔ stops at the iteration safety limit (0.127791ms)
+  ✔ accumulates iteration history across passes (0.09825ms)
+✔ recordCheckpoint (2.59925ms)
+▶ failingScores
+  ✔ returns only criteria below threshold (0.058875ms)
+✔ failingScores (0.091209ms)
+▶ summarizeLoop / statusLine
+  ✔ summarizes a fresh loop (0.206625ms)
+  ✔ reports the weakest criterion in the status line while iterating (0.070417ms)
+  ✔ reports FINAL in the status line when done (0.046333ms)
+✔ summarizeLoop / statusLine (0.379375ms)
+ℹ tests 34
+ℹ suites 6
+ℹ pass 34
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 131.252375
+EXIT: 0

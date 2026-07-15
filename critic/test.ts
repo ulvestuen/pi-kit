@@ -45,6 +45,30 @@ describe("buildCriticPrompt", () => {
     assert.doesNotMatch(prompt, /CONTEXT:/);
   });
 
+  it("omits the artifacts section when absent", () => {
+    const prompt = buildCriticPrompt(request({ artifacts: undefined }));
+    assert.doesNotMatch(prompt, /PREREQUISITE ARTIFACTS/);
+  });
+
+  it("includes prerequisite artifacts in the evidence section", () => {
+    const prompt = buildCriticPrompt(
+      request({
+        artifacts: [
+          { type: "branch", id: "feat-a", description: "feature branch", location: "fleet/task-1-100" },
+          { type: "summary", id: "review", description: "review summary" },
+        ],
+      }),
+    );
+    assert.match(prompt, /PREREQUISITE ARTIFACTS/);
+    assert.match(prompt, /branch: feature branch at fleet\/task-1-100/);
+    assert.match(prompt, /summary: review summary/);
+  });
+
+  it("omits artifacts section when array is empty", () => {
+    const prompt = buildCriticPrompt(request({ artifacts: [] }));
+    assert.doesNotMatch(prompt, /PREREQUISITE ARTIFACTS/);
+  });
+
   it("rejects empty subjects and rubrics", () => {
     assert.throws(() => buildCriticPrompt(request({ subject: " " })), /subject/);
     assert.throws(

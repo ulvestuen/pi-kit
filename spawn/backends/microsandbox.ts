@@ -33,6 +33,7 @@ import {
   type SpawnBackend,
   type SpawnJob,
 } from "../jobs.ts";
+import type { BackendCapabilities, KillResult } from "@pi-kit/agent-types";
 import {
   localJobDir,
   readErrTail,
@@ -97,7 +98,10 @@ export function buildMsbRunArgs(
     "-v",
     `${jobDir}:${GUEST_JOB_DIR}`,
   ];
-  if (config.msbMountCwd) args.push("-v", `${cwd}:${GUEST_WORKSPACE_DIR}`);
+  if (config.msbMountCwd) {
+    const mountMode = config.sandboxReadonlyWorkspace ? ":ro" : "";
+    args.push("-v", `${cwd}:${GUEST_WORKSPACE_DIR}${mountMode}`);
+  }
   if (config.msbCpus !== undefined) {
     args.push("--cpus", String(config.msbCpus));
   }
@@ -192,12 +196,43 @@ export function createMicrosandboxBackend(
       return readErrTail(job.errPath, maxBytes);
     },
 
-    async kill(job: SpawnJob): Promise<void> {
+    async kill(job: SpawnJob): Promise<KillResult> {
+      // Backend KillResult contract (called by killAndStamp, cleanupSpawnToolingJobs, spawn_kill):
+      //
+      //  - stopped=true:  host runner pid confirmed dead after SIGTERM + msb stop.
+      //    Caller stamps "killed" immediately.
+      //  - alreadyComplete=true, stopped=false:  host runner pid was already dead before
+      //    the kill attempt (isPidAlive returns false on first check).  Caller refreshes
+      //    from done marker to discover the real terminal status.
+      //  - stopped=false, no alreadyComplete:  SIGTERM was sent and msb stop ran, but
+      //    the host process is still alive after re-verification ("unconfirmed").
+      //    Caller tries to refresh from done markers and marks "lost" if still nonterminal.
+      // Check PID first to detect already-complete jobs.
+      if (job.hostPid !== undefined && !detach.isPidAlive(job.hostPid)) {
+        await removeSandbox(job);
+        return { stopped: false, alreadyComplete: true, message: "host runner already exited" };
+      }
       if (job.hostPid !== undefined) detach.killDetached(job.hostPid);
       if (job.sandboxName) {
         await exec(config.msbBinary, ["stop", "--force", job.sandboxName]);
       }
       await removeSandbox(job);
+      // Re-verify the host process is actually dead after killing.
+      if (job.hostPid !== undefined && detach.isPidAlive(job.hostPid)) {
+        return { stopped: false, message: "kill sent but host process still running" };
+      }
+      return { stopped: true };
+    },
+
+    async capabilities(): Promise<BackendCapabilities> {
+      return {
+        workspaceMount: config.msbMountCwd,
+        cursorOutput: false,
+        confirmedKill: true,
+        durableLogs: true,
+        networkAccess: true,
+        hardwareIsolation: true,
+      };
     },
   };
 }
