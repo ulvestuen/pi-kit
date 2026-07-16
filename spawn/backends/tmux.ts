@@ -9,11 +9,13 @@
  * stays around after the job ends (remain-on-exit) for inspection.
  */
 
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { sanitizeTmuxName, shellQuote } from "../../fleet/tmux.ts";
 import {
   buildEnvExports,
+  buildJsonEventLogFilter,
+  buildLogCompactionCommands,
   buildPiShellCommand,
   buildShellCommand,
 } from "../agent-command.ts";
@@ -26,6 +28,7 @@ import type {
 } from "../jobs.ts";
 import type { BackendCapabilities, KillResult } from "@pi-kit/agent-types";
 import {
+  compactLocalLog,
   localJobDir,
   readErrTail,
   readLogTail,
@@ -54,6 +57,8 @@ export function buildTmuxRunScript(options: {
   /** Export lines forwarding API keys: the window inherits the tmux
    * server's environment, not the launching pi session's. */
   envExports?: string[];
+  compactJsonEvents?: boolean;
+  maxLogBytes?: number;
 }): string {
   const { jobName, cwd, piCommand, logPath, donePath, errPath } = options;
   const exitPath = `${donePath}.exit`;
@@ -63,7 +68,8 @@ export function buildTmuxRunScript(options: {
     `# pi-spawn job ${jobName}: runs one detached sub-agent in this window.`,
     ...(options.envExports ?? []),
     `cd ${shellQuote(cwd)} || { echo ${cdFailed} > ${shellQuote(errPath)}; echo 127 > ${shellQuote(donePath)}; exit 127; }`,
-    `{ ${piCommand}; echo $? > ${shellQuote(exitPath)}; } 2> ${shellQuote(errPath)} | tee ${shellQuote(logPath)}`,
+    `{ ${piCommand}; echo $? > ${shellQuote(exitPath)}; } 2> ${shellQuote(errPath)}${buildJsonEventLogFilter(options.compactJsonEvents ?? false)} | tee ${shellQuote(logPath)}`,
+    ...buildLogCompactionCommands(logPath, options.maxLogBytes ?? 0),
     `mv ${shellQuote(exitPath)} ${shellQuote(donePath)}`,
     "",
   ].join("\n");
@@ -155,6 +161,7 @@ export function createTmuxBackend(
         status: "running",
         createdAt: now,
         updatedAt: now,
+        outputMode: request.compactJsonEvents ? "json-events" : "text",
       };
       const jobDir = localJobDir(job, config);
       mkdirSync(jobDir, { recursive: true });
@@ -180,6 +187,8 @@ export function createTmuxBackend(
           envExports: config.tmuxForwardEnv
             ? buildEnvExports(config.envPassthrough, process.env)
             : [],
+          compactJsonEvents: request.compactJsonEvents,
+          maxLogBytes: config.maxJobLogBytes,
         }),
         "utf8",
       );
@@ -209,6 +218,18 @@ export function createTmuxBackend(
 
     async errorOutput(job: SpawnJob, maxBytes: number): Promise<string> {
       return readErrTail(job.errPath, maxBytes);
+    },
+
+    async compactLog(job: SpawnJob, maxBytes: number): Promise<void> {
+      compactLocalLog(job.logPath, maxBytes);
+    },
+
+    async removeArtifacts(job: SpawnJob): Promise<void> {
+      if (job.tmuxWindowId) {
+        // Finished windows use remain-on-exit; remove them with their logs.
+        await exec("tmux", ["kill-window", "-t", job.tmuxWindowId]);
+      }
+      rmSync(localJobDir(job, config), { recursive: true, force: true });
     },
 
     async kill(job: SpawnJob): Promise<KillResult> {

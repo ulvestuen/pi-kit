@@ -12,6 +12,12 @@ export const DEFAULT_EXEDEV_VM = "pi-spawn";
 export const DEFAULT_EXEDEV_DOMAIN = "exe.xyz";
 export const DEFAULT_MSB_IMAGE = "node";
 export const DEFAULT_OUTPUT_TAIL_BYTES = 16 * 1024;
+/** Completed logs are compacted to this size unless explicitly disabled. */
+export const DEFAULT_MAX_JOB_LOG_BYTES = 10 * 1024 * 1024;
+/** Terminal jobs older than this are removed during maintenance. */
+export const DEFAULT_RETENTION_DAYS = 7;
+/** Newest terminal jobs retained even when many finish within the age window. */
+export const DEFAULT_MAX_RETAINED_JOBS = 100;
 /** API-key variables forwarded into sandboxed/remote jobs when enabled. */
 export const DEFAULT_ENV_PASSTHROUGH = [
   "ANTHROPIC_API_KEY",
@@ -36,6 +42,12 @@ export interface SpawnConfig {
   piBinary: string;
   /** Default byte cap for spawn_output log tails. */
   outputTailBytes: number;
+  /** Byte cap applied to completed job logs; 0 disables compaction. */
+  maxJobLogBytes: number;
+  /** Remove terminal jobs older than this many days; 0 disables age pruning. */
+  retentionDays: number;
+  /** Retain at most this many terminal jobs; 0 disables count pruning. */
+  maxRetainedJobs: number;
   /** Whether to inject the short spawn note into the system prompt. */
   injectSystemPrompt: boolean;
   /** Environment variable names forwarded when a backend forwards env. */
@@ -81,6 +93,9 @@ interface RawSpawnConfig {
   logDir?: string;
   piBinary?: string;
   outputTailBytes?: number | string;
+  maxJobLogBytes?: number | string;
+  retentionDays?: number | string;
+  maxRetainedJobs?: number | string;
   injectSystemPrompt?: boolean | string;
   envPassthrough?: string[] | string;
   sshBinary?: string;
@@ -178,6 +193,9 @@ function loadRawConfig(): { raw: RawSpawnConfig; configPath?: string } {
       logDir: process.env.SPAWN_LOG_DIR,
       piBinary: process.env.SPAWN_PI_BINARY,
       outputTailBytes: process.env.SPAWN_OUTPUT_TAIL_BYTES,
+      maxJobLogBytes: process.env.SPAWN_MAX_JOB_LOG_BYTES,
+      retentionDays: process.env.SPAWN_RETENTION_DAYS,
+      maxRetainedJobs: process.env.SPAWN_MAX_RETAINED_JOBS,
       injectSystemPrompt: process.env.SPAWN_INJECT_SYSTEM_PROMPT,
       envPassthrough: process.env.SPAWN_ENV_PASSTHROUGH,
       sshBinary: process.env.SPAWN_SSH_BINARY,
@@ -205,6 +223,9 @@ export function defaultConfig(): SpawnConfig {
     logDir: getDefaultLogDir(),
     piBinary: "pi",
     outputTailBytes: DEFAULT_OUTPUT_TAIL_BYTES,
+    maxJobLogBytes: DEFAULT_MAX_JOB_LOG_BYTES,
+    retentionDays: DEFAULT_RETENTION_DAYS,
+    maxRetainedJobs: DEFAULT_MAX_RETAINED_JOBS,
     injectSystemPrompt: true,
     envPassthrough: [...DEFAULT_ENV_PASSTHROUGH],
     sshBinary: "ssh",
@@ -238,6 +259,37 @@ export function loadConfig(): SpawnConfig {
     );
   }
 
+  const maxJobLogBytes = parseNumber(
+    raw.maxJobLogBytes,
+    DEFAULT_MAX_JOB_LOG_BYTES,
+    "maxJobLogBytes",
+  );
+  if (maxJobLogBytes !== 0 && maxJobLogBytes < 64 * 1024) {
+    throw new Error(
+      `maxJobLogBytes must be 0 or at least 65536 (got: ${maxJobLogBytes})`,
+    );
+  }
+
+  const retentionDays = parseNumber(
+    raw.retentionDays,
+    DEFAULT_RETENTION_DAYS,
+    "retentionDays",
+  );
+  if (retentionDays < 0) {
+    throw new Error(`retentionDays must be at least 0 (got: ${retentionDays})`);
+  }
+
+  const maxRetainedJobs = parseNumber(
+    raw.maxRetainedJobs,
+    DEFAULT_MAX_RETAINED_JOBS,
+    "maxRetainedJobs",
+  );
+  if (maxRetainedJobs < 0) {
+    throw new Error(
+      `maxRetainedJobs must be at least 0 (got: ${maxRetainedJobs})`,
+    );
+  }
+
   const msbCpus =
     raw.msbCpus === undefined || raw.msbCpus === ""
       ? undefined
@@ -251,6 +303,9 @@ export function loadConfig(): SpawnConfig {
     logDir: raw.logDir?.trim() || defaults.logDir,
     piBinary: raw.piBinary?.trim() || defaults.piBinary,
     outputTailBytes: Math.round(outputTailBytes),
+    maxJobLogBytes: Math.round(maxJobLogBytes),
+    retentionDays,
+    maxRetainedJobs: Math.floor(maxRetainedJobs),
     injectSystemPrompt: parseBoolean(raw.injectSystemPrompt, true),
     envPassthrough: parseStringList(
       raw.envPassthrough,

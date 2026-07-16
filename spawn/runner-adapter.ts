@@ -393,6 +393,7 @@ export function createSpawnToolingSpawn(
         cwd: request.cwd,
         command: request.command,
         args: request.args,
+        compactJsonEvents: true,
       });
       launched.parentPid = parentPid;
       jobs.push(launched);

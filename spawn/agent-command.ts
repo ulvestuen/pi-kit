@@ -13,6 +13,39 @@
 import type { AgentDefinition } from "../fleet/registry.ts";
 import { shellQuote } from "../fleet/tmux.ts";
 
+/**
+ * Internal fleet/critic children use pi's JSON event mode. Streaming updates
+ * contain the whole partial message on every token, so persisting them makes
+ * logs grow quadratically. turn_end and agent_end also duplicate messages that
+ * are already present in message_end records. The runner only needs the final
+ * assistant message_end record, which this filter preserves.
+ */
+export const JSON_EVENT_LOG_FILTER =
+  "awk '/^\\{\"type\":\"(message_update|turn_end|agent_end)\"/ { next } { print; fflush() }'";
+
+/** Optional shell pipeline stage for internal JSON event logs. */
+export function buildJsonEventLogFilter(enabled: boolean): string {
+  return enabled ? ` | ${JSON_EVENT_LOG_FILTER}` : "";
+}
+
+/**
+ * Shell commands that atomically cap a completed log before its done marker is
+ * published. A zero cap disables compaction. The tail contains the final
+ * message_end record for compacted internal JSON streams.
+ */
+export function buildLogCompactionCommands(
+  logPath: string,
+  maxBytes: number,
+): string[] {
+  if (maxBytes <= 0) return [];
+  const log = shellQuote(logPath);
+  const tmp = shellQuote(`${logPath}.compact`);
+  const cap = Math.max(1, Math.floor(maxBytes));
+  return [
+    `if [ -f ${log} ] && [ \"$(wc -c < ${log})\" -gt ${cap} ]; then tail -c ${cap} ${log} > ${tmp} && mv ${tmp} ${log}; fi`,
+  ];
+}
+
 /** Build the pi argv (without the binary) for one detached job. */
 export function buildJobPiArgs(def: AgentDefinition, task: string): string[] {
   const args = ["-p", "--no-session"];

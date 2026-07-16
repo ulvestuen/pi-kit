@@ -39,10 +39,15 @@ the agent's system prompt, model, thinking level, and tool allowlist, and
 the task text as the prompt. The job's run script writes the child's stdout
 to a **log**, its stderr to a separate **err file** (so it can never corrupt
 the output stream the parent parses), and its exit code to a **done
-marker** — published only *after* the log is fully written, so anyone who
-sees the marker sees the complete output. A persistent registry
-(`<logDir>/jobs.json`) records every job so any later pi session can check
-on it. `spawn_output` shows the captured stderr alongside the log tail for
+marker** — published only *after* the log is fully written and compacted, so
+anyone who sees the marker sees the final output. Completed logs are capped at
+10 MiB by default. Internal fleet/critic/orchestrator jobs use JSON event mode;
+their durable logs omit quadratic `message_update` records plus duplicate
+`turn_end`/`agent_end` records while preserving `message_end`, including the
+final assistant response the parent parses. Public `spawn_agent` logs remain
+plain text. A persistent registry (`<logDir>/jobs.json`) records retained jobs
+so any later pi session can check on them. `spawn_output` shows the captured
+stderr alongside the log tail for
 jobs that did not end cleanly, and guard-rail failures (a cwd that does not
 exist, a sandbox that could not install pi) explain themselves in the err
 file instead of surfacing as a bare exit code. Status is derived, never
@@ -53,8 +58,15 @@ guessed:
 - no marker, runner gone → `lost`,
 - `killed` is stamped by `spawn_kill`.
 
-There is no supervising parent process: jobs have **no timeout** — kill
-runaways with `spawn_kill`.
+At session start, maintenance refreshes status, removes terminal jobs older
+than 7 days, keeps at most the newest 100 terminal jobs, and compacts retained
+terminal logs. **Running jobs are never compacted or pruned.** Artifact removal
+happens before a registry record is deleted; if local deletion or remote SSH
+cleanup fails, the record remains so the next session can retry. Set any
+retention limit to `0` to disable that individual limit.
+
+There is no supervising parent process: public detached jobs have **no
+timeout** — kill runaways with `spawn_kill`.
 
 ### tmux backend
 
@@ -158,6 +170,9 @@ defaults, create `~/.pi/agent/extensions/spawn/spawn.json` (see
 | `logDir`             | `~/.pi/agent/spawn/jobs` | Job dirs (run script, log, done marker) + registry. |
 | `piBinary`           | `"pi"`           | pi binary the run script invokes (must resolve where the job runs). |
 | `outputTailBytes`    | `16384`          | Default `spawn_output` tail size.                       |
+| `maxJobLogBytes`     | `10485760`       | Completed-log byte cap (10 MiB); `0` disables compaction. |
+| `retentionDays`      | `7`              | Remove terminal jobs older than this; `0` disables age pruning. |
+| `maxRetainedJobs`    | `100`            | Keep at most this many newest terminal jobs; `0` disables count pruning. |
 | `injectSystemPrompt` | `true`           | Inject the short spawn note into the system prompt.     |
 | `envPassthrough`     | common API keys  | Variables forwarded when a backend forwards env.        |
 | `sshBinary`          | `"ssh"`          | ssh client for the exedev backend.                      |
@@ -177,7 +192,9 @@ defaults, create `~/.pi/agent/extensions/spawn/spawn.json` (see
 
 Environment overrides (used when no JSON config exists): `SPAWN_CONFIG_PATH`,
 `SPAWN_BACKEND`, `SPAWN_LOG_DIR`, `SPAWN_PI_BINARY`, `SPAWN_OUTPUT_TAIL_BYTES`,
-`SPAWN_INJECT_SYSTEM_PROMPT`, `SPAWN_ENV_PASSTHROUGH` (comma-separated),
+`SPAWN_MAX_JOB_LOG_BYTES`, `SPAWN_RETENTION_DAYS`,
+`SPAWN_MAX_RETAINED_JOBS`, `SPAWN_INJECT_SYSTEM_PROMPT`,
+`SPAWN_ENV_PASSTHROUGH` (comma-separated),
 `SPAWN_SSH_BINARY`, `SPAWN_TMUX_SESSION`, `SPAWN_TMUX_FORWARD_ENV`,
 `SPAWN_EXEDEV_VM`,
 `SPAWN_EXEDEV_DOMAIN`, `SPAWN_EXEDEV_AUTO_CREATE`, `SPAWN_EXEDEV_FORWARD_ENV`,
@@ -200,7 +217,8 @@ fakes (plus real temp directories for the file-backed pieces).
 
 - `index.ts` — pi extension wiring (the four `spawn_*` tools, `/spawn`, system prompt).
 - `jobs.ts` — job model: statuses, done-marker resolution, the persistent job registry, backend/effect interfaces.
-- `agent-command.ts` — the `pi -p` child-process contract and env-forwarding exports.
+- `maintenance.ts` — terminal-job age/count retention and completed-log compaction orchestration.
+- `agent-command.ts` — child-process command construction, JSON event filtering, log caps, and env-forwarding exports.
 - `backends/local.ts` — shared helpers for backends whose markers live on the local filesystem (tmux directly, microsandbox through the volume mount).
 - `backends/tmux.ts` — local tmux-window runner.
 - `backends/exedev.ts` — exe.dev cloud VM runner (SSH lifecycle, remote markers).

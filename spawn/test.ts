@@ -1,12 +1,21 @@
 import { describe, it } from "node:test";
 import * as assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentDefinition } from "../fleet/registry.ts";
 import {
   buildEnvExports,
   buildJobPiArgs,
+  buildJsonEventLogFilter,
+  buildLogCompactionCommands,
   buildPiShellCommand,
   buildShellCommand,
 } from "./agent-command.ts";
@@ -26,6 +35,7 @@ import {
   type SpawnJob,
 } from "./jobs.ts";
 import {
+  compactLocalLog,
   localJobDir,
   readDoneMarker,
   readErrTail,
@@ -34,11 +44,13 @@ import {
 } from "./backends/local.ts";
 import { buildTmuxRunScript, createTmuxBackend } from "./backends/tmux.ts";
 import {
+  buildCompactCommand,
   buildErrTailCommand,
   buildKillCommand,
   buildLaunchCommand,
   buildProbeCommand,
   buildRemoteRunScript,
+  buildRemoveCommand,
   buildTailCommand,
   createExedevBackend,
   parseVmList,
@@ -54,6 +66,11 @@ import {
   cleanupSpawnToolingJobs,
   createSpawnToolingSpawn,
 } from "./runner-adapter.ts";
+import {
+  maintainSpawnJobs,
+  selectJobsForPruning,
+} from "./maintenance.ts";
+import { parsePiJsonOutput } from "../fleet/runner.ts";
 import { registryPath } from "./jobs.ts";
 import type { BackendCapabilities, KillResult } from "@pi-kit/agent-types";
 
@@ -314,6 +331,75 @@ describe("buildEnvExports", () => {
   });
 });
 
+describe("bounded log helpers", () => {
+  it("filters quadratic and duplicate JSON events but keeps message_end", () => {
+    const filter = buildJsonEventLogFilter(true);
+    assert.match(filter, /message_update\|turn_end\|agent_end/);
+    assert.doesNotMatch(filter, /message_end/);
+    assert.equal(buildJsonEventLogFilter(false), "");
+  });
+
+  it("builds an atomic completed-log tail cap and allows disabling it", () => {
+    const [command] = buildLogCompactionCommands("/tmp/job log", 65536);
+    assert.match(command, /tail -c 65536/);
+    assert.match(command, /job log\.compact/);
+    assert.match(command, /&& mv/);
+    assert.deepEqual(buildLogCompactionCommands("/tmp/job", 0), []);
+  });
+
+  it("adds JSON filtering and byte caps to every backend run script", () => {
+    const scripts = [
+      buildTmuxRunScript({
+        jobName: "j",
+        cwd: "/tmp",
+        piCommand: "pi",
+        logPath: "/tmp/j/job.log",
+        donePath: "/tmp/j/done",
+        errPath: "/tmp/j/err.log",
+        compactJsonEvents: true,
+        maxLogBytes: 65536,
+      }),
+      buildRemoteRunScript({
+        jobName: "j",
+        piCommand: "pi",
+        remoteDir: ".pi-spawn/j",
+        envExports: [],
+        compactJsonEvents: true,
+        maxLogBytes: 65536,
+      }),
+      buildGuestRunScript({
+        jobName: "j",
+        piCommand: "pi",
+        envExports: [],
+        mountCwd: true,
+        compactJsonEvents: true,
+        maxLogBytes: 65536,
+      }),
+    ];
+    for (const script of scripts) {
+      assert.match(script, /awk .*message_update/);
+      assert.match(script, /tail -c 65536/);
+      assert.ok(script.indexOf("tail -c 65536") < script.lastIndexOf("mv"));
+    }
+  });
+
+  it("caps a local log while preserving a final parseable assistant event", () => {
+    const config = testConfig();
+    const job = runningJob(config);
+    const final = JSON.stringify({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "final answer" }],
+      },
+    });
+    writeFileSync(job.logPath!, `${"x".repeat(200_000)}\n${final}\n`, "utf8");
+    compactLocalLog(job.logPath, 65536);
+    assert.ok(statSync(job.logPath!).size <= 65536);
+    assert.equal(parsePiJsonOutput(readFileSync(job.logPath!, "utf8")).text, "final answer");
+  });
+});
+
 describe("tmux backend", () => {
   it("writes a run script that captures pi's exit code, not tee's", () => {
     const script = buildTmuxRunScript({
@@ -545,7 +631,7 @@ describe("exedev command builders", () => {
     // after the log is fully written.
     assert.ok(
       script.includes(
-        `{ 'pi' '-p' 'task'; echo $? > "$d/done.exit"; } > "$d/job.log" 2> "$d/err.log"`,
+        `{ 'pi' '-p' 'task'; echo $? > "$d/done.exit"; } 2> "$d/err.log" > "$d/job.log"`,
       ),
     );
     assert.ok(script.includes('mv "$d/done.exit" "$d/done"'));
@@ -560,6 +646,15 @@ describe("exedev command builders", () => {
     assert.ok(runnerScript.includes("cd '/remote/repo worktree' || { echo "));
     assert.ok(runnerScript.includes('> "$d/err.log"; echo 127 > "$d/done"; exit 127; }'));
     assert.match(runnerScript, /could not cd to \/remote\/repo worktree on the VM/);
+  });
+
+  it("builds remote compaction and artifact-removal commands", () => {
+    const compact = buildCompactCommand(".pi-spawn/j1", 65536);
+    assert.match(compact, /tail -c 65536/);
+    assert.match(compact, /job\.log\.compact/);
+    const remove = buildRemoveCommand(".pi-spawn/j1");
+    assert.match(remove, /rm -rf --/);
+    assert.match(remove, /\.pi-spawn\/j1/);
   });
 
   it("tails the remote stderr file without a placeholder", () => {
@@ -761,7 +856,7 @@ describe("microsandbox backend", () => {
     // complete (the mv is what the host-side poller keys on).
     assert.ok(
       script.includes(
-        `{ 'pi' '-p' 't'; echo $? > /job/done.exit; } > /job/job.log 2> /job/err.log`,
+        `{ 'pi' '-p' 't'; echo $? > /job/done.exit; } 2> /job/err.log > /job/job.log`,
       ),
     );
     assert.ok(script.includes("mv /job/done.exit /job/done"));
@@ -901,6 +996,8 @@ function backendForAdapter(config: SpawnConfig): {
     async errorOutput(job, maxBytes) {
       return readErrTail(job.errPath, maxBytes);
     },
+    async compactLog() {},
+    async removeArtifacts() {},
     async kill(job) {
       killed.push(job.name);
       return { stopped: true as const };
@@ -942,6 +1039,7 @@ describe("spawn runner adapter", () => {
     assert.equal(outcome.exitCode, 0);
     assert.match(outcome.stdout, /message_end/);
     assert.equal(launched[0].command, "pi");
+    assert.equal(launched[0].compactJsonEvents, true);
     assert.deepEqual(launched[0].args, ["--mode", "json", "--no-session", "task"]);
     assert.equal(launched[0].cwd, "/repo");
     assert.equal(chunks.join(""), outcome.stdout);
@@ -1104,11 +1202,115 @@ describe("spawn runner adapter", () => {
   });
 });
 
+describe("spawn log maintenance", () => {
+  function terminalJob(
+    config: SpawnConfig,
+    name: string,
+    createdAt: number,
+    updatedAt: number,
+  ): SpawnJob {
+    return runningJob(config, {
+      name,
+      status: "done",
+      exitCode: 0,
+      createdAt,
+      updatedAt,
+    });
+  }
+
+  it("selects expired and excess terminal jobs but never running jobs", () => {
+    const config = testConfig({ retentionDays: 7, maxRetainedJobs: 2 });
+    const now = 20 * 24 * 60 * 60 * 1000;
+    const jobs = [
+      runningJob(config, {
+        name: "running-old",
+        createdAt: 1,
+        updatedAt: 1,
+      }),
+      terminalJob(config, "expired", 2, now - 8 * 24 * 60 * 60 * 1000),
+      terminalJob(config, "recent-a", 3, now - 1000),
+      terminalJob(config, "recent-b", 4, now - 1000),
+      terminalJob(config, "recent-c", 5, now - 1000),
+    ];
+    assert.deepEqual(
+      selectJobsForPruning(jobs, config, now).map((job) => job.name),
+      ["expired", "recent-a"],
+    );
+  });
+
+  it("removes selected artifacts, compacts retained terminal logs, and preserves running jobs", async () => {
+    const config = testConfig({
+      retentionDays: 0,
+      maxRetainedJobs: 1,
+      maxJobLogBytes: 65536,
+    });
+    const running = runningJob(config, { name: "running", createdAt: 1 });
+    const older = terminalJob(config, "older", 2, 2);
+    const newest = terminalJob(config, "newest", 3, 3);
+    for (const job of [running, older, newest]) {
+      writeFileSync(job.logPath!, "log", "utf8");
+    }
+
+    const { backend } = backendForAdapter(config);
+    const removed: string[] = [];
+    const compacted: string[] = [];
+    backend.removeArtifacts = async (job) => {
+      removed.push(job.name);
+    };
+    backend.compactLog = async (job) => {
+      compacted.push(job.name);
+    };
+
+    const result = await maintainSpawnJobs({
+      jobs: [running, older, newest],
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      now: 10,
+    });
+    assert.deepEqual(removed, ["older"]);
+    assert.deepEqual(compacted, ["newest"]);
+    assert.deepEqual(result.jobs.map((job) => job.name), ["running", "newest"]);
+    assert.equal(running.status, "running");
+    assert.ok(existsSync(running.logPath!));
+  });
+
+  it("keeps registry records when artifact removal fails so maintenance can retry", async () => {
+    const config = testConfig({
+      retentionDays: 0,
+      maxRetainedJobs: 1,
+      maxJobLogBytes: 65536,
+    });
+    const older = terminalJob(config, "older", 1, 1);
+    const newest = terminalJob(config, "newest", 2, 2);
+    const { backend } = backendForAdapter(config);
+    const compacted: string[] = [];
+    backend.removeArtifacts = async () => {
+      throw new Error("disk busy");
+    };
+    backend.compactLog = async (job) => {
+      compacted.push(job.name);
+    };
+
+    const result = await maintainSpawnJobs({
+      jobs: [older, newest],
+      config,
+      backends: { tmux: backend, exedev: backend, microsandbox: backend },
+      now: 10,
+    });
+    assert.deepEqual(result.jobs.map((job) => job.name), ["older", "newest"]);
+    assert.deepEqual(compacted, ["older", "newest"]);
+    assert.match(result.errors[0], /disk busy/);
+  });
+});
+
 describe("config", () => {
   const ENV_KEYS = [
     "SPAWN_CONFIG_PATH",
     "SPAWN_BACKEND",
     "SPAWN_LOG_DIR",
+    "SPAWN_MAX_JOB_LOG_BYTES",
+    "SPAWN_RETENTION_DAYS",
+    "SPAWN_MAX_RETAINED_JOBS",
     "SPAWN_MSB_IMAGE",
   ];
 
@@ -1144,11 +1346,42 @@ describe("config", () => {
 
   it("falls back to SPAWN_* env vars and rejects unknown backends", () => {
     const missing = path.join(os.tmpdir(), "pi-spawn-cfg-none", "spawn.json");
-    withEnv({ SPAWN_CONFIG_PATH: missing, SPAWN_BACKEND: "exedev" }, () => {
-      assert.equal(loadConfig().backend, "exedev");
-    });
+    withEnv(
+      {
+        SPAWN_CONFIG_PATH: missing,
+        SPAWN_BACKEND: "exedev",
+        SPAWN_MAX_JOB_LOG_BYTES: "1048576",
+        SPAWN_RETENTION_DAYS: "3",
+        SPAWN_MAX_RETAINED_JOBS: "25",
+      },
+      () => {
+        const config = loadConfig();
+        assert.equal(config.backend, "exedev");
+        assert.equal(config.maxJobLogBytes, 1048576);
+        assert.equal(config.retentionDays, 3);
+        assert.equal(config.maxRetainedJobs, 25);
+      },
+    );
     withEnv({ SPAWN_CONFIG_PATH: missing, SPAWN_BACKEND: "docker" }, () => {
       assert.throws(() => loadConfig(), /backend must be one of/);
+    });
+  });
+
+  it("uses safe retention defaults and validates disabling/ranges", () => {
+    const defaults = defaultConfig();
+    assert.equal(defaults.maxJobLogBytes, 10 * 1024 * 1024);
+    assert.equal(defaults.retentionDays, 7);
+    assert.equal(defaults.maxRetainedJobs, 100);
+
+    const dir = mkdtempSync(path.join(os.tmpdir(), "pi-spawn-cfg-"));
+    const file = path.join(dir, "spawn.json");
+    writeFileSync(file, JSON.stringify({ maxJobLogBytes: 1 }), "utf8");
+    withEnv({ SPAWN_CONFIG_PATH: file }, () => {
+      assert.throws(() => loadConfig(), /maxJobLogBytes must be 0 or/);
+    });
+    writeFileSync(file, JSON.stringify({ retentionDays: -1 }), "utf8");
+    withEnv({ SPAWN_CONFIG_PATH: file }, () => {
+      assert.throws(() => loadConfig(), /retentionDays must be at least 0/);
     });
   });
 });

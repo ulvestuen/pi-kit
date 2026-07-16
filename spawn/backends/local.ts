@@ -9,7 +9,9 @@ import {
   openSync,
   readFileSync,
   readSync,
+  renameSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
 import type { SpawnConfig } from "../config.ts";
@@ -63,6 +65,28 @@ export function readErrTail(
   if (!errPath || !existsSync(errPath)) return "";
   const tail = readLogTail(errPath, maxBytes);
   return tail === "(no output yet)" ? "" : tail;
+}
+
+/** Atomically retain only the final maxBytes of a completed local log. */
+export function compactLocalLog(
+  logPath: string | undefined,
+  maxBytes: number,
+): void {
+  if (!logPath || maxBytes <= 0 || !existsSync(logPath)) return;
+  const size = statSync(logPath).size;
+  const cap = Math.max(1, Math.floor(maxBytes));
+  if (size <= cap) return;
+
+  const fd = openSync(logPath, "r");
+  try {
+    const buffer = Buffer.alloc(cap);
+    const bytesRead = readSync(fd, buffer, 0, cap, size - cap);
+    const tmp = `${logPath}.compact`;
+    writeFileSync(tmp, buffer.subarray(0, bytesRead));
+    renameSync(tmp, logPath);
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** Read up to maxBytes from the end of a local log file. */

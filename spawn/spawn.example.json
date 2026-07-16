@@ -2,6 +2,9 @@
   "backend": "tmux",
   "piBinary": "pi",
   "outputTailBytes": 16384,
+  "maxJobLogBytes": 10485760,
+  "retentionDays": 7,
+  "maxRetainedJobs": 100,
   "injectSystemPrompt": true,
   "envPassthrough": [
     "ANTHROPIC_API_KEY",

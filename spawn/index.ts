@@ -13,6 +13,7 @@ import {
   type SpawnConfig,
 } from "./config.ts";
 import { createBackends } from "./host.ts";
+import { maintainSpawnJobs } from "./maintenance.ts";
 import {
   isTerminal,
   loadJobs,
@@ -102,6 +103,29 @@ export default function (pi: ExtensionAPI) {
       return false;
     }
   };
+
+  pi.on("session_start", async () => {
+    await withJobs(async (jobs) => {
+      let dirty = false;
+      for (const job of jobs) {
+        if (await refreshJob(job)) dirty = true;
+      }
+      const maintained = await maintainSpawnJobs({
+        jobs,
+        config,
+        backends,
+        onError: warn,
+      });
+      if (maintained.removed.length > 0) {
+        jobs.splice(0, jobs.length, ...maintained.jobs);
+        dirty = true;
+        console.error(
+          `[spawn] pruned ${maintained.removed.length} terminal job(s) by retention policy`,
+        );
+      }
+      return { result: undefined, dirty };
+    });
+  });
 
   pi.registerTool(
     defineTool({
@@ -434,6 +458,9 @@ export default function (pi: ExtensionAPI) {
           lines.push(`    ${jobLine(job, now)}`);
         }
       }
+      lines.push(
+        `  Retention: ${config.retentionDays === 0 ? "age disabled" : `${config.retentionDays}d`}, ${config.maxRetainedJobs === 0 ? "count disabled" : `${config.maxRetainedJobs} terminal jobs`}, completed-log cap ${config.maxJobLogBytes === 0 ? "disabled" : `${Math.round(config.maxJobLogBytes / 1024 / 1024)} MiB`}`,
+      );
       lines.push(`  Job files: ${config.logDir}`);
       ctx.ui.notify(lines.join("\n"), "info");
     },

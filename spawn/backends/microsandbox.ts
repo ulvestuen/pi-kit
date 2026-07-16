@@ -17,10 +17,12 @@
  * `msb run --name X -v host:/guest IMAGE -- CMD`, `msb stop|rm --force X`.
  */
 
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import {
   buildEnvExports,
+  buildJsonEventLogFilter,
+  buildLogCompactionCommands,
   buildPiShellCommand,
   buildShellCommand,
 } from "../agent-command.ts";
@@ -35,6 +37,7 @@ import {
 } from "../jobs.ts";
 import type { BackendCapabilities, KillResult } from "@pi-kit/agent-types";
 import {
+  compactLocalLog,
   localJobDir,
   readErrTail,
   readLogTail,
@@ -66,6 +69,8 @@ export function buildGuestRunScript(options: {
   piCommand: string;
   envExports: string[];
   mountCwd: boolean;
+  compactJsonEvents?: boolean;
+  maxLogBytes?: number;
 }): string {
   const done = `${GUEST_JOB_DIR}/done`;
   const exit = `${GUEST_JOB_DIR}/done.exit`;
@@ -77,7 +82,11 @@ export function buildGuestRunScript(options: {
     ...options.envExports,
     `command -v pi > /dev/null 2>&1 || npm install -g @mariozechner/pi-coding-agent > ${GUEST_JOB_DIR}/setup.log 2>&1 || { echo '[pi-spawn] could not install pi in the sandbox; see setup.log in the job directory' > ${err}; echo 126 > ${done}; exit 126; }`,
     `cd ${cdTarget} || { echo "[pi-spawn] could not cd to ${options.mountCwd ? GUEST_WORKSPACE_DIR : "\\$HOME"} in the sandbox" > ${err}; echo 127 > ${done}; exit 127; }`,
-    `{ ${options.piCommand}; echo $? > ${exit}; } > ${GUEST_JOB_DIR}/job.log 2> ${err}`,
+    `{ ${options.piCommand}; echo $? > ${exit}; } 2> ${err}${buildJsonEventLogFilter(options.compactJsonEvents ?? false)} > ${GUEST_JOB_DIR}/job.log`,
+    ...buildLogCompactionCommands(
+      `${GUEST_JOB_DIR}/job.log`,
+      options.maxLogBytes ?? 0,
+    ),
     `mv ${exit} ${done}`,
     "",
   ].join("\n");
@@ -141,6 +150,7 @@ export function createMicrosandboxBackend(
         status: "running",
         createdAt: now,
         updatedAt: now,
+        outputMode: request.compactJsonEvents ? "json-events" : "text",
         sandboxName: sandboxNameFor(request.jobName),
       };
       const jobDir = localJobDir(job, config);
@@ -164,6 +174,8 @@ export function createMicrosandboxBackend(
             ? buildEnvExports(config.envPassthrough, process.env)
             : [],
           mountCwd: config.msbMountCwd,
+          compactJsonEvents: request.compactJsonEvents,
+          maxLogBytes: config.maxJobLogBytes,
         }),
         "utf8",
       );
@@ -194,6 +206,15 @@ export function createMicrosandboxBackend(
 
     async errorOutput(job: SpawnJob, maxBytes: number): Promise<string> {
       return readErrTail(job.errPath, maxBytes);
+    },
+
+    async compactLog(job: SpawnJob, maxBytes: number): Promise<void> {
+      compactLocalLog(job.logPath, maxBytes);
+    },
+
+    async removeArtifacts(job: SpawnJob): Promise<void> {
+      await removeSandbox(job);
+      rmSync(localJobDir(job, config), { recursive: true, force: true });
     },
 
     async kill(job: SpawnJob): Promise<KillResult> {

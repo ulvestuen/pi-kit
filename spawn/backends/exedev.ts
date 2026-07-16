@@ -16,6 +16,7 @@
 import { shellQuote } from "../../fleet/tmux.ts";
 import {
   buildEnvExports,
+  buildJsonEventLogFilter,
   buildPiShellCommand,
   buildShellCommand,
 } from "../agent-command.ts";
@@ -67,6 +68,8 @@ export function buildRemoteRunScript(options: {
   envExports: string[];
   /** Optional cwd for prebuilt synchronous runner commands. */
   cwd?: string;
+  compactJsonEvents?: boolean;
+  maxLogBytes?: number;
 }): string {
   const d = remoteDirExpr(options.remoteDir);
   const cwd = options.cwd ? shellQuote(options.cwd) : '"$HOME"';
@@ -82,7 +85,12 @@ export function buildRemoteRunScript(options: {
     'echo $$ > "$d/pid"',
     ...options.envExports,
     `cd ${cwd} || { echo ${cdFailed} > "$d/err.log"; echo 127 > "$d/done"; exit 127; }`,
-    `{ ${options.piCommand}; echo $? > "$d/done.exit"; } > "$d/job.log" 2> "$d/err.log"`,
+    `{ ${options.piCommand}; echo $? > "$d/done.exit"; } 2> "$d/err.log"${buildJsonEventLogFilter(options.compactJsonEvents ?? false)} > "$d/job.log"`,
+    ...(options.maxLogBytes && options.maxLogBytes > 0
+      ? [
+          `if [ \"$(wc -c < \"$d/job.log\")\" -gt ${Math.floor(options.maxLogBytes)} ]; then tail -c ${Math.floor(options.maxLogBytes)} \"$d/job.log\" > \"$d/job.log.compact\" && mv \"$d/job.log.compact\" \"$d/job.log\"; fi`,
+        ]
+      : []),
     'mv "$d/done.exit" "$d/done"',
     "",
   ].join("\n");
@@ -127,6 +135,22 @@ export function buildTailCommand(remoteDir: string, maxBytes: number): string {
     return `d=${d}; cat "$d/job.log" 2>/dev/null || echo "(no output yet)"`;
   }
   return `d=${d}; tail -c ${Math.max(1, Math.floor(maxBytes))} "$d/job.log" 2>/dev/null || echo "(no output yet)"`;
+}
+
+/** Compact a completed remote log to its final maxBytes. */
+export function buildCompactCommand(
+  remoteDir: string,
+  maxBytes: number,
+): string {
+  const d = remoteDirExpr(remoteDir);
+  const cap = Math.max(1, Math.floor(maxBytes));
+  return `d=${d}; if [ -f "$d/job.log" ] && [ "$(wc -c < "$d/job.log")" -gt ${cap} ]; then tail -c ${cap} "$d/job.log" > "$d/job.log.compact" && mv "$d/job.log.compact" "$d/job.log"; fi`;
+}
+
+/** Remove all durable artifacts for one remote job. */
+export function buildRemoveCommand(remoteDir: string): string {
+  const d = remoteDirExpr(remoteDir);
+  return `d=${d}; rm -rf -- "$d"`;
 }
 
 /** Tail the remote stderr file; prints nothing when there is none. */
@@ -261,6 +285,8 @@ export function createExedevBackend(
           ? buildEnvExports(config.envPassthrough, process.env)
           : [],
         cwd: request.command ? request.cwd : undefined,
+        compactJsonEvents: request.compactJsonEvents,
+        maxLogBytes: config.maxJobLogBytes,
       });
       const launched = await ssh(dest, buildLaunchCommand(remoteDir), {
         stdin: runScript,
@@ -281,6 +307,7 @@ export function createExedevBackend(
         status: "running",
         createdAt: at,
         updatedAt: at,
+        outputMode: request.compactJsonEvents ? "json-events" : "text",
         vmName: config.exedevVm,
         sshDest: dest,
         remoteDir,
@@ -330,6 +357,25 @@ export function createExedevBackend(
       );
       // Best-effort error channel: an unreachable VM reads as no stderr.
       return tail.exitCode === 0 ? tail.stdout : "";
+    },
+
+    async compactLog(job: SpawnJob, maxBytes: number): Promise<void> {
+      if (maxBytes <= 0 || !job.sshDest || !job.remoteDir) return;
+      const result = await ssh(
+        job.sshDest,
+        buildCompactCommand(job.remoteDir, maxBytes),
+      );
+      if (result.exitCode !== 0) {
+        throw new Error(result.stderr.trim() || "remote log compaction failed");
+      }
+    },
+
+    async removeArtifacts(job: SpawnJob): Promise<void> {
+      if (!job.sshDest || !job.remoteDir) return;
+      const result = await ssh(job.sshDest, buildRemoveCommand(job.remoteDir));
+      if (result.exitCode !== 0) {
+        throw new Error(result.stderr.trim() || "remote artifact removal failed");
+      }
     },
 
     async kill(job: SpawnJob): Promise<KillResult> {

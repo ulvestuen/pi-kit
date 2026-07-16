@@ -69,6 +69,8 @@ export interface SpawnJob {
   donePath?: string;
   /** Local stderr file (tmux and microsandbox backends). */
   errPath?: string;
+  /** Internal runner jobs emit JSON events; streaming/duplicate records are omitted. */
+  outputMode?: "text" | "json-events";
   /** tmux window id (e.g. "@42") holding the job (tmux backend). */
   tmuxWindowId?: string;
   /** Host pid of the detached `msb run` process (microsandbox backend). */
@@ -176,6 +178,8 @@ export interface LaunchRequest {
    */
   command?: string;
   args?: string[];
+  /** Compact pi JSON event output for synchronous fleet/critic runners. */
+  compactJsonEvents?: boolean;
 }
 
 /**
@@ -195,6 +199,10 @@ export interface SpawnBackend {
   refresh(job: SpawnJob): Promise<boolean>;
   output(job: SpawnJob, maxBytes: number): Promise<string>;
   errorOutput(job: SpawnJob, maxBytes: number): Promise<string>;
+  /** Compact a terminal job's durable log to the configured byte cap. */
+  compactLog(job: SpawnJob, maxBytes: number): Promise<void>;
+  /** Remove durable job artifacts after the retention policy selects the job. */
+  removeArtifacts(job: SpawnJob): Promise<void>;
   /** Best-effort stop. Returns KillResult confirming whether the stop succeeded. */
   kill(job: SpawnJob): Promise<KillResult>;
   /** Declares this backend's capabilities for contract negotiation. */
