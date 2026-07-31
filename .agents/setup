@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+node_home="$HOME/.local/share/pi-kit/node-v22"
+if [[ ! -x "$node_home/bin/node" ]]; then
+  echo "[orb setup] Installing Node.js 22 LTS..."
+  temp_dir="$(mktemp -d)"
+  trap 'rm -rf "$temp_dir"' EXIT
+
+  curl -fsSL https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt \
+    -o "$temp_dir/SHASUMS256.txt"
+  archive="$(awk '/linux-x64\.tar\.xz$/ { print $2; exit }' "$temp_dir/SHASUMS256.txt")"
+  version="${archive%-linux-x64.tar.xz}"
+  curl -fsSL "https://nodejs.org/dist/latest-v22.x/$archive" -o "$temp_dir/$archive"
+  expected_sha="$(awk -v archive="$archive" '$2 == archive { print $1 }' "$temp_dir/SHASUMS256.txt")"
+  printf '%s  %s\n' "$expected_sha" "$temp_dir/$archive" | sha256sum --check --status
+
+  mkdir -p "$(dirname "$node_home")"
+  rm -rf "$node_home.tmp"
+  mkdir "$node_home.tmp"
+  tar -xJf "$temp_dir/$archive" --strip-components=1 -C "$node_home.tmp"
+  mv "$node_home.tmp" "$node_home"
+  echo "[orb setup] Installed $version."
+fi
+export PATH="$node_home/bin:$PATH"
+
+profile_marker="# pi-kit orb Node.js toolchain"
+if ! grep -Fqx "$profile_marker" "$HOME/.bash_profile" 2>/dev/null; then
+  cat >> "$HOME/.bash_profile" <<EOF
+
+$profile_marker
+case "\$PWD" in
+  "$repo_root"|"$repo_root"/*) export PATH="$node_home/bin:\$PATH" ;;
+esac
+EOF
+fi
+
+echo "[orb setup] Installing npm workspace dependencies from package-lock.json..."
+npm ci --no-audit --no-fund
+echo "[orb setup] Dependencies are ready."
