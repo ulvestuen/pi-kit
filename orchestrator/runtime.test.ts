@@ -439,7 +439,6 @@ describe("oracle remediation regressions", () => {
 
 describe("production runtime baseline instrumentation", () => {
   const config: OrchestratorConfig = {
-    executionMode: "local",
     reviewMode: "critic",
     pipelineMode: "per-task",
     controlMode: "deterministic",
@@ -455,9 +454,6 @@ describe("production runtime baseline instrumentation", () => {
     outputCapBytes: 256,
     defaultAgent: "implementer",
     piBinary: "pi",
-    tmux: false,
-    tmuxSession: "test",
-    tmuxCloseWindows: false,
   };
   const agents = new Map<string, AgentDefinition>(
     ["implementer", "auditor", "critic"].map(name => [name, {

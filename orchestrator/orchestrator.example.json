@@ -1,5 +1,4 @@
 {
-  "executionMode": "local",
   "reviewMode": "critic",
   "pipelineMode": "per-task",
   "controlMode": "deterministic",
@@ -16,8 +15,5 @@
   "outputCapBytes": 8192,
   "criticModel": "",
   "defaultAgent": "implementer",
-  "piBinary": "pi",
-  "tmux": true,
-  "tmuxSession": "pi-agents",
-  "tmuxCloseWindows": false
+  "piBinary": "pi"
 }

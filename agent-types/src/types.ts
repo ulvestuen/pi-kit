@@ -1,15 +1,14 @@
 /**
  * Agent-native execution and result contracts for pi-kit.
  *
- * These types are the shared vocabulary between fleet, spawn, planner,
- * orchestrator, and critic. They have zero runtime dependencies — only
- * TypeScript interfaces and literal types — so every package in the
- * workspace can depend on them without circular imports.
+ * These types are the shared vocabulary between Fleet, Planner, Critic,
+ * Orchestrator, and their direct child-process runtime. They have zero
+ * runtime dependencies — only TypeScript interfaces and literal types — so
+ * every package in the workspace can depend on them without circular imports.
  *
- * Evolution rules: every interface has a `version` field. New fields
- * append; old fields are never removed (marked `@deprecated` with a
- * removal version instead). Old consumers see new optional fields as
- * `undefined`.
+ * Versioned wire interfaces evolve by adding optional fields. Obsolete,
+ * unversioned subsystem contracts may be removed when that subsystem is
+ * retired.
  */
 
 // ---------------------------------------------------------------------------
@@ -85,36 +84,6 @@ export interface ToolCallSummary {
   tool: string;
   args: unknown;
   result: string;
-}
-
-// ---------------------------------------------------------------------------
-// Backend contracts
-// ---------------------------------------------------------------------------
-
-/** Declares what a spawn backend can do. */
-export interface BackendCapabilities {
-  /** Mounts host cwd at a guest path. */
-  workspaceMount: boolean;
-  /** Supports offset-based output reading. */
-  cursorOutput: boolean;
-  /** kill() confirms the job actually stopped. */
-  confirmedKill: boolean;
-  /** Logs survive the runner process exit. */
-  durableLogs: boolean;
-  /** Has network access. */
-  networkAccess: boolean;
-  /** Provides hardware isolation. */
-  hardwareIsolation: boolean;
-}
-
-/** Result of a confirmed kill operation. */
-export interface KillResult {
-  /** Whether the job was successfully stopped. */
-  stopped: boolean;
-  /** Whether the job had already finished before the kill. */
-  alreadyComplete?: boolean;
-  /** Optional human-readable detail. */
-  message?: string;
 }
 
 // ---------------------------------------------------------------------------

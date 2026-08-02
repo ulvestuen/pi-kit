@@ -7,7 +7,6 @@ import {
   DEFAULT_PI_BINARY,
   DEFAULT_TIMEOUT_MS,
 } from "../fleet/runner.ts";
-import { DEFAULT_TMUX_SESSION, type TmuxSettings } from "../fleet/tmux.ts";
 import { DEFAULT_MAX_ATTEMPTS } from "./scheduler.ts";
 
 const DEFAULT_REVIEW_TIMEOUT_MS = 5 * 60 * 1000;
@@ -16,14 +15,12 @@ export const DEFAULT_EVIDENCE_AGENT = undefined;
 export type ReviewMode = "critic" | "none";
 export type PipelineMode = "barrier" | "per-task";
 export type ControlMode = "deterministic" | "pdca";
-export type ExecutionMode = "local" | "spawn";
 
 /**
  * orchestrator configuration. All fields are optional with sensible
  * defaults, so the extension works with zero configuration.
  */
-export interface OrchestratorConfig extends TmuxSettings {
-  executionMode: ExecutionMode;
+export interface OrchestratorConfig {
   reviewMode: ReviewMode;
   pipelineMode: PipelineMode;
   controlMode: ControlMode;
@@ -65,7 +62,6 @@ export interface OrchestratorConfig extends TmuxSettings {
 }
 
 interface RawOrchestratorConfig {
-  executionMode?: string;
   reviewMode?: string;
   pipelineMode?: string;
   controlMode?: string;
@@ -83,9 +79,6 @@ interface RawOrchestratorConfig {
   criticModel?: string;
   defaultAgent?: string;
   piBinary?: string;
-  tmux?: boolean | string;
-  tmuxSession?: string;
-  tmuxCloseWindows?: boolean | string;
 }
 
 function getDefaultPiAgentDir(): string {
@@ -145,7 +138,6 @@ function loadRawConfig(): { raw: RawOrchestratorConfig; configPath?: string } {
   return {
     raw: {
       maxConcurrent: process.env.ORCHESTRATOR_MAX_CONCURRENT,
-      executionMode: process.env.ORCHESTRATOR_EXECUTION_MODE,
       reviewMode: process.env.ORCHESTRATOR_REVIEW_MODE,
       pipelineMode: process.env.ORCHESTRATOR_PIPELINE_MODE,
       controlMode: process.env.ORCHESTRATOR_CONTROL_MODE,
@@ -162,9 +154,6 @@ function loadRawConfig(): { raw: RawOrchestratorConfig; configPath?: string } {
       criticModel: process.env.ORCHESTRATOR_CRITIC_MODEL,
       defaultAgent: process.env.ORCHESTRATOR_DEFAULT_AGENT,
       piBinary: process.env.ORCHESTRATOR_PI_BINARY,
-      tmux: process.env.ORCHESTRATOR_TMUX,
-      tmuxSession: process.env.ORCHESTRATOR_TMUX_SESSION,
-      tmuxCloseWindows: process.env.ORCHESTRATOR_TMUX_CLOSE_WINDOWS,
     },
   };
 }
@@ -242,7 +231,6 @@ export function loadConfig(): OrchestratorConfig {
     return result;
   };
   return {
-    executionMode: choice(raw.executionMode, "local", ["local", "spawn"], "executionMode"),
     reviewMode: choice(raw.reviewMode, "critic", ["critic", "none"], "reviewMode"),
     pipelineMode: choice(raw.pipelineMode, "per-task", ["barrier", "per-task"], "pipelineMode"),
     controlMode: choice(raw.controlMode, "deterministic", ["deterministic", "pdca"], "controlMode"),
@@ -260,9 +248,6 @@ export function loadConfig(): OrchestratorConfig {
     criticModel: raw.criticModel?.trim() || undefined,
     defaultAgent: raw.defaultAgent?.trim() || "implementer",
     piBinary: raw.piBinary?.trim() || DEFAULT_PI_BINARY,
-    tmux: parseBoolean(raw.tmux, true),
-    tmuxSession: raw.tmuxSession?.trim() || DEFAULT_TMUX_SESSION,
-    tmuxCloseWindows: parseBoolean(raw.tmuxCloseWindows, false),
     configPath,
   };
 }

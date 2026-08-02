@@ -7,12 +7,10 @@ import { Type } from "@mariozechner/pi-ai";
 import { getConfigPath, loadConfig, type FleetConfig } from "./config.ts";
 import {
   createFullOutputSaver,
-  createHostRuntime,
   createWorktreeRoot,
   discoverAgents,
-  isTmuxAvailable,
+  nodeSpawn,
 } from "./host.ts";
-import { DEFAULT_TMUX_SESSION } from "./tmux.ts";
 import type { AgentDefinition } from "./registry.ts";
 import { runTasks, type TaskResult, type TaskSpec } from "./runner.ts";
 import type { RunId, ArtifactRef } from "@pi-kit/agent-types";
@@ -27,21 +25,12 @@ interface FleetStateEntry {
   tasks: { agent: string; task: string; status?: string }[];
 }
 
-function buildSystemPrompt(
-  config: FleetConfig,
-  spawnBackend: string,
-  tmuxLive: boolean,
-): string {
+function buildSystemPrompt(config: FleetConfig): string {
   return [
     "You have the fleet sub-agent runtime for delegating work.",
-    `The fleet_run tool dispatches tasks to sub-agents through the spawn runtime backend "${spawnBackend}"; a batch of tasks runs concurrently and returns results in this tool call.`,
+    "The fleet_run tool dispatches tasks to direct local child pi processes; a batch of tasks runs concurrently and returns results in this tool call.",
     `Use it to fan out independent, well-scoped tasks — exploration (scout), implementation (implementer), or review (critic) — up to ${config.maxConcurrent} at a time.`,
     "Give each task a complete, self-contained brief: sub-agents share none of your context. Do not delegate trivial single-step work.",
-    ...(tmuxLive
-      ? [
-          `Every sub-agent runs in a live tmux window in session "${config.tmuxSession}"; the user can watch with \`tmux attach -t ${config.tmuxSession}\`.`,
-        ]
-      : []),
     "Run /fleet to list the available agents.",
   ].join("\n");
 }
@@ -76,17 +65,12 @@ export default function (pi: ExtensionAPI) {
       maxBatch: 8,
       defaultTimeoutMs: 10 * 60 * 1000,
       outputCapBytes: 8 * 1024,
-      executionMode: "local",
       piBinary: "pi",
       injectSystemPrompt: true,
-      tmux: true,
-      tmuxSession: DEFAULT_TMUX_SESSION,
-      tmuxCloseWindows: false,
     };
   }
 
-  const runtime = createHostRuntime(config, "pi-fleet");
-  const spawn = runtime.spawn;
+  const spawn = nodeSpawn;
 
   /** In-flight batch info for /fleet pool status. */
   let activeBatch: FleetStateEntry | null = null;
@@ -97,7 +81,7 @@ export default function (pi: ExtensionAPI) {
       name: "fleet_run",
       label: "fleet: Run Sub-Agents",
       description:
-        "Dispatch one or more tasks to sub-agents that run concurrently through the configured spawn backend, each with its own isolated context window. Each task names an agent from the registry (see /fleet) and carries a self-contained brief. Returns per-task results. Use worktree isolation when parallel tasks write to the same repository.",
+        "Dispatch one or more tasks to direct local child pi processes that run concurrently, each with its own isolated context window. Each task names an agent from the registry (see /fleet) and carries a self-contained brief. Returns per-task results. Use worktree isolation when parallel tasks write to the same repository.",
       promptSnippet:
         "fleet_run: dispatch tasks to concurrent sub-agents, each in its own context window.",
       promptGuidelines: [
@@ -271,10 +255,8 @@ export default function (pi: ExtensionAPI) {
     }),
   );
 
-  pi.on("session_start", async (_event, ctx: ExtensionContext) => {
-    await runtime.cleanup();
-    // Internal synchronous spawn jobs from an interrupted parent are killed
-    // above; mark any batch still recorded as "running" as aborted.
+  pi.on("session_start", (_event, ctx: ExtensionContext) => {
+    // Mark any batch still recorded as "running" as aborted.
     let latest: FleetStateEntry | null = null;
     for (const entry of ctx.sessionManager.getEntries()) {
       if (entry.type === "custom" && entry.customType === STATE_ENTRY_TYPE) {
@@ -293,20 +275,16 @@ export default function (pi: ExtensionAPI) {
     activeBatch = null;
   });
 
-  pi.on("before_agent_start", async (event) => {
+  pi.on("before_agent_start", (event) => {
     if (!config.injectSystemPrompt) return;
-    const spawnConfig = await runtime.describe();
-    const tmuxLive = spawnConfig?.backend === "tmux" && isTmuxAvailable();
     return {
-      systemPrompt: `${event.systemPrompt}\n\n${buildSystemPrompt(config, runtime.mode === "local" ? "local" : spawnConfig?.backend ?? "spawn", tmuxLive)}`,
+      systemPrompt: `${event.systemPrompt}\n\n${buildSystemPrompt(config)}`,
     };
   });
 
   pi.registerCommand("fleet", {
     description: "List discovered fleet agents and current pool status",
     handler: async (_args, ctx) => {
-      const spawnConfig = await runtime.describe();
-      const tmuxLive = spawnConfig?.backend === "tmux" && isTmuxAvailable();
       const { registry, errors } = discoverAgents(ctx.cwd);
       const agents = [...registry.values()].sort((a, b) =>
         a.name.localeCompare(b.name),
@@ -328,14 +306,7 @@ export default function (pi: ExtensionAPI) {
       lines.push(
         `  Pool: max ${config.maxConcurrent} concurrent, batch cap ${config.maxBatch}, timeout ${Math.round(config.defaultTimeoutMs / 1000)}s`,
       );
-      lines.push(runtime.mode === "local" ? "  execution: local (Spawn is not used)" : `  spawn: backend ${spawnConfig?.backend ?? "initializing"} (config: ${spawnConfig?.configPath ?? "defaults / environment variables"})`);
-      lines.push(
-        tmuxLive
-          ? `  tmux: sub-agent runner windows in session "${spawnConfig.tmuxSession}" — attach with: tmux attach -t ${spawnConfig.tmuxSession}`
-          : spawnConfig?.backend === "tmux"
-            ? "  tmux: spawn backend selected but tmux is not installed"
-            : "  tmux: not used by the selected spawn backend",
-      );
+      lines.push("  Execution: direct local child pi processes");
       if (activeBatch) {
         lines.push(
           `  Active batch ${activeBatch.batchId}: ${activeBatch.tasks.length} task(s) in flight`,

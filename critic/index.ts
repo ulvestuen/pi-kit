@@ -3,10 +3,9 @@ import { defineTool } from "@mariozechner/pi-coding-agent";
 import { Type } from "@mariozechner/pi-ai";
 import {
   createFullOutputSaver,
-  createHostRuntime,
   discoverAgents,
+  nodeSpawn,
 } from "../fleet/host.ts";
-import { DEFAULT_TMUX_SESSION } from "../fleet/tmux.ts";
 import type { AgentDefinition } from "../fleet/registry.ts";
 import { runTasks } from "../fleet/runner.ts";
 import { normalizeCriteria, type CriterionInput } from "../pdca/loop.ts";
@@ -67,19 +66,14 @@ export default function (pi: ExtensionAPI) {
       `[critic] Using defaults. Fix ${getConfigPath()} or the CRITIC_* env vars, then /reload.`,
     );
     config = {
-      executionMode: "local",
       scaleMax: 10,
       passThreshold: 8,
       timeoutMs: 5 * 60 * 1000,
       piBinary: "pi",
-      tmux: true,
-      tmuxSession: DEFAULT_TMUX_SESSION,
-      tmuxCloseWindows: false,
     };
   }
 
-  const runtime = createHostRuntime(config, "pi-critic");
-  const spawn = runtime.spawn;
+  const spawn = nodeSpawn;
 
   /** Resolve the critic agent definition, applying the config model override. */
   function criticAgent(cwd: string): AgentDefinition {
@@ -113,16 +107,12 @@ export default function (pi: ExtensionAPI) {
     return { output: result.output, status: result.status };
   }
 
-  pi.on("session_start", async () => {
-    await runtime.cleanup();
-  });
-
   pi.registerTool(
     defineTool({
       name: "critic_review",
       label: "critic: Independent Review",
       description:
-        "Score work against explicit criteria using an independent critic agent with fresh context (a read-only spawn-backed child pi run). Provide the subject (diff, file list, artifact, or task result), optional context, and the rubric. Returns pdca-shaped criterion scores, a pass/fail verdict, and prioritized weaknesses — usable directly as the CHECK step of a pdca loop.",
+        "Score work against explicit criteria using an independent critic agent with fresh context (a read-only local child pi run). Provide the subject (diff, file list, artifact, or task result), optional context, and the rubric. Returns pdca-shaped criterion scores, a pass/fail verdict, and prioritized weaknesses — usable directly as the CHECK step of a pdca loop.",
       promptSnippet:
         "critic_review: have an independent read-only critic score work against explicit criteria.",
       promptGuidelines: [
@@ -209,7 +199,7 @@ export default function (pi: ExtensionAPI) {
       name: "critic_advise",
       label: "critic: Design Advice",
       description:
-        "Get pre-implementation design feedback on a plan or approach from an independent advisor agent with fresh context (a read-only spawn-backed child pi run). Returns a prioritized list of concerns and concrete improvements rather than scores. Use before committing to a design.",
+        "Get pre-implementation design feedback on a plan or approach from an independent advisor agent with fresh context (a read-only local child pi run). Returns a prioritized list of concerns and concrete improvements rather than scores. Use before committing to a design.",
       promptSnippet:
         "critic_advise: get independent, prioritized design feedback on a plan before implementing it.",
       promptGuidelines: [
@@ -254,7 +244,7 @@ export default function (pi: ExtensionAPI) {
         `  Tools:      ${def.tools?.join(", ") ?? "(parent's tools)"}`,
         `  Scale:      1..${config.scaleMax}, default threshold ${config.passThreshold}`,
         `  Timeout:    ${Math.round(config.timeoutMs / 1000)}s`,
-        `  execution:  ${runtime.mode}${runtime.spawnConfig ? ` (${runtime.spawnConfig.backend})` : ""}`,
+        "  Execution:  direct local child pi process",
         `  Config:     ${config.configPath ?? "defaults / environment variables"}`,
       ];
       ctx.ui.notify(lines.join("\n"), "info");

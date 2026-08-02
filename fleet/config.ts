@@ -8,15 +8,12 @@ import {
   DEFAULT_PI_BINARY,
   DEFAULT_TIMEOUT_MS,
 } from "./runner.ts";
-import { DEFAULT_TMUX_SESSION, type TmuxSettings } from "./tmux.ts";
-import type { ExecutionMode } from "@pi-kit/agent-types";
 
 /**
  * fleet configuration. All fields are optional with sensible defaults, so the
  * extension works with zero configuration.
  */
-export interface FleetConfig extends TmuxSettings {
-  executionMode: ExecutionMode;
+export interface FleetConfig {
   /** Concurrency pool size for sub-agent tasks. */
   maxConcurrent: number;
   /** Maximum tasks accepted in one fleet_run batch. */
@@ -34,16 +31,12 @@ export interface FleetConfig extends TmuxSettings {
 }
 
 interface RawFleetConfig {
-  executionMode?: string;
   maxConcurrent?: number | string;
   maxBatch?: number | string;
   defaultTimeoutMs?: number | string;
   outputCapBytes?: number | string;
   piBinary?: string;
   injectSystemPrompt?: boolean | string;
-  tmux?: boolean | string;
-  tmuxSession?: string;
-  tmuxCloseWindows?: boolean | string;
 }
 
 function getDefaultPiAgentDir(): string {
@@ -101,10 +94,6 @@ function loadRawConfig(): { raw: RawFleetConfig; configPath?: string } {
       outputCapBytes: process.env.FLEET_OUTPUT_CAP_BYTES,
       piBinary: process.env.FLEET_PI_BINARY,
       injectSystemPrompt: process.env.FLEET_INJECT_SYSTEM_PROMPT,
-      tmux: process.env.FLEET_TMUX,
-      tmuxSession: process.env.FLEET_TMUX_SESSION,
-      tmuxCloseWindows: process.env.FLEET_TMUX_CLOSE_WINDOWS,
-      executionMode: process.env.FLEET_EXECUTION_MODE,
     },
   };
 }
@@ -148,19 +137,13 @@ export function loadConfig(): FleetConfig {
     );
   }
 
-  const executionMode = raw.executionMode?.trim() || "local";
-  if (executionMode !== "local" && executionMode !== "spawn") throw new Error(`executionMode must be "local" or "spawn" (got: ${executionMode})`);
   return {
-    executionMode,
     maxConcurrent: Math.round(maxConcurrent),
     maxBatch: Math.round(maxBatch),
     defaultTimeoutMs: Math.round(defaultTimeoutMs),
     outputCapBytes: Math.round(outputCapBytes),
     piBinary: raw.piBinary?.trim() || DEFAULT_PI_BINARY,
     injectSystemPrompt: parseBoolean(raw.injectSystemPrompt, true),
-    tmux: parseBoolean(raw.tmux, true),
-    tmuxSession: raw.tmuxSession?.trim() || DEFAULT_TMUX_SESSION,
-    tmuxCloseWindows: parseBoolean(raw.tmuxCloseWindows, false),
     configPath,
   };
 }

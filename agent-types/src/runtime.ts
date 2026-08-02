@@ -79,15 +79,10 @@ export function discoverAgentRegistry(directories: string[]): DiscoveredRegistry
   return { registry: mergeRegistries(...layers), errors };
 }
 
-export interface SpawnRequest { command: string; args: string[]; cwd: string; signal: AbortSignal; onOutput?: (chunk: string) => void; label?: string }
+export interface SpawnRequest { command: string; args: string[]; cwd: string; signal: AbortSignal; onOutput?: (chunk: string) => void }
 export interface SpawnOutcome { exitCode: number | null; stdout: string; stderr: string }
 export type SpawnFn = (request: SpawnRequest) => Promise<SpawnOutcome>;
-export type ExecutionMode = "local" | "spawn";
 
-export const DEFAULT_TMUX_SESSION = "pi-agents";
-export function sanitizeCommandName(name: string): string {
-  return name.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "task";
-}
 export function shellQuote(value: string): string { return `'${value.replace(/'/g, "'\\''")}'`; }
 
 export function parsePiJsonOutput(stdout: string): { text: string; errorMessage?: string } {

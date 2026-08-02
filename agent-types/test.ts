@@ -5,20 +5,16 @@ import type {
   ArtifactRef,
   AgentTask,
   AgentResult,
-  BackendCapabilities,
-  KillResult,
   RunEvent,
   ToolCallSummary,
 } from "./src/types.ts";
-import { parseAgentDefinition, shellQuote, type SpawnFn, type ExecutionMode } from "./src/index.ts";
+import { parseAgentDefinition, shellQuote, type SpawnFn } from "./src/index.ts";
 
 describe("shared runtime contracts", () => {
   it("parses agent definitions and exposes process contracts", () => {
     const definition = parseAgentDefinition("worker.md", "---\nname: worker\ndescription: works\n---\nprompt");
-    const mode: ExecutionMode = "local";
     const spawn: SpawnFn = async () => ({ exitCode: 0, stdout: "", stderr: "" });
     assert.strictEqual(definition.name, "worker");
-    assert.strictEqual(mode, "local");
     assert.strictEqual(typeof spawn, "function");
     assert.strictEqual(shellQuote("it's"), "'it'\\''s'");
   });
@@ -147,44 +143,6 @@ describe("AgentResult", () => {
       fullTranscriptPath: "/tmp/transcript.jsonl",
     };
     assert.strictEqual(result.fullTranscriptPath, "/tmp/transcript.jsonl");
-  });
-});
-
-describe("BackendCapabilities", () => {
-  it("declares all capability flags", () => {
-    const caps: BackendCapabilities = {
-      workspaceMount: true,
-      cursorOutput: false,
-      confirmedKill: false,
-      durableLogs: true,
-      networkAccess: true,
-      hardwareIsolation: false,
-    };
-    assert.strictEqual(caps.workspaceMount, true);
-    assert.strictEqual(caps.hardwareIsolation, false);
-  });
-});
-
-describe("KillResult", () => {
-  it("reports stopped", () => {
-    const kr: KillResult = { stopped: true };
-    assert.strictEqual(kr.stopped, true);
-  });
-
-  it("reports alreadyComplete", () => {
-    const kr: KillResult = { stopped: true, alreadyComplete: true, message: "done" };
-    assert.strictEqual(kr.alreadyComplete, true);
-  });
-
-  it("reports not stopped", () => {
-    const kr: KillResult = { stopped: false, message: "cannot reach backend" };
-    assert.strictEqual(kr.stopped, false);
-  });
-
-  it("all optional fields are truly optional (no-arg construction)", () => {
-    const kr: KillResult = { stopped: true };
-    assert.strictEqual(kr.alreadyComplete, undefined);
-    assert.strictEqual(kr.message, undefined);
   });
 });
 
@@ -371,64 +329,6 @@ describe("RunId identity", () => {
 });
 
 // ---------------------------------------------------------------------------
-// BackendCapabilities: each backend declares its contract
-// ---------------------------------------------------------------------------
-
-describe("BackendCapabilities per-backend contracts", () => {
-  it("tmux: workspaceMount=true, confirmedKill=true, durableLogs=true", () => {
-    const tmux: BackendCapabilities = {
-      workspaceMount: true, cursorOutput: false, confirmedKill: true,
-      durableLogs: true, networkAccess: true, hardwareIsolation: false,
-    };
-    assert.strictEqual(tmux.workspaceMount, true);
-    assert.strictEqual(tmux.confirmedKill, true);
-    assert.strictEqual(tmux.hardwareIsolation, false);
-  });
-
-  it("microsandbox: hardwareIsolation=true, workspaceMount=true", () => {
-    const ms: BackendCapabilities = {
-      workspaceMount: true, cursorOutput: false, confirmedKill: true,
-      durableLogs: true, networkAccess: true, hardwareIsolation: true,
-    };
-    assert.strictEqual(ms.hardwareIsolation, true);
-    assert.strictEqual(ms.workspaceMount, true);
-  });
-
-  it("exedev: no workspace mount, durable logs in VM", () => {
-    const exedev: BackendCapabilities = {
-      workspaceMount: false, cursorOutput: false, confirmedKill: true,
-      durableLogs: true, networkAccess: true, hardwareIsolation: false,
-    };
-    assert.strictEqual(exedev.workspaceMount, false);
-    assert.strictEqual(exedev.durableLogs, true);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// KillResult protocol details
-// ---------------------------------------------------------------------------
-
-describe("KillResult protocol", () => {
-  it("stopped + alreadyComplete = finished before kill", () => {
-    const kr: KillResult = { stopped: true, alreadyComplete: true, message: "process exited before kill" };
-    assert.strictEqual(kr.stopped, true);
-    assert.strictEqual(kr.alreadyComplete, true);
-  });
-
-  it("stopped without alreadyComplete = killed actively", () => {
-    const kr: KillResult = { stopped: true, alreadyComplete: false };
-    assert.strictEqual(kr.stopped, true);
-    assert.strictEqual(kr.alreadyComplete, false);
-  });
-
-  it("not stopped = kill failed", () => {
-    const kr: KillResult = { stopped: false, message: "cannot reach process" };
-    assert.strictEqual(kr.stopped, false);
-    assert.strictEqual(kr.message, "cannot reach process");
-  });
-});
-
-// ---------------------------------------------------------------------------
 // JSON round-trip: serialize → parse → verify (IPC/serialization contract)
 // ---------------------------------------------------------------------------
 
@@ -477,24 +377,6 @@ describe("JSON round-trip", () => {
     assert.strictEqual(roundTripped.usage?.promptTokens, 100);
   });
 
-  it("BackendCapabilities survives JSON round-trip", () => {
-    const caps: BackendCapabilities = {
-      workspaceMount: true,
-      cursorOutput: false,
-      confirmedKill: true,
-      durableLogs: true,
-      networkAccess: false,
-      hardwareIsolation: true,
-    };
-    const roundTripped: BackendCapabilities = JSON.parse(JSON.stringify(caps));
-    assert.deepStrictEqual(roundTripped, caps);
-  });
-
-  it("KillResult survives JSON round-trip with all optional fields", () => {
-    const kr: KillResult = { stopped: true, alreadyComplete: true, message: "done" };
-    const roundTripped: KillResult = JSON.parse(JSON.stringify(kr));
-    assert.deepStrictEqual(roundTripped, kr);
-  });
 });
 
 // ---------------------------------------------------------------------------

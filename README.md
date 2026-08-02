@@ -23,13 +23,12 @@ different verification commands and this repository has no build command.
 
 ### Core packages
 
-- [`agent-types/`](./agent-types/) – agent-native execution contracts (zero-dep types: `RunId`, `ArtifactRef`, `AgentTask`, `AgentResult`, `BackendCapabilities`, `KillResult`, `RunEvent`)
+- [`agent-types/`](./agent-types/) – shared agent definitions and execution contracts (`RunId`, `ArtifactRef`, `AgentTask`, `AgentResult`, process requests/results, and `RunEvent`)
 - [`pdca/`](./pdca/) – loop-based agentic development framework for pi (a Plan-Do-Check-Act self-checking loop with tools, skills, and a single `/pdca` command)
 - [`fleet/`](./fleet/) – sub-agent runtime for pi (run concurrent child `pi` processes with per-agent role prompts, models, and tool restrictions; the `fleet_run` tool and `/fleet` command)
 - [`planner/`](./planner/) – plans as data for pi (a validated task DAG with per-task acceptance criteria; the `plan_create`/`plan_update` tools and `/plan` dashboard)
 - [`critic/`](./critic/) – independent advisor/reviewer for pi (fresh-context read-only review with the `critic_review`/`critic_advise` tools and `/critic` command)
 - [`orchestrator/`](./orchestrator/) – deterministic multi-agent composition layer for pi (`/orchestrate` drives typed task pipelines and final verification; PDCA remains an optional compatibility control mode)
-- [`spawn/`](./spawn/) – detached sub-agent jobs for pi (launch child `pi` processes as background jobs in tmux windows, on [exe.dev](https://exe.dev) cloud VMs, or in [microsandbox](https://microsandbox.dev) microVMs; the `spawn_agent`/`spawn_jobs`/`spawn_output`/`spawn_kill` tools and `/spawn` command)
 
 ### Integrations
 
@@ -43,11 +42,9 @@ different verification commands and this repository has no build command.
 
 ## Architecture documents
 
-- [`docs/agent-native-architecture.md`](./docs/agent-native-architecture.md) – ADR: agent-native orchestration architecture (SHOT — Structured Handoff on existing transport)
-- [`docs/micro-vave-execution-model.md`](./docs/micro-vave-execution-model.md) – how task orchestration, sub-agent spawning, and the PDCA loop implement the Micro-V'ave execution model: scope slices descending micro V-models in parallel stacks, waves along the time axis, and verified product chunks out
-- [`docs/orchestrator-architecture.md`](./docs/orchestrator-architecture.md) – how an orchestration run works end to end: the goal loop, dispatch waves, the scheduler state machine, the critic gate, retries, merges, and failure recovery — with workflow diagrams
-- [`docs/fleet-architecture.md`](./docs/fleet-architecture.md) – how the sub-agent runtime works: agent discovery, the concurrency pool, the child-process contract, worktree isolation, timeouts and kill semantics, and spawn backend execution — with workflow diagrams
-- [`docs/agent-native-final-acceptance.md`](./docs/agent-native-final-acceptance.md) – final branch acceptance: ADR traceability, test evidence, public API, migration, and scoped file inventory
+- [`docs/micro-vave-execution-model.md`](./docs/micro-vave-execution-model.md) – how task orchestration, direct child agents, verification, and optional PDCA control implement the Micro-V'ave model
+- [`docs/orchestrator-architecture.md`](./docs/orchestrator-architecture.md) – how controller pipelines, checks, review, artifacts, state, and recovery work end to end
+- [`docs/fleet-architecture.md`](./docs/fleet-architecture.md) – how the sub-agent runtime works: agent discovery, direct child processes, concurrency, worktree isolation, timeouts, cancellation, and output handling
 
 ## Documentation
 
@@ -60,7 +57,6 @@ For installation, configuration, usage, and troubleshooting, see the README insi
 - [`planner/README.md`](./planner/README.md)
 - [`critic/README.md`](./critic/README.md)
 - [`orchestrator/README.md`](./orchestrator/README.md)
-- [`spawn/README.md`](./spawn/README.md)
 - [`threema/README.md`](./threema/README.md)
 - [`exa/README.md`](./exa/README.md)
 - [`kagi/README.md`](./kagi/README.md)

@@ -1,603 +1,167 @@
-# Multi-Agent Orchestration for pi-kit — Design
+# Multi-agent orchestration for pi-kit
 
-Status: **Implemented** (phases 1–4 shipped as [`fleet/`](../fleet/),
+Status: **implemented** by [`fleet/`](../fleet/),
 [`planner/`](../planner/), [`critic/`](../critic/), and
-[`orchestrator/`](../orchestrator/); phase 5 remains optional future work)
+[`orchestrator/`](../orchestrator/).
 
-This document designs a set of pi extensions that together provide an
-**orchestrator**, a **planner**, an **advisor/critic**, and a **fleet of
-implementation sub-agents**. The guiding principle is the same one pi-kit
-already follows: small standalone modules, each useful on its own, with larger
-features composed *from* them rather than built as a monolith. The design also
-specifies how the pieces interoperate with the existing
-[`pdca`](../pdca/README.md) Plan-Do-Check-Act loop extension — pdca is
-deliberately reused, unchanged, as the quality gate and stopping rule of the
-orchestration loop.
+The stack decomposes a goal into a validated task DAG, runs independent local
+child agents with bounded concurrency, checks results deterministically, and
+optionally asks a fresh read-only critic to score each task.
 
----
+## Goals
 
-## 1. Goals and non-goals
+- Run independent tasks concurrently without sharing child context.
+- Represent plans as validated data rather than prose.
+- Keep task intent, dependencies, acceptance criteria, and checks explicit.
+- Isolate parallel writers with optional git worktrees.
+- Separate implementation from independent review.
+- Persist enough authoritative state to resume interrupted runs.
+- Bound child output, feedback, retries, and controller work.
 
-### Goals
+## Non-goals
 
-- **Fan-out**: dispatch independent implementation tasks to sub-agents that run
-  concurrently, each with an isolated context window and (optionally) an
-  isolated working tree.
-- **Structured planning**: represent a plan as *data* (a task DAG with per-task
-  acceptance criteria), not just prose, so scheduling and progress tracking are
-  mechanical.
-- **Independent review**: score results with a critic agent that has fresh
-  context, instead of relying on the working agent grading its own homework.
-- **Disciplined iteration**: wrap the whole run in the pdca extension's PDCA loop so the
-  orchestrator iterates until an explicit, measurable bar is met — or stops at
-  a hard cap.
-- **Standalone modules**: every extension is independently installable and
-  useful alone; the orchestrator is a thin composition layer, not the owner of
-  the other pieces.
+- No long-lived child-agent daemon.
+- No remote placement or execution-runner selection.
+- No changes to pi core.
+- No implicit merging of arbitrary parallel branches.
+- No requirement that standalone PDCA usage change.
 
-### Non-goals
+## Architecture
 
-- No long-lived daemon agents or background services (unlike `threema`'s
-  webhook, everything here is request-scoped).
-- Cross-machine distribution is delegated to spawn backends; fleet/orchestrator
-  keep a synchronous result contract and do not manage remote machines directly.
-- No changes to pi core; everything uses the public `ExtensionAPI`.
-- No replacement of pdca — it is composed with, not forked.
-
----
-
-## 2. Foundations this design builds on
-
-### pi-kit conventions (kept for every new extension)
-
-Each extension is a workspace with the same shape the existing four use:
-
-| File | Role |
-|---|---|
-| `index.ts` | Thin wiring: default-exports `function (pi: ExtensionAPI)`; registers tools/commands/hooks |
-| `<core>.ts` | Pure, dependency-free engine (like `pdca/loop.ts`) — the reusable module |
-| `config.ts` | JSON config at `~/.pi/agent/extensions/<name>/<name>.json`, env-var fallbacks, clear validation errors |
-| `test.ts` | Network-free unit tests, run with `tsx --test` |
-| `README.md` | Standalone install/config/usage docs |
-| `package.json` | Own `pi` manifest (`extensions`, optionally `skills`) so the package installs standalone |
-
-### pi `ExtensionAPI` surface used
-
-- `pi.registerTool(defineTool({...}))`, `pi.registerCommand(name, {...})`
-- `pi.on(...)` lifecycle events (`before_agent_start`, `session_start`, …)
-- `pi.appendEntry(customType, data)` + `ctx.sessionManager.getEntries()` for
-  restart-safe state (the pdca pattern)
-- `pi.sendUserMessage(text, opts?)` for self-prompting
-- `pi.events.on/emit` — the shared bus for loose extension-to-extension signals
-- `ctx.ui` (notify, `setStatus`), `ctx.hasUI`, `ctx.signal`, `ctx.mode`
-
-### pdca (reused as-is)
-
-The pure engine `pdca/loop.ts` exports the types and functions this design
-leans on: `Criterion { name, threshold }`, `CriterionScore { name, score,
-weakness? }`, `LoopState`, `Decision { verdict: "FINAL" | "ITERATING" |
-"STOPPED", … }`, plus `createLoop`, `recordCheckpoint`, `normalizeCriteria`,
-`summarizeLoop`. The module is dependency-free by design ("so it can be reused
-by the extension, commands, and tools"), which makes it the natural shared
-vocabulary for acceptance criteria and scoring across all four new extensions.
-
-### Prior art
-
-pi-mono ships a `subagent` example extension (markdown agent definitions,
-one `pi` run per sub-agent, parallel mode with concurrency caps,
-model-visible output capped with full results in tool `details`). We build our
-own runner rather than adopting it — we want worktree isolation, a structured
-result contract, spawn-backend execution, and event-bus progress — but its
-mechanics validate the approach and inform defaults (concurrency 4, output
-caps).
-
----
-
-## 3. Architecture overview
-
-Four new extensions, one role each:
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  orchestrator/  (pi-orchestrator)  — thin composition layer │
-│  /orchestrate <goal>; scheduler.ts drives the run           │
-└───────┬───────────────┬───────────────┬─────────────────────┘
-        │ plan.ts       │ runner.ts     │ review.ts     loop.ts
-        ▼               ▼               ▼               ▼
-┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
-│  planner/    │ │  fleet/      │ │  critic/     │ │  pdca/     │
-│  plan as a   │ │  sub-agent   │ │  independent │ │  PDCA loop,  │
-│  task DAG    │ │  runtime     │ │  reviewer    │ │  stop rule   │
-└──────────────┘ └──────────────┘ └──────┬───────┘ └──────────────┘
-                                         │ dispatches critic agents
-                                         ▼
-                                  fleet/runner.ts
+```mermaid
+flowchart TB
+  user["Goal"] --> planner["Planner\nvalidated task DAG"]
+  planner --> orchestrator["Orchestrator\ncontroller and pipelines"]
+  orchestrator --> fleet["Fleet\nlocal child agents"]
+  orchestrator --> checks["Deterministic checks"]
+  orchestrator --> critic["Critic\nfresh read-only child"]
+  fleet --> results["Task results and artifacts"]
+  checks --> results
+  critic --> results
+  results --> orchestrator
+  orchestrator --> final["Final checks and terminal result"]
 ```
 
-**Composition rules.** Extensions compose through exactly four sanctioned
-mechanisms, and never by importing each other's `index.ts`:
+Modules compose through pure-core imports, pi events, session entries, and
+model-visible tools. Extensions never import another extension's `index.ts`.
 
-1. **Pure-core imports** — an extension may import another package's pure
-   engine module (`plan.ts`, `runner.ts`, `review.ts`, `loop.ts`). These
-   modules have no pi/Node-API dependencies (the fleet runner takes an
-   injectable spawn function), so importing them creates no load-order or
-   runtime coupling.
-2. **`pi.events` bus** — runtime signals (`fleet:task_start`,
-   `planner:task_status`, …) for extensions that want to *observe* each other
-   without depending on each other.
-3. **Custom session entries** — persisted state (`fleet-state`,
-   `planner-state`, `pdca-state`) readable by anyone via
-   `ctx.sessionManager.getEntries()`; this is already pdca's de facto read
-   hook.
-4. **Model-level composition** — tools, skills, and prompts. The orchestrator
-   can instruct the model to call `pdca_start`; a skill can reference another
-   skill.
+## Fleet
 
-Each layer degrades gracefully: fleet alone gives you parallel sub-agents;
-planner alone gives you structured plans; critic alone gives you independent
-review of anything; the orchestrator only lights up when its dependencies are
-installed (it checks for their tools/pure modules and reports what's missing).
+Fleet owns process lifecycle, concurrency, timeouts, output handling, and
+optional worktree isolation. It starts a direct local child `pi` process for
+each task and returns a synchronous `TaskResult`.
 
----
+The child receives its role's system prompt, optional model/thinking settings,
+and tool allowlist. Extensions and skills are disabled by default to prevent
+recursive orchestration. Full JSONL output is saved separately while the
+model-visible summary is byte-capped.
 
-## 4. `fleet/` (pi-fleet) — sub-agent runtime primitive
+The pure runner accepts an injected process function, which keeps scheduling
+and result logic testable without real child processes. The host module
+provides the production Node adapter and cancellation escalation.
 
-The foundational capability: run N sub-agents through spawn tooling, each with
-its own context window, role prompt, model, and tool restrictions, while
-returning synchronous per-task results.
+## Planner
 
-### 4.1 Agent definitions — `registry.ts` (pure)
-
-Agents are markdown files with YAML frontmatter; the body is the system prompt.
-
-```markdown
----
-name: implementer
-description: Implements one well-scoped task to completion, tests included.
-model: openai-codex/gpt-5.6-sol # optional; defaults to parent's model
-thinkingLevel: high             # optional
-tools: read, bash, edit, write  # optional allowlist; omit = parent's tools
----
-You implement exactly one task. You receive the task description, its
-acceptance criteria, and relevant file paths. Work only within scope...
-```
-
-Discovery locations, later wins on name collision:
-
-1. Kit-shipped defaults: `fleet/agents/{auditor,critic,implementer,planner,scout}.md`
-2. User: `~/.pi/agent/agents/*.md`
-3. Project: `.pi/agents/*.md`
-
-`registry.ts` is pure: it parses frontmatter and validates definitions from
-`(path, content)` pairs handed to it; the file-system walk lives in `index.ts`.
+Planner stores a goal and validated tasks:
 
 ```ts
-export interface AgentDefinition {
-  name: string;
-  description: string;
-  systemPrompt: string;
-  model?: string;
-  thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
-  tools?: string[];
-  source: string; // file path, for /fleet listing and error messages
-}
-
-export function parseAgentDefinition(path: string, content: string): AgentDefinition;
-export function mergeRegistries(...layers: AgentDefinition[][]): Map<string, AgentDefinition>;
-```
-
-### 4.2 Runner — `runner.ts` (pure with injected effects)
-
-The runner owns process lifecycle, concurrency, timeouts, output handling, and
-isolation. It never imports pi or `node:child_process` directly — a spawn
-function is injected, so `test.ts` can drive it with a fake `pi` and the
-orchestrator can reuse it in any context.
-
-```ts
-export interface TaskSpec {
-  agent: string;                       // registry name
-  task: string;                        // the prompt/task text
-  cwd?: string;                        // defaults to parent cwd
-  isolation?: "none" | "worktree";     // default "none"
-  timeoutMs?: number;                  // default from config (e.g. 10 min)
-}
-
-export interface TaskResult {
-  agent: string;
-  status: "ok" | "error" | "timeout" | "aborted";
-  output: string;        // final assistant message (model-visible, capped)
-  fullOutputPath?: string; // where the untruncated transcript/output landed
-  truncated: boolean;
-  durationMs: number;
-  exitCode?: number;
-}
-
-export interface RunnerOptions {
-  spawn: SpawnFn;                    // injected
-  maxConcurrent?: number;            // default 4
-  outputCapBytes?: number;           // default 50 KB model-visible
-  signal?: AbortSignal;              // wire to ctx.signal
-  onEvent?: (e: RunnerEvent) => void; // task_start / task_update / task_end
-}
-
-export async function runTasks(
-  registry: Map<string, AgentDefinition>,
-  tasks: TaskSpec[],
-  options: RunnerOptions,
-): Promise<TaskResult[]>;
-```
-
-Mechanics:
-
-- **Child invocation**: each task builds a `pi --mode json --no-session`
-  command with the agent's system prompt, model, and tool allowlist passed via
-  flags, then hands that prebuilt command to the spawn tooling backend selected
-  by `spawn.json` / `SPAWN_BACKEND`. Structured output (JSON mode) is parsed
-  into `TaskResult`; the exact flag set is wrapped in one small
-  `buildPiArgs(def, spec)` function so version drift is contained.
-- **Concurrency pool**: FIFO queue, `maxConcurrent` slots (default 4, hard cap
-  in config). Batch size itself is capped (default 8) to keep result payloads
-  sane.
-- **Worktree isolation**: with `isolation: "worktree"`, the runner creates
-  `git worktree add` under a scratch dir on a task branch, runs the child
-  there, and reports the branch/worktree path in `TaskResult`. Merging is
-  **not** the runner's job (see §8) — it only guarantees parallel writers
-  can't trample each other or the parent's tree.
-- **Output discipline**: model-visible `output` is capped; the full transcript
-  is written to a scratch file referenced by `fullOutputPath` and included in
-  the tool result's `details` for UI expansion.
-- **Cancellation**: `signal` aborts queued tasks immediately and asks the
-  spawn adapter to kill/stamp running spawn jobs.
-- **Execution backend** (`spawn/runner-adapter.ts`): `host.ts` hands labeled
-  sub-agent children to spawn backends (`tmux`, `exedev`, or `microsandbox`) and
-  waits/polls for completion while preserving fleet's synchronous `SpawnFn`
-  contract. Unlabeled helper commands such as `git worktree add` stay local
-  because their side effects must happen in the parent working tree.
-
-### 4.3 Wiring — `index.ts`
-
-- Tool **`fleet_run`**: `{ tasks: [{ agent, task, isolation? }, ...] }` (a
-  single-element array is the single-task case). Returns per-task results;
-  emits `fleet:task_start|update|end` on `pi.events`; streams progress via the
-  tool's `onUpdate`.
-- Command **`/fleet`**: lists discovered agents (name, description, source) and
-  current pool status.
-- **Persistence**: `appendEntry("fleet-state", …)` records dispatched batches
-  so a restarted session can report what was in flight (an interrupted
-  synchronous wave is treated as aborted; on `session_start` any stale
-  "running" entries are marked `aborted`).
-- **System prompt** (`before_agent_start`, config-gated like pdca): one short
-  paragraph advertising delegation and when to use it.
-- Config: `maxConcurrent`, `maxBatch`, `defaultTimeoutMs`, `outputCapBytes`,
-  `piBinary` (default `"pi"`), `injectSystemPrompt`, historical tmux fields,
-  plus backend selection from the spawn extension's `spawn.json` / `SPAWN_*`.
-
----
-
-## 5. `planner/` (pi-planner) — plans as data
-
-Turns "make a plan" from prose into a queryable artifact: a validated task DAG
-with per-task acceptance criteria.
-
-### 5.1 Plan model — `plan.ts` (pure)
-
-```ts
-import type { Criterion, CriterionInput } from "pi-pdca/loop.ts"; // dependency-free
-
-export type TaskStatus =
-  | "pending"   // dependencies not yet met
-  | "ready"     // dispatchable
-  | "running"
-  | "review"    // done, awaiting critic verdict
-  | "done"
-  | "failed";
-
-export interface PlanTask {
+interface PlanTask {
   id: string;
   title: string;
-  description: string;       // full brief handed to the sub-agent
-  dependsOn: string[];       // task ids
-  agent?: string;            // fleet agent name; default "implementer"
-  criteria: Criterion[];     // pdca-shaped acceptance criteria
+  description: string;
+  dependsOn: string[];
+  agent?: string;
+  criteria: Criterion[];
+  checks: CommandCheck[];
   status: TaskStatus;
   attempts: number;
+  attemptFeedback: AttemptFeedback[];
+  artifacts: ArtifactRef[];
 }
-
-export interface Plan {
-  goal: string;
-  tasks: PlanTask[];
-  createdAt: number;
-  updatedAt: number;
-}
-
-export function createPlan(goal: string, tasks: PlanTaskInput[]): Plan; // validates DAG, throws on cycles/dangling deps
-export function readySet(plan: Plan): PlanTask[];       // pending→ready resolution
-export function setTaskStatus(plan: Plan, id: string, status: TaskStatus): Plan;
-export function summarizePlan(plan: Plan): PlanSummary; // counts, critical path, blockers
 ```
 
-Criteria reuse pdca's `normalizeCriteria` so every task's acceptance bar is,
-by construction, something pdca and the critic can score.
+Validation rejects duplicate IDs, missing dependencies, cycles, invalid
+statuses, empty criteria, duplicate check IDs, unsafe check directories, and
+invalid command/time limits. Readiness is derived from dependency completion.
 
-### 5.2 Wiring — `index.ts`
+Planner is writable before orchestration dispatch. During a run, Orchestrator
+owns state and Planner displays a read-only projection.
 
-- Tools **`plan_create`** (goal + task list) and **`plan_update`** (status
-  changes, task edits, appending follow-up tasks).
-- Command **`/plan`**: dashboard (DAG progress, ready set, blockers).
-- Persistence: `appendEntry("planner-state", plan)`; restore on
-  `session_start`; status-bar line (`planner` key).
-- Events: `planner:plan_created`, `planner:task_status`.
-- **Skill `plan-decomposition`**: how to split a goal into small,
-  independently-verifiable, parallelizable tasks with strict per-task criteria;
-  cross-references pdca's `success-criteria` skill instead of restating it.
+## Critic
 
-Planner alone (without fleet/orchestrator) is already useful: it gives any
-session a structured, persistent plan the model maintains via tools.
+Critic launches one fresh read-only local child for either scored review or
+design advice. Review prompts contain canonical criteria and bounded evidence.
+The parser requires a score for every criterion and fails closed on malformed
+or incomplete output.
 
----
+Critic results use the same criterion shape as PDCA, so standalone users can
+feed independent scores into a PDCA checkpoint when desired.
 
-## 6. `critic/` (pi-critic) — independent advisor/reviewer
+## Orchestrator
 
-The critic exists because self-scoring is the weakest link in a self-checking
-loop. pdca's `honest-verification` skill mitigates grade inflation; the
-critic removes the conflict of interest entirely by having **a different agent
-with fresh context** do the CHECK.
+Orchestrator executes complete task pipelines, not just implementation waves:
 
-### 6.1 Review model — `review.ts` (pure)
+```text
+implement → task checks → optional evidence → optional review
+          → commit/artifacts → done | retry | failed
+```
+
+The default controller dynamically launches newly ready dependents while
+respecting `maxConcurrent`. Failed checks skip critic work. Review and commit
+failures use the same bounded attempt budget as execution failures.
+
+Task descriptions stay immutable after dispatch. Learned weaknesses are kept
+in bounded structured feedback, preventing retry prompts from growing without
+limit.
+
+## Command checks
+
+Task and final checks use an explicit executable plus argument vector:
 
 ```ts
-import type { Criterion, CriterionScore } from "pi-pdca/loop.ts";
-
-export interface ReviewRequest {
-  subject: string;            // what is being reviewed (diff, file list, artifact, task result)
-  context?: string;           // task brief, constraints
-  criteria: Criterion[];      // the rubric — same objects the planner attached to the task
-  scaleMax: number;
-}
-
-export interface ReviewResult {
-  scores: CriterionScore[];   // pdca-shaped: score + weakness per criterion
-  passed: boolean;
-  weaknesses: string[];       // prioritized, actionable
-  raw: string;                // critic's full prose for the details view
-}
-
-export function buildCriticPrompt(req: ReviewRequest): string;       // rubric → strict scoring instructions
-export function parseCriticOutput(text: string, req: ReviewRequest): ReviewResult; // tolerant JSON-block extraction, validation, clamping
-```
-
-`parseCriticOutput` is where robustness lives: it extracts a fenced JSON block
-from the critic's reply, validates every criterion is scored, clamps scores,
-and fails loudly (a review that can't be parsed is a `failed` review, never a
-silent pass).
-
-### 6.2 Wiring — `index.ts`
-
-- Tool **`critic_review`**: `{ subject, context?, criteria }` → dispatches the
-  shipped read-only `critic` agent definition through **`fleet/runner.ts`**
-  (pure-module import) and returns the parsed `ReviewResult`. The critic agent
-  gets read/grep/ls-style tools only — it can inspect the repo but not modify
-  it.
-- Tool **`critic_advise`**: same transport, different prompt — pre-implementation
-  design feedback on a plan or approach (the "advisor" half of the role),
-  returning prioritized concerns rather than scores.
-- **Skill `advisory-review`**: when to seek review, how to hand the critic
-  enough context, and how to act on weakness lists.
-- Config: critic model override (a strong model here pays for itself),
-  `scaleMax`, timeout.
-
-Standalone value: `critic_review` is a useful "second pair of eyes" tool in any
-session, entirely outside orchestration — including as the CHECK step of a
-plain pdca loop (see §9).
-
----
-
-## 7. `orchestrator/` (pi-orchestrator) — thin composition layer
-
-The orchestrator owns *control flow only*. Planning intelligence lives in the
-model + planner skill; execution lives in fleet; judgment lives in critic;
-the stopping rule lives in pdca.
-
-### 7.1 Scheduler — `scheduler.ts` (pure)
-
-A deterministic, fully unit-testable state machine (the `loop.ts` of this
-extension):
-
-```ts
-export interface SchedulerPolicy {
-  maxConcurrent: number;   // forwarded to the fleet runner
-  maxAttempts: number;     // per-task re-dispatch cap after failed review (default 2)
-}
-
-export interface DispatchDecision {
-  dispatch: PlanTask[];                 // ready tasks to send to fleet now
-  reviews: PlanTask[];                  // completed tasks awaiting critic
-  terminal: "running" | "complete" | "blocked"; // blocked = failed task blocks the DAG
-}
-
-export function nextActions(plan: Plan, policy: SchedulerPolicy): DispatchDecision;
-export function applyTaskResult(plan: Plan, id: string, result: TaskResult): Plan;
-export function applyReview(plan: Plan, id: string, review: ReviewResult, policy: SchedulerPolicy): Plan;
-  // pass → done; fail & attempts < max → ready again (critic weaknesses appended to the brief); else failed
-```
-
-### 7.2 Control flow — `index.ts`
-
-`/orchestrate <goal>` (plus `/orchestrate status|stop`) seeds the run via
-`pi.sendUserMessage`, pdca-style. One run proceeds:
-
-1. **Open the goal loop** — the model calls `pdca_start` with goal-level
-   criteria (the skill instructs how to derive them; typically "all plan tasks
-   done", "end-to-end verification passes", plus goal-specific bars).
-2. **Plan** — the model produces the decomposition via `plan_create`
-   (guided by the `plan-decomposition` skill), assigning each task an agent and
-   criteria.
-3. **Dispatch wave** — `orchestrate_step` computes `nextActions(...)` and runs
-   the ready set through the fleet runner in parallel.
-4. **Review** — each completed task goes through `critic_review` against *its
-   own* criteria; failures are re-dispatched with the critic's weaknesses
-   appended to the task brief, up to `maxAttempts`.
-5. **Checkpoint** — after each wave the model calls `pdca_checkpoint` with
-   the wave summary as PLAN/DO and **critic-derived** goal-level scores as
-   CHECK. pdca's verdict is the ACT:
-   - `ITERATING` → next wave (or plan repair: the model may `plan_update` to
-     add follow-up tasks targeting the weakest criterion);
-   - `FINAL` → done, summarize;
-   - `STOPPED` → hard stop with an honest failure report — the
-     `maxIterations` cap is the runaway guard for the entire orchestration.
-
-Like pdca, forward motion is driven by **self-prompting through tool
-results**: every `orchestrate_step` result ends with an explicit
-"AUTOMATED NEXT STEP" prompt, so the run needs no user turns between waves.
-
-The orchestrator imports only pure cores (`plan.ts`, `scheduler.ts`,
-`runner.ts`, `review.ts`, `loop.ts`) and otherwise composes at the model level
-(instructing calls to `pdca_*`, `plan_*` tools). If a dependency isn't
-installed, `/orchestrate` says which piece is missing instead of failing
-mid-run.
-
----
-
-## 8. Playing in tandem with pdca
-
-pdca stays unchanged and is composed at three distinct levels:
-
-**Goal level — pdca as the orchestrator's stopping rule.** The orchestration
-run *is* a pdca loop: `pdca_start` opens it, every dispatch wave is one
-PDCA pass, and `FINAL`/`ITERATING`/`STOPPED` decides continue-vs-stop. This
-respects pdca's one-loop-per-session constraint: the orchestrator's session
-owns exactly one loop, the goal loop. Nothing about pdca's state entry
-(`pdca-state`), dashboard, or status line needs to change.
-
-**Task level — hierarchical loops for free.** Each sub-agent is a separate
-`pi` process and therefore a separate session with its own entry log. If
-pdca is installed globally (it is, via this kit), an `implementer` agent can
-run its own task-level PDCA loop against its task's criteria — nested loops
-with zero state conflict, because "one loop per session" is per *child*
-session. Agent definitions opt in simply by referencing the `pdca-loop` skill
-in their system prompt.
-
-**CHECK level — the critic upgrades pdca's weakest phase.** The critic emits
-`CriterionScore[]` in pdca's exact shape, so external review drops straight
-into `pdca_checkpoint`. This composition is valuable *outside* orchestration
-too: any plain pdca loop can use `critic_review` as its CHECK step and feed
-the result to the checkpoint — independent scoring instead of self-report,
-with `honest-verification` as the fallback when the critic isn't installed.
-
-**Optional future pdca enhancement (non-breaking, not required).** A small
-exported helper in `loop.ts` such as
-`checkpointFromReview(plan: string, changes: string, review: ReviewResult): CheckpointInput`
-would make the critic→checkpoint handoff one call. Everything above works
-without it.
-
-### Worktree merge strategy (orchestrator × parallel writers)
-
-Parallel implementers with `isolation: "worktree"` each land on a task branch.
-The orchestrator's review step happens **per branch** (critic inspects the
-worktree); only reviewed-passing branches are merged back, serially, in DAG
-order, by the orchestrator session itself (which can resolve trivial conflicts
-or spawn a dedicated `integrator` fleet task for messy ones). Merge conflicts
-mark the task `review`-failed with the conflict as the weakness, feeding the
-normal retry path. For small runs, `isolation: "none"` with
-non-overlapping file scopes (a planner skill concern) stays the simple default.
-
----
-
-## 9. Packaging and distribution
-
-Root `package.json` gains the new workspaces and manifest entries:
-
-```json
-"workspaces": ["threema", "pdca", "exa", "kagi",
-               "fleet", "planner", "critic", "orchestrator"],
-"pi": {
-  "extensions": ["./threema", "./pdca", "./exa", "./kagi",
-                 "./fleet", "./planner", "./critic", "./orchestrator"],
-  "skills": ["./pdca/skills", "./planner/skills", "./critic/skills",
-             "./orchestrator/skills"]
+interface CommandCheck {
+  id: string;
+  command: string;
+  args: string[];
+  cwd?: string;
+  timeoutMs?: number;
 }
 ```
 
-Each package carries its own `pi` manifest (like `pi-pdca` does) so any
-subset installs standalone: `pi install <repo>` for the kit, or copy one
-folder into `~/.pi/agent/extensions/<name>/`. Cross-package pure-core imports
-(`planner` → `pdca/loop.ts`, `critic`/`orchestrator` → `fleet/runner.ts`)
-are workspace-relative imports of dependency-free modules; a standalone copy
-of a dependent package vendors those single files or declares the sibling
-package a dependency — decided per package in its README.
+The controller does not add an implicit shell. Exit zero passes; nonzero exit,
+timeout, abort, or launch failure fails deterministically. Output tails are
+bounded and included in review evidence.
 
----
+## Worktree handoff
 
-## 10. Failure semantics
+Worktree tasks report stable branch/path artifacts. A passing task is not done
+until reviewed work commits and artifacts are recorded. Dependent briefs
+receive artifact references and parent run IDs. The controller checks branch
+integration before dispatching fan-in work.
 
-| Failure | Behavior |
-|---|---|
-| Task timeout / child crash | `TaskResult.status = "timeout" \| "error"`; scheduler treats it as a failed attempt → retry up to `maxAttempts`, then task `failed` |
-| Partial wave failure | Completed tasks proceed to review; the DAG naturally holds back dependents of failed tasks; `terminal: "blocked"` surfaces the blocker in the checkpoint (scored low → pdca `ITERATING` drives plan repair, or `STOPPED` ends honestly) |
-| Critic output unparseable | Review = failed with "unscorable output" weakness; one automatic critic re-run before counting an attempt |
-| Critic disagreement (scores vs. sub-agent claim) | The critic wins by construction — it is the only source of CHECK scores; sub-agent self-reports are informational (`details`) only |
-| pdca `STOPPED` | Orchestrator halts, reports per-task state, remaining weaknesses, and branches left unmerged; nothing is silently discarded |
-| Session restart mid-run | On `session_start`, fleet/critic/orchestrator kill/stamp stale internal spawn jobs (only those whose recorded parent process is gone — a spawned child or concurrent session leaves a live parent's jobs alone), fleet marks in-flight entries `aborted`, planner state restores, and the plan's `running` tasks reset to `ready` — the next `orchestrate_step` resumes the run idempotently |
-| User abort (`ctx.signal`) | Runner aborts queued tasks, asks the spawn adapter to kill/stamp running jobs, queue drains, state entries record the abort |
+## State and recovery
 
----
+Authoritative V2 state records the plan, active pipelines, compact outcomes,
+final checks, and a paired event log. Restart preserves completed work,
+requeues interrupted work without duplicating attempts, reuses stable
+worktrees, and restarts interrupted final acceptance.
 
-## 11. Testing strategy
+## Control
 
-All unit tests are network-free and process-free, `tsx --test`, mirroring
-`pdca/test.ts`:
+`orchestrate_run` is deterministic by default and drives the DAG to a terminal
+state in one tool call unless blocked, stopped, or budget-limited.
+`orchestrate_step` exposes the same controller for manual draining and debug.
 
-- **fleet**: `registry.ts` frontmatter parsing/precedence; `runner.ts` with a
-  fake spawn — concurrency limits observed, timeouts fire, output capping,
-  abort propagation, worktree arg construction.
-- **planner**: DAG validation (cycles, dangling deps), ready-set computation,
-  status transitions, summaries.
-- **critic**: prompt construction; `parseCriticOutput` against well-formed,
-  malformed, and partially-scored outputs; clamping.
-- **orchestrator**: `nextActions`/`applyReview` state machine — wave
-  composition, retry-with-feedback, `blocked`/`complete` terminals; a scripted
-  end-to-end simulation (fake runner + fake critic) driving a 5-task DAG to
-  `FINAL`.
+A compatibility control mode can involve PDCA at the parent goal level. PDCA
+is not required for normal task scheduling and does not alter child execution.
 
-Manual smoke: `pi -e fleet/index.ts` (`/fleet`, one `fleet_run` task), then
-`pi -e orchestrator/index.ts` with all four installed on a toy goal in a
-sandbox repo.
+## Verification strategy
 
----
-
-## 12. Phased roadmap (each phase ships standalone value)
-
-1. **Phase 1 — `fleet/`**: registry + runner + `fleet_run` + `/fleet`.
-   Deliverable: parallel sub-agents usable from any session. Riskiest phase
-   (child-process contract with pi's non-interactive mode); done first.
-2. **Phase 2 — `planner/`**: plan model + tools + `/plan` +
-   `plan-decomposition` skill. Deliverable: persistent structured plans.
-3. **Phase 3 — `critic/`**: review model + `critic_review`/`critic_advise` +
-   `advisory-review` skill. Deliverable: independent review, including as the
-   CHECK step of plain pdca loops.
-4. **Phase 4 — `orchestrator/`**: scheduler + `/orchestrate` + skills, wiring
-   the goal-level pdca loop. Deliverable: the full pipeline.
-5. **Phase 5 (optional)** — pdca `checkpointFromReview` helper, worktree
-   `integrator` agent, tuning (caps, models, concurrency) from real use.
-
----
-
-## 13. Risks and open questions
-
-- **Child-process contract**: pi's non-interactive flag set (JSON mode, system
-  prompt/tool/model overrides) must be pinned and verified in Phase 1;
-  contained behind `buildPiArgs`.
-- **Cost/latency**: every sub-agent and critic call is a full model
-  conversation. Mitigations: small models for scouts/critics where acceptable
-  (per-agent `model:`), batch caps, and the planner skill pushing for few,
-  chunky tasks over many tiny ones.
-- **Output-cap tuning**: 50 KB per task is a starting point; real runs will
-  tell whether summaries-plus-`details` beats raw caps.
-- **Scheduler authority vs. model authority**: this design keeps hard control
-  flow (waves, retries, stops) in deterministic code and leaves judgment
-  (decomposition, scoring, plan repair) to models. If experience shows the
-  orchestrator model wants more freedom (e.g. dynamic re-planning mid-wave),
-  loosen deliberately, not by default.
-- **Criteria quality**: the whole loop is only as good as the criteria; this is
-  inherited from pdca and mitigated the same way (`success-criteria` skill,
-  planner skill requiring per-task criteria).
+- Fleet tests process contracts, pooling, cancellation, output, worktrees, and
+  handoffs.
+- Planner tests schemas, DAG validation, status transitions, checks, and
+  bounded feedback.
+- Critic tests prompt construction and fail-closed parsing.
+- Orchestrator tests pipeline ordering, retries, checks, review, branch
+  artifacts, compact reports, controller budgets, and restart recovery.
+- Root `npm test` and `npm run verify` execute all workspace suites.

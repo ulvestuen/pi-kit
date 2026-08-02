@@ -15,14 +15,14 @@ import {
 } from "../critic/review.ts";
 import {
   createFullOutputSaver,
-  createHostRuntime,
   createWorktreeRoot,
   discoverAgents,
-  type HostRuntime,
+  nodeSpawn,
 } from "../fleet/host.ts";
 import { getAgent, type AgentDefinition } from "../fleet/registry.ts";
 import {
   runTasks,
+  type SpawnFn,
   type TaskResult,
   type TaskSpec,
 } from "../fleet/runner.ts";
@@ -135,7 +135,6 @@ export function buildEvidenceBrief(
 
 function defaultConfig(): OrchestratorConfig {
   return {
-    executionMode: "local",
     reviewMode: "critic",
     pipelineMode: "per-task",
     controlMode: "deterministic",
@@ -150,9 +149,6 @@ function defaultConfig(): OrchestratorConfig {
     outputCapBytes: OUTPUT_CAP_BYTES,
     defaultAgent: "implementer",
     piBinary: "pi",
-    tmux: true,
-    tmuxSession: "pi",
-    tmuxCloseWindows: false,
   };
 }
 
@@ -266,7 +262,7 @@ async function branchesAreIntegrated(
 export interface ControllerEffectsFactoryOptions {
   config: OrchestratorConfig;
   cwd: string;
-  runtime: Pick<HostRuntime, "spawn">;
+  runtime: { spawn: SpawnFn };
   registry: Map<string, AgentDefinition>;
   persist(state: OrchestratorRunStateV2): void | Promise<void>;
   getState(): OrchestratorRunStateV2;
@@ -539,7 +535,7 @@ export function createControllerEffects(
 
 export default function orchestrator(pi: ExtensionAPI): void {
   const config = loadOrchestratorConfig();
-  const runtime = createHostRuntime(config, "pi-orchestrator");
+  const runtime = { spawn: nodeSpawn };
 
   let state: OrchestratorRunStateV2 | null = null;
   let inFlight: Promise<any> | null = null;
@@ -732,8 +728,7 @@ export default function orchestrator(pi: ExtensionAPI): void {
   registerOrchestrationTool("orchestrate_step", false);
   registerOrchestrationTool("orchestrate_run", true);
 
-  pi.on("session_start", async (_event, ctx) => {
-    await runtime.cleanup();
+  pi.on("session_start", (_event, ctx) => {
     const restored = restoreRunState(ctx.sessionManager.getEntries());
     if (restored.state) {
       state = restored.state;

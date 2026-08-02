@@ -19,8 +19,7 @@
     "fleet",
     "planner",
     "critic",
-    "orchestrator",
-    "spawn"
+    "orchestrator"
   ],
   "repository": {
     "type": "git",
@@ -35,8 +34,7 @@
       "./fleet",
       "./planner",
       "./critic",
-      "./orchestrator",
-      "./spawn"
+      "./orchestrator"
     ],
     "skills": [
       "./pdca/skills",
