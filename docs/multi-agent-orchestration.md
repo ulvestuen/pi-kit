@@ -154,8 +154,8 @@ Agents are markdown files with YAML frontmatter; the body is the system prompt.
 ---
 name: implementer
 description: Implements one well-scoped task to completion, tests included.
-model: claude-sonnet-5          # optional; defaults to parent's model
-thinkingLevel: medium           # optional
+model: openai-codex/gpt-5.6-sol # optional; defaults to parent's model
+thinkingLevel: high             # optional
 tools: read, bash, edit, write  # optional allowlist; omit = parent's tools
 ---
 You implement exactly one task. You receive the task description, its
@@ -164,7 +164,7 @@ acceptance criteria, and relevant file paths. Work only within scope...
 
 Discovery locations, later wins on name collision:
 
-1. Kit-shipped defaults: `fleet/agents/{scout,implementer,critic,planner}.md`
+1. Kit-shipped defaults: `fleet/agents/{auditor,critic,implementer,planner,scout}.md`
 2. User: `~/.pi/agent/agents/*.md`
 3. Project: `.pi/agents/*.md`
 

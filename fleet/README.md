@@ -19,7 +19,7 @@ spawn backend execution, with diagrams — see
 | ------------- | ----------- | ---------------------------------------------------------------------------- |
 | **Tool**      | `fleet_run` | Dispatch a batch of tasks to sub-agents that run concurrently; per-task results, progress streaming, optional git-worktree isolation. |
 | **Command**   | `/fleet`    | List discovered agents (name, description, source) and current pool status. |
-| **Agents**    | `agents/*.md` | Kit-shipped defaults: `scout`, `implementer`, `critic`, `planner`.          |
+| **Agents**    | `agents/*.md` | Kit-shipped defaults: `auditor`, `critic`, `implementer`, `planner`, `scout`. |
 
 ## Agent definitions
 
@@ -29,8 +29,8 @@ Agents are markdown files with YAML frontmatter; the body is the system prompt:
 ---
 name: implementer
 description: Implements one well-scoped task to completion, tests included.
-model: claude-sonnet-5          # optional; defaults to parent's model
-thinkingLevel: medium           # optional
+model: openai-codex/gpt-5.6-sol # optional; defaults to parent's model
+thinkingLevel: high             # optional
 tools: read, bash, edit, write  # optional allowlist; omit = parent's tools
 ---
 You implement exactly one task. ...
@@ -41,6 +41,11 @@ Discovery locations, later wins on name collision:
 1. Kit-shipped defaults: `fleet/agents/*.md`
 2. User: `~/.pi/agent/agents/*.md`
 3. Project: `.pi/agents/*.md`
+
+The kit-shipped `auditor`, `critic`, and `implementer` definitions pin
+`openai-codex/gpt-5.6-sol`. This is the effective model on a fresh pi-kit
+install unless a user or project definition overrides the same agent name.
+`planner` and `scout` continue to inherit the parent model.
 
 ## How a task runs
 

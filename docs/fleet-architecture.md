@@ -86,8 +86,8 @@ design) plus a body that becomes the child's **system prompt**.
 ---
 name: implementer
 description: Implements one well-scoped task to completion, tests included.
-model: claude-sonnet-5          # optional; defaults to parent's model
-thinkingLevel: medium           # optional
+model: openai-codex/gpt-5.6-sol # optional; defaults to parent's model
+thinkingLevel: high             # optional
 tools: read, bash, edit, write  # optional allowlist; omit = parent's tools
 ---
 You implement exactly one task. ...
@@ -102,7 +102,7 @@ failing the whole layer:
 
 ```mermaid
 flowchart LR
-    kit["1 — Kit defaults<br/>fleet/agents/*.md<br/>(scout, implementer, critic, planner)"]
+    kit["1 — Kit defaults<br/>fleet/agents/*.md<br/>(auditor, critic, implementer,<br/>planner, scout)"]
     user["2 — User<br/>~/.pi/agent/agents/*.md"]
     project["3 — Project<br/>&lt;cwd&gt;/.pi/agents/*.md"]
     reg[("Merged registry<br/>Map&lt;name, AgentDefinition&gt;")]
@@ -112,14 +112,19 @@ flowchart LR
     project -->|"overrides user and kit"| reg
 ```
 
-The four kit-shipped defaults divide the roles:
+The five kit-shipped defaults divide the roles:
 
-| Agent | Tools | Role |
-|---|---|---|
-| `scout` | read, grep, find, ls | Read-only exploration; answers one focused question |
-| `planner` | read, grep, find, ls | Read-only decomposition of a goal into tasks |
-| `implementer` | *(inherits parent's)* | Implements exactly one well-scoped task |
-| `critic` | read, grep, find, ls | Independent read-only review against explicit criteria |
+| Agent | Model | Tools | Role |
+|---|---|---|---|
+| `scout` | *(inherits parent's)* | read, grep, find, ls | Read-only exploration; answers one focused question |
+| `planner` | *(inherits parent's)* | read, grep, find, ls | Read-only decomposition of a goal into tasks |
+| `implementer` | `openai-codex/gpt-5.6-sol` | read, bash, edit, write | Implements exactly one well-scoped task |
+| `auditor` | `openai-codex/gpt-5.6-sol` | read, bash, grep, find, ls | Independently executes verification checks and reports evidence |
+| `critic` | `openai-codex/gpt-5.6-sol` | read, grep, find, ls | Independent read-only review against explicit criteria |
+
+The pinned model is used on a fresh pi-kit install. User and project agent
+layers can still override it because discovery applies those layers after the
+kit defaults.
 
 Discovery runs fresh on every `fleet_run` and `/fleet` call, so edits to agent
 files take effect immediately.

@@ -1,6 +1,7 @@
 ---
 name: implementer
 description: Implements one well-scoped task to completion, tests included.
+model: openai-codex/gpt-5.6-sol
 tools: read, bash, edit, write
 ---
 You implement exactly one task. You receive the task description, its

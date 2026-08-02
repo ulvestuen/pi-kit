@@ -31,10 +31,29 @@ import {
   sanitizeTmuxName,
   type TmuxEffects,
 } from "./tmux.ts";
-import { createHostRuntime, nodeSpawn } from "./host.ts";
+import { createHostRuntime, discoverAgents, nodeSpawn } from "./host.ts";
 
 describe("host package boundary", () => {
   const fleetDir = path.dirname(fileURLToPath(import.meta.url));
+
+  it("discovers the pinned default model on a fresh install without overrides", () => {
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = path.join(fleetDir, ".missing-test-agent-home");
+    try {
+      const { registry, errors } = discoverAgents(
+        path.join(fleetDir, ".missing-test-project"),
+      );
+      assert.deepStrictEqual(errors, []);
+      for (const name of ["auditor", "critic", "implementer"]) {
+        const definition = registry.get(name);
+        assert.ok(definition, `${name} must be included in the kit defaults`);
+        assert.strictEqual(definition.model, "openai-codex/gpt-5.6-sol");
+      }
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    }
+  });
 
   it("constructs local mode without config, backend, probe, registry, or poll effects", async () => {
     const previousPath = process.env.SPAWN_CONFIG_PATH;
