@@ -10,8 +10,7 @@
  * agent definition supplies system prompt, model, thinking level, tools.
  */
 
-import type { AgentDefinition } from "../fleet/registry.ts";
-import { shellQuote } from "../fleet/tmux.ts";
+import { shellQuote, type AgentDefinition } from "@pi-kit/agent-types";
 
 /**
  * Internal fleet/critic children use pi's JSON event mode. Streaming updates

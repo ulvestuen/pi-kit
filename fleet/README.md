@@ -1,6 +1,6 @@
 # fleet — a sub-agent runtime for pi
 
-**fleet** runs N sub-agents through the shared **spawn** tooling, each with its
+**fleet** runs N sub-agents directly by default, each with its
 own context window, role prompt, model, and tool restrictions, while still
 returning synchronous per-task results to the caller. It is the
 foundational fan-out primitive of the pi-kit multi-agent stack (see
@@ -125,7 +125,8 @@ fleet works with zero configuration. To change defaults, create
 | `maxConcurrent`      | `4`      | Concurrency pool size.                          |
 | `maxBatch`           | `8`      | Maximum tasks per `fleet_run` batch.            |
 | `defaultTimeoutMs`   | `600000` | Per-task timeout (10 minutes).                  |
-| `outputCapBytes`     | `51200`  | Cap on model-visible output per task (50 KB).   |
+| `outputCapBytes`     | `8192`   | Cap on model-visible output per task, including its marker. |
+| `executionMode`      | `"local"` | Direct child by default; `"spawn"` preserves Spawn backend execution. |
 | `piBinary`           | `"pi"`   | Binary spawned for each sub-agent.              |
 | `injectSystemPrompt` | `true`   | Inject the short delegation note into the system prompt. |
 | `tmux`               | `true`   | Historical live-window flag. When spawn's `tmux` backend is selected, tmux is the runner even if this is false. |
@@ -135,13 +136,18 @@ fleet works with zero configuration. To change defaults, create
 Environment overrides (used when no JSON config exists): `FLEET_CONFIG_PATH`,
 `FLEET_MAX_CONCURRENT`, `FLEET_MAX_BATCH`, `FLEET_DEFAULT_TIMEOUT_MS`,
 `FLEET_OUTPUT_CAP_BYTES`, `FLEET_PI_BINARY`, `FLEET_INJECT_SYSTEM_PROMPT`,
-`FLEET_TMUX`, `FLEET_TMUX_SESSION`, `FLEET_TMUX_CLOSE_WINDOWS`.
+`FLEET_TMUX`, `FLEET_TMUX_SESSION`, `FLEET_TMUX_CLOSE_WINDOWS`,
+`FLEET_EXECUTION_MODE`.
 
-Backend selection and remote/sandbox details come from the spawn extension's
+With `executionMode: "spawn"`, backend selection and remote/sandbox details come from the spawn extension's
 configuration (`~/.pi/agent/extensions/spawn/spawn.json` or `SPAWN_*`; see
 [`spawn/README.md`](../spawn/README.md)). For `exedev`, synchronous fleet jobs
 `cd` to the runner cwd on the VM; use it only when the repo/worktree exists at
 that remote path, or prefer `tmux`/`microsandbox` for local-repo work.
+
+Children load with `--no-extensions --no-skills` by default. Definitions still
+control tools; set a task's `inheritChildResources: true` only when a custom
+agent intentionally needs inherited extensions or skills.
 
 ## Running tests
 

@@ -1,5 +1,8 @@
 import { describe, it } from "node:test";
 import * as assert from "node:assert/strict";
+import { readFileSync, readdirSync } from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   getAgent,
   mergeRegistries,
@@ -28,6 +31,74 @@ import {
   sanitizeTmuxName,
   type TmuxEffects,
 } from "./tmux.ts";
+import { createHostRuntime, nodeSpawn } from "./host.ts";
+
+describe("host package boundary", () => {
+  const fleetDir = path.dirname(fileURLToPath(import.meta.url));
+
+  it("constructs local mode without config, backend, probe, registry, or poll effects", async () => {
+    const previousPath = process.env.SPAWN_CONFIG_PATH;
+    process.env.SPAWN_CONFIG_PATH = "/definitely/not/read/spawn.json";
+    const messages: unknown[][] = [];
+    const previousError = console.error;
+    console.error = (...args: unknown[]) => messages.push(args);
+    try {
+      const runtime = createHostRuntime({ tmux: true, tmuxSession: "test", tmuxCloseWindows: false }, "test");
+      assert.equal(runtime.mode, "local");
+      assert.equal(runtime.spawn, nodeSpawn);
+      assert.equal(runtime.spawnConfig, undefined);
+      assert.equal(await runtime.cleanup(), 0);
+      assert.equal(await runtime.describe(), undefined);
+      assert.deepEqual(messages, []);
+    } finally {
+      console.error = previousError;
+      if (previousPath === undefined) delete process.env.SPAWN_CONFIG_PATH;
+      else process.env.SPAWN_CONFIG_PATH = previousPath;
+    }
+  });
+
+  it("warns once when explicit Spawn configuration is ignored in local mode", () => {
+    const previousBackend = process.env.SPAWN_BACKEND;
+    const previousWarn = console.warn;
+    const warnings: string[] = [];
+    process.env.SPAWN_BACKEND = "tmux";
+    console.warn = message => warnings.push(String(message));
+    try {
+      const settings = {
+        tmux: false,
+        tmuxSession: "test",
+        tmuxCloseWindows: false,
+      };
+      createHostRuntime(settings, "warning-test");
+      createHostRuntime(settings, "warning-test");
+      assert.equal(warnings.length, 1);
+      assert.match(warnings[0], /executionMode is local/);
+    } finally {
+      console.warn = previousWarn;
+      if (previousBackend === undefined) delete process.env.SPAWN_BACKEND;
+      else process.env.SPAWN_BACKEND = previousBackend;
+    }
+  });
+
+  it("allows Spawn imports only in Fleet's dynamically loaded adapter", () => {
+    const files = readdirSync(fleetDir).filter((file) => file.endsWith(".ts"));
+    for (const file of files) {
+      if (file === "spawn-adapter.ts" || file === "test.ts") continue;
+      const source = readFileSync(path.join(fleetDir, file), "utf8");
+      assert.doesNotMatch(source, /(?:from\s+|import\s*\()["']\.\.\/spawn\//, file);
+    }
+    const host = readFileSync(path.join(fleetDir, "host.ts"), "utf8");
+    assert.match(host, /await import\(["']\.\/spawn-adapter\.ts["']\)/);
+  });
+
+  it("keeps Spawn independent of Fleet", () => {
+    const spawnDir = path.resolve(fleetDir, "../spawn");
+    for (const file of readdirSync(spawnDir).filter((name) => name.endsWith(".ts"))) {
+      const source = readFileSync(path.join(spawnDir, file), "utf8");
+      assert.doesNotMatch(source, /(?:from\s+|import\s*\()["'][^"']*fleet\//, file);
+    }
+  });
+});
 
 const VALID_AGENT = `---
 name: implementer
@@ -203,6 +274,8 @@ describe("buildPiArgs", () => {
       "--mode",
       "json",
       "--no-session",
+      "--no-extensions",
+      "--no-skills",
       "--system-prompt",
       "You implement exactly one task.",
       "--model",
@@ -221,10 +294,18 @@ describe("buildPiArgs", () => {
       "--mode",
       "json",
       "--no-session",
+      "--no-extensions",
+      "--no-skills",
       "--system-prompt",
       "x prompt",
       "t",
     ]);
+  });
+
+  it("inherits extensions and skills only when explicitly requested", () => {
+    const args = buildPiArgs(def("x"), { agent: "x", task: "t", inheritChildResources: true });
+    assert.ok(!args.includes("--no-extensions"));
+    assert.ok(!args.includes("--no-skills"));
   });
 
   it("appends artifacts and parent run IDs to the child brief", () => {
@@ -293,8 +374,7 @@ describe("capOutput", () => {
   it("truncates at the byte budget with a marker", () => {
     const { output, truncated } = capOutput("a".repeat(100), 10);
     assert.strictEqual(truncated, true);
-    assert.ok(output.startsWith("a".repeat(10)));
-    assert.match(output, /truncated at 10 bytes/);
+    assert.ok(Buffer.byteLength(output, "utf8") <= 10);
   });
 
   it("counts multi-byte characters by UTF-8 size", () => {
@@ -302,6 +382,13 @@ describe("capOutput", () => {
     const { truncated } = capOutput("é".repeat(5), 9);
     assert.strictEqual(truncated, true);
     assert.strictEqual(capOutput("é".repeat(4), 9).truncated, false);
+  });
+
+  it("keeps the 8192-byte default result within the cap including marker", () => {
+    const { output, truncated } = capOutput("🙂".repeat(3000), 8192);
+    assert.strictEqual(truncated, true);
+    assert.ok(Buffer.byteLength(output, "utf8") <= 8192);
+    assert.match(output, /output truncated at 8192 bytes/);
   });
 });
 
@@ -577,6 +664,81 @@ describe("runTasks", () => {
     );
     assert.strictEqual(result.status, "error");
     assert.match(result.output, /not a git repo/);
+  });
+
+  for (const branchExists of [true, false]) {
+    it(`resumes with ${branchExists ? "an existing branch" : "no branch yet"}`, async () => {
+      const calls: SpawnRequest[] = [];
+      const spawn: SpawnFn = async request => {
+        calls.push(request);
+        if (request.args[0] === "show-ref") {
+          return { exitCode: branchExists ? 0 : 1, stdout: "", stderr: "" };
+        }
+        if (request.command === "git" && request.args[0] === "-C") {
+          return { exitCode: 128, stdout: "", stderr: "missing worktree" };
+        }
+        if (request.command === "git") {
+          return { exitCode: 0, stdout: "", stderr: "" };
+        }
+        return { exitCode: 0, stdout: assistantLine("done"), stderr: "" };
+      };
+      const [result] = await runTasks(
+        registry,
+        [{
+          agent: "worker",
+          task: "resume",
+          isolation: "worktree",
+          worktreeKey: "stable",
+          resumeWorktree: true,
+          parentBranch: "parent",
+        }],
+        { spawn, cwd: "/repo", worktreeRoot: "/scratch/wt" },
+      );
+      assert.equal(result.status, "ok");
+      assert.deepEqual(calls[1].args, [
+        "show-ref",
+        "--verify",
+        "--quiet",
+        "refs/heads/fleet/stable",
+      ]);
+      assert.deepEqual(
+        calls[2].args,
+        branchExists
+          ? ["worktree", "add", "/scratch/wt/fleet-stable", "fleet/stable"]
+          : ["worktree", "add", "-b", "fleet/stable", "/scratch/wt/fleet-stable", "parent"],
+      );
+    });
+  }
+
+  it("reuses an already-existing stable worktree", async () => {
+    const calls: SpawnRequest[] = [];
+    const spawn: SpawnFn = async request => {
+      calls.push(request);
+      if (request.command === "git") {
+        return { exitCode: 0, stdout: "true", stderr: "" };
+      }
+      return { exitCode: 0, stdout: assistantLine("done"), stderr: "" };
+    };
+    const [result] = await runTasks(
+      registry,
+      [{
+        agent: "worker",
+        task: "resume",
+        isolation: "worktree",
+        worktreeKey: "stable-existing",
+        resumeWorktree: true,
+      }],
+      { spawn, cwd: "/repo", worktreeRoot: "/scratch/wt" },
+    );
+    assert.equal(result.status, "ok");
+    assert.equal(calls.length, 2);
+    assert.deepEqual(calls[0].args, [
+      "-C",
+      "/scratch/wt/fleet-stable-existing",
+      "rev-parse",
+      "--is-inside-work-tree",
+    ]);
+    assert.equal(calls[1].command, "pi");
   });
 });
 
@@ -912,8 +1074,8 @@ describe("agent-native: parentBranch worktree", () => {
     // The branch should be forked from the parent, not from HEAD
     assert.deepStrictEqual(calls[0].args, [
       "worktree", "add", "-b", "fleet/task-1-100",
-      "feat/prerequisite",
       "/scratch/wt/fleet-task-1-100",
+      "feat/prerequisite",
     ]);
     assert.strictEqual(result.status, "ok");
     assert.deepStrictEqual(result.runId, runId);
@@ -1080,8 +1242,8 @@ describe("agent-native: buildWorktreeArgs parentBranch", () => {
     const args = buildWorktreeArgs("fleet/task-1-42", "/wt/path", "feat/base");
     assert.deepStrictEqual(args, [
       "worktree", "add", "-b", "fleet/task-1-42",
-      "feat/base",
       "/wt/path",
+      "feat/base",
     ]);
   });
 

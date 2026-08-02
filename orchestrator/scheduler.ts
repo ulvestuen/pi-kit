@@ -12,6 +12,7 @@ import type { TaskResult } from "../fleet/runner.ts";
 import type { ReviewResult } from "../critic/review.ts";
 import {
   getTask,
+  appendAttemptFeedback,
   readySet,
   setTaskStatus,
   updateTask,
@@ -19,7 +20,7 @@ import {
   type PlanTask,
 } from "../planner/plan.ts";
 
-export const DEFAULT_MAX_ATTEMPTS = 2;
+export const DEFAULT_MAX_ATTEMPTS = 1;
 
 export interface SchedulerPolicy {
   /** Dispatch-wave width, forwarded to the fleet runner. */
@@ -114,9 +115,10 @@ export function applyTaskResult(
   const failureNote =
     `Attempt ${task.attempts} ${result.status}: ` +
     `${result.output.trim() || "(no output)"}`;
-  const withNote = updateTask(plan, id, {
-    description: `${task.description}\n\n[${failureNote}]`,
-  });
+  const withNote: Plan = { ...plan, updatedAt: Date.now(), tasks: plan.tasks.map(t => t.id === id ? { ...t, attemptFeedback: appendAttemptFeedback(t.attemptFeedback, {
+    attempt: task.attempts, source: "execution", status: result.status,
+    summary: failureNote, createdAt: Date.now(),
+  }) } : t) };
   return setTaskStatus(
     withNote,
     id,
@@ -157,9 +159,10 @@ export function applyReview(
   const feedback =
     `Review of attempt ${task.attempts} FAILED. ` +
     `Fix these weaknesses, worst first:\n${weaknesses}`;
-  const withFeedback = updateTask(plan, id, {
-    description: `${task.description}\n\n[${feedback}]`,
-  });
+  const withFeedback: Plan = { ...plan, updatedAt: Date.now(), tasks: plan.tasks.map(t => t.id === id ? { ...t, attemptFeedback: appendAttemptFeedback(t.attemptFeedback, {
+    attempt: task.attempts, source: "review", status: "failed",
+    summary: feedback, createdAt: Date.now(),
+  }) } : t) };
   return setTaskStatus(
     withFeedback,
     id,

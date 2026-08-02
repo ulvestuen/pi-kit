@@ -2,14 +2,19 @@ import { describe, it } from "node:test";
 import * as assert from "node:assert/strict";
 import {
   addTasks,
+  appendAttemptFeedback,
   coverageByCriterion,
   createPlan,
   getTask,
+  normalizePlan,
   readySet,
+  renderAttemptFeedback,
   setTaskStatus,
   statusLine,
   summarizePlan,
   updateTask,
+  updateFinalChecks,
+  type AttemptFeedback,
   type Plan,
   type PlanTaskInput,
 } from "./plan.ts";
@@ -474,5 +479,77 @@ describe("goal-criterion coverage (covers)", () => {
       }),
     };
     assert.deepStrictEqual(coverageByCriterion(legacy), []);
+  });
+});
+
+describe("bounded attempt feedback", () => {
+  it("retains the latest three UTF-8-bounded entries and renders within 6144 bytes", () => {
+    let feedback: AttemptFeedback[] = [];
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      feedback = appendAttemptFeedback(feedback, {
+        attempt,
+        source: "review",
+        status: "failed",
+        summary: `weakness-${attempt}:` + "🙂".repeat(2000),
+        createdAt: attempt,
+      });
+    }
+    assert.deepStrictEqual(feedback.map((item) => item.attempt), [3, 4, 5]);
+    assert.ok(feedback.every((item) => Buffer.byteLength(item.summary) <= 2048));
+    const rendered = renderAttemptFeedback(feedback);
+    assert.ok(Buffer.byteLength(rendered) <= 6144);
+    assert.match(rendered, /weakness-5/);
+    assert.ok(!rendered.includes("�"));
+  });
+});
+
+describe("command checks", () => {
+  const check = { id: "unit", command: "npm", args: ["test"], cwd: "planner", timeoutMs: 1000 };
+
+  it("normalizes task and final checks", () => {
+    const plan = createPlan("g", [task("t1", { checks: [check] })], { finalChecks: [{ ...check, id: "all", cwd: "." }] });
+    assert.deepStrictEqual(plan.tasks[0].checks, [check]);
+    assert.strictEqual(plan.finalChecks[0].id, "all");
+  });
+
+  it("rejects duplicate ids, empty commands, unsafe cwd, and invalid timeouts", () => {
+    assert.throws(() => createPlan("g", [task("t1", { checks: [check, check] })]), /Duplicate check id/);
+    assert.throws(() => createPlan("g", [task("t1", { checks: [{ ...check, command: " " }] })]), /non-empty command/);
+    for (const cwd of ["../outside", "/tmp", "C:/tmp", "a//b"]) {
+      assert.throws(() => createPlan("g", [task("t1", { checks: [{ ...check, cwd }] })]), /cwd/);
+    }
+    assert.throws(() => createPlan("g", [task("t1", { checks: [{ ...check, timeoutMs: 99 }] })]), /timeoutMs/);
+  });
+
+  it("makes descriptions and checks immutable after dispatch", () => {
+    let plan = createPlan("g", [task("t1", { checks: [check] })], { finalChecks: [check] });
+    const description = plan.tasks[0].description;
+    plan = setTaskStatus(plan, "t1", "running");
+    assert.throws(() => updateTask(plan, "t1", { description: "new scope" }), /immutable/);
+    assert.throws(() => updateTask(plan, "t1", { checks: [] }), /immutable/);
+    assert.throws(() => updateFinalChecks(plan, []), /immutable/);
+    assert.strictEqual(plan.tasks[0].description, description);
+  });
+});
+
+describe("legacy plan normalization", () => {
+  it("migrates missing checks, feedback, artifacts, and finalChecks", () => {
+    const current = createPlan("g", [task("t1")]);
+    const legacy: any = JSON.parse(JSON.stringify(current));
+    delete legacy.finalChecks;
+    delete legacy.tasks[0].checks;
+    delete legacy.tasks[0].attemptFeedback;
+    delete legacy.tasks[0].artifacts;
+    const restored = normalizePlan(legacy);
+    assert.deepStrictEqual(restored.finalChecks, []);
+    assert.deepStrictEqual(restored.tasks[0].checks, []);
+    assert.deepStrictEqual(restored.tasks[0].attemptFeedback, []);
+    assert.deepStrictEqual(restored.tasks[0].artifacts, []);
+  });
+
+  it("runtime-validates malformed restored plans", () => {
+    const raw: any = createPlan("g", [task("t1")]);
+    raw.tasks.push({ ...raw.tasks[0], id: "T1" });
+    assert.throws(() => normalizePlan(raw), /Duplicate task id/);
   });
 });

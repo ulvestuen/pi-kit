@@ -29,6 +29,11 @@ Each task carries:
   (name + threshold), normalized with pdca's own `normalizeCriteria`, so
   every task's bar is by construction something pdca and the critic can
   score;
+- `checks` — up to 32 deterministic `CommandCheck` values (`id`, explicit
+  `command`, `args`, optional repository-relative `cwd`, and 100 ms–30 minute
+  `timeoutMs`). Commands are intended to be spawned directly, never via an
+  implicit shell. Check ids are unique within each list and lexical cwd
+  escapes are rejected;
 - `covers` — optional goal-level criterion names (the exact names from the
   pdca goal loop) this task helps satisfy; `coverageByCriterion` and the
   `/plan` dashboard then report per-goal-criterion progress mechanically,
@@ -36,7 +41,15 @@ Each task carries:
 - `status` — `pending → ready → running → review → done` (or `failed`) — and
   `attempts`, counted per dispatch.
 
-State persists in the session entry log (`planner-state`), survives
+The plan may also carry up to 32 `finalChecks`, run once at final acceptance.
+Task descriptions, task checks, and final checks become immutable as soon as
+any relevant execution starts; scope changes belong in follow-up tasks.
+Execution/review context is separate `attemptFeedback`: the newest three
+entries are retained, each summary is at most 2048 UTF-8 bytes, and
+`renderAttemptFeedback` is capped at 6144 bytes. Legacy state missing these
+fields normalizes them to empty arrays without rewriting old description text.
+
+Standalone state persists in the session entry log (`planner-state`), survives
 `/reload`, and restores with the session; tasks stuck `running` across a
 restart reset to `ready`. Progress shows in the status bar.
 
@@ -44,8 +57,14 @@ restart reset to `ready`. Progress shows in the status bar.
 
 For loose composition, planner emits on the shared extension bus:
 `planner:plan_created`, `planner:plan_updated`, `planner:task_status` — and
-adopts a full plan emitted as `planner:set_plan` (this is how the
-orchestrator's scheduler feeds results back).
+accepts the compatibility event `planner:set_plan`. New Orchestrators should
+emit `{ schemaVersion: 1, runId, active, plan }` on
+`orchestrator:plan_projection`. An active projection is observational and
+read-only: Orchestrator remains authoritative, projection updates are not
+persisted as standalone Planner state, and `plan_create`, `plan_update`, and
+`/plan reset` cannot mutate it. When the projection ends Planner resumes its
+standalone plan. This preserves standalone Planner while preparing the V2 run
+state ownership described in milestone 10.
 
 ## Installation
 
@@ -89,8 +108,9 @@ Environment overrides (used when no JSON config exists):
 npm test
 ```
 
-DAG validation (cycles, dangling deps), ready-set computation, status
-transitions, and summaries are covered by pure unit tests against `plan.ts`.
+DAG/check runtime validation, legacy migration, UTF-8 feedback budgets,
+immutability, ready-set computation, status transitions, and summaries are
+covered by pure unit tests against `plan.ts`.
 
 ## Files
 

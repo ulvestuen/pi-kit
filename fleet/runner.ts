@@ -7,13 +7,12 @@
  * it in any context.
  */
 
-import { getAgent, type AgentDefinition } from "./registry.ts";
-import type { RunId, ArtifactRef } from "@pi-kit/agent-types";
+import { getAgent, type AgentDefinition, type SpawnFn, type RunId, type ArtifactRef } from "@pi-kit/agent-types";
 
 export const DEFAULT_MAX_CONCURRENT = 4;
 export const DEFAULT_MAX_BATCH = 8;
 export const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
-export const DEFAULT_OUTPUT_CAP_BYTES = 50 * 1024;
+export const DEFAULT_OUTPUT_CAP_BYTES = 8 * 1024;
 export const DEFAULT_PI_BINARY = "pi";
 
 /** One sub-agent task to run. */
@@ -36,6 +35,12 @@ export interface TaskSpec {
   parentRunIds?: string[];
   /** Parent branch to create worktrees from (default: current HEAD). */
   parentBranch?: string;
+  /** Stable suffix for a worktree branch when independently dispatched. */
+  worktreeKey?: string;
+  /** Reuse the stable worktree/branch after an interrupted orchestration. */
+  resumeWorktree?: boolean;
+  /** Load the parent's extensions and skills. Default false. */
+  inheritChildResources?: boolean;
 }
 
 export type TaskStatus = "ok" | "error" | "timeout" | "aborted";
@@ -79,30 +84,7 @@ export type RunnerEvent =
   | { type: "task_end"; index: number; agent: string; result: TaskResult };
 
 /** Request handed to the injected spawn function. */
-export interface SpawnRequest {
-  command: string;
-  args: string[];
-  cwd: string;
-  /** Abort to stop the child through the injected spawn implementation. */
-  signal: AbortSignal;
-  /** Streaming stdout chunks, for progress reporting. */
-  onOutput?: (chunk: string) => void;
-  /**
-   * Human-readable identity of a sub-agent child, e.g. "1-implementer".
-   * Set only for the pi child itself (not auxiliary spawns like git), so
-   * spawn wrappers can attach per-agent visibility such as tmux windows.
-   */
-  label?: string;
-}
-
-export interface SpawnOutcome {
-  /** Process exit code; null when killed by a signal. */
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-}
-
-export type SpawnFn = (request: SpawnRequest) => Promise<SpawnOutcome>;
+export type { SpawnFn, SpawnRequest, SpawnOutcome } from "@pi-kit/agent-types";
 
 export interface RunnerOptions {
   /** Injected process spawner. */
@@ -150,6 +132,7 @@ export interface RunnerOptions {
  */
 export function buildPiArgs(def: AgentDefinition, spec: TaskSpec): string[] {
   const args = ["--mode", "json", "--no-session"];
+  if (!spec.inheritChildResources) args.push("--no-extensions", "--no-skills");
   args.push("--system-prompt", def.systemPrompt);
   if (def.model) args.push("--model", def.model);
   if (def.thinkingLevel) args.push("--thinking", def.thinkingLevel);
@@ -190,12 +173,22 @@ export function buildWorktreeArgs(
   path: string,
   parentBranch?: string,
 ): string[] {
-  return ["worktree", "add", "-b", branch, ...(parentBranch ? [parentBranch] : []), path];
+  return ["worktree", "add", "-b", branch, path, ...(parentBranch ? [parentBranch] : [])];
 }
 
 /** Derive a unique branch name / worktree directory name for a task. */
 export function worktreeBranchName(index: number, startedAt: number): string {
   return `fleet/task-${index + 1}-${startedAt}`;
+}
+
+function worktreeBranchForSpec(
+  spec: TaskSpec,
+  index: number,
+  startedAt: number,
+): string {
+  if (!spec.worktreeKey) return worktreeBranchName(index, startedAt);
+  const safeKey = spec.worktreeKey.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  return `fleet/${safeKey || `task-${index + 1}-${startedAt}`}`;
 }
 
 export interface ParsedPiOutput {
@@ -252,19 +245,16 @@ export function capOutput(
   text: string,
   capBytes: number,
 ): { output: string; truncated: boolean } {
-  let bytes = 0;
-  for (let i = 0; i < text.length; i++) {
-    const code = text.codePointAt(i)!;
-    bytes += code <= 0x7f ? 1 : code <= 0x7ff ? 2 : code <= 0xffff ? 3 : 4;
-    if (code > 0xffff) i++;
-    if (bytes > capBytes) {
-      return {
-        output: `${text.slice(0, i)}\n[... output truncated at ${capBytes} bytes ...]`,
-        truncated: true,
-      };
-    }
+  if (Buffer.byteLength(text, "utf8") <= capBytes) return { output: text, truncated: false };
+  const marker = `\n[... output truncated at ${capBytes} bytes ...]`;
+  const contentBudget = Math.max(0, capBytes - Buffer.byteLength(marker, "utf8"));
+  let end = 0;
+  for (const character of text) {
+    const next = end + character.length;
+    if (Buffer.byteLength(text.slice(0, next), "utf8") > contentBudget) break;
+    end = next;
   }
-  return { output: text, truncated: false };
+  return { output: text.slice(0, end) + marker.slice(0, capBytes), truncated: true };
 }
 
 interface ResolvedOptions {
@@ -372,11 +362,14 @@ async function runOneTask(
   ): Promise<TaskResult> => {
     clearTimeout(timer);
     opts.signal?.removeEventListener("abort", onExternalAbort);
+    const capped = capOutput(partial.output, opts.outputCapBytes);
     const result: TaskResult = {
       agent: def.name,
       durationMs: opts.now() - startedAt,
       runId: spec.runId,
       ...partial,
+      output: capped.output,
+      truncated: partial.truncated || capped.truncated,
     };
     if (transcript && opts.saveFullOutput) {
       try {
@@ -399,14 +392,41 @@ async function runOneTask(
     let worktreePath: string | undefined;
 
     if (spec.isolation === "worktree") {
-      branch = worktreeBranchName(index, startedAt);
+      branch = worktreeBranchForSpec(spec, index, startedAt);
       worktreePath = `${opts.worktreeRoot}/${branch.replace(/\//g, "-")}`;
-      const wt = await opts.spawn({
-        command: "git",
-        args: buildWorktreeArgs(branch, worktreePath, spec.parentBranch),
-        cwd,
-        signal: controller.signal,
-      });
+      let wt = spec.resumeWorktree
+        ? await opts.spawn({
+            command: "git",
+            args: ["-C", worktreePath, "rev-parse", "--is-inside-work-tree"],
+            cwd,
+            signal: controller.signal,
+          })
+        : undefined;
+      if (spec.resumeWorktree && wt?.exitCode !== 0) {
+        const branchExists = await opts.spawn({
+          command: "git",
+          args: ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`],
+          cwd,
+          signal: controller.signal,
+        });
+        wt = await opts.spawn({
+          command: "git",
+          args:
+            branchExists.exitCode === 0
+              ? ["worktree", "add", worktreePath, branch]
+              : buildWorktreeArgs(branch, worktreePath, spec.parentBranch),
+          cwd,
+          signal: controller.signal,
+        });
+      }
+      if (!wt || (!spec.resumeWorktree && wt.exitCode !== 0)) {
+        wt = await opts.spawn({
+          command: "git",
+          args: buildWorktreeArgs(branch, worktreePath, spec.parentBranch),
+          cwd,
+          signal: controller.signal,
+        });
+      }
       if (wt.exitCode !== 0) {
         return finish({
           status: controller.signal.aborted

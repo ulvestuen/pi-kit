@@ -3,6 +3,10 @@
   "version": "1.0.0",
   "description": "pi extensions and integrations",
   "type": "module",
+  "scripts": {
+    "test": "npm run test --workspaces --if-present",
+    "verify": "npm test"
+  },
   "keywords": [
     "pi-package"
   ],

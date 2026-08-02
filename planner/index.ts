@@ -10,13 +10,16 @@ import {
   coverageByCriterion,
   createPlan,
   getTask,
+  normalizePlan,
   setTaskStatus,
   statusLine,
   summarizePlan,
   updateTask,
+  updateFinalChecks,
   TASK_STATUSES,
   type Plan,
   type PlanTaskInput,
+  type CommandCheck,
   type TaskStatus,
 } from "./plan.ts";
 
@@ -81,6 +84,14 @@ const CRITERION_SCHEMA = Type.Object({
   ),
 });
 
+const COMMAND_CHECK_SCHEMA = Type.Object({
+  id: Type.String({ description: "Unique check id within this check list." }),
+  command: Type.String({ description: "Executable name or path; never interpreted by a shell." }),
+  args: Type.Array(Type.String(), { description: "Argument vector passed directly to the executable." }),
+  cwd: Type.Optional(Type.String({ description: "Lexical repository/worktree-relative working directory." })),
+  timeoutMs: Type.Optional(Type.Integer({ minimum: 100, maximum: 1800000 })),
+});
+
 const TASK_INPUT_SCHEMA = Type.Object({
   id: Type.String({ description: "Unique task id, e.g. 't1'." }),
   title: Type.String({ description: "Short task title." }),
@@ -102,6 +113,10 @@ const TASK_INPUT_SCHEMA = Type.Object({
     description: "Strict, measurable acceptance criteria for this task.",
     minItems: 1,
   }),
+  checks: Type.Optional(Type.Array(COMMAND_CHECK_SCHEMA, {
+    description: "Deterministic commands run after implementation without an implicit shell.",
+    maxItems: 32,
+  })),
   covers: Type.Optional(
     Type.Array(Type.String(), {
       description:
@@ -129,6 +144,14 @@ export default function (pi: ExtensionAPI) {
   }
 
   let plan: Plan | null = null;
+  let standalonePlan: Plan | null = null;
+  let activeProjectionRunId: string | null = null;
+
+  const assertWritable = () => {
+    if (activeProjectionRunId) {
+      throw new Error(`Plan is a read-only projection of active orchestration run ${activeProjectionRunId}`);
+    }
+  };
 
   const updateStatus = (ctx: ExtensionContext) => {
     if (!config.showStatus || !ctx.hasUI) return;
@@ -136,15 +159,19 @@ export default function (pi: ExtensionAPI) {
   };
 
   const persist = () => {
-    pi.appendEntry(STATE_ENTRY_TYPE, plan ?? undefined);
+    if (!activeProjectionRunId) pi.appendEntry(STATE_ENTRY_TYPE, plan ?? undefined);
   };
 
   const restoreState = (ctx: ExtensionContext): Plan | null => {
     let latest: Plan | null = null;
     for (const entry of ctx.sessionManager.getEntries()) {
       if (entry.type === "custom" && entry.customType === STATE_ENTRY_TYPE) {
-        const data = entry.data as Plan | undefined;
-        latest = data && typeof data.goal === "string" ? data : null;
+        const data = entry.data;
+        if (!data) latest = null;
+        else {
+          try { latest = normalizePlan(data); }
+          catch (error) { console.warn(`[planner] Ignoring invalid persisted plan: ${(error as Error).message}`); }
+        }
       }
     }
     return latest;
@@ -169,12 +196,19 @@ export default function (pi: ExtensionAPI) {
           description: "The task DAG.",
           minItems: 1,
         }),
+        finalChecks: Type.Optional(Type.Array(COMMAND_CHECK_SCHEMA, {
+          description: "Deterministic commands run once at final acceptance.",
+          maxItems: 32,
+        })),
       }),
       async execute(_id, params, _signal, _onUpdate, ctx) {
+        assertWritable();
         plan = createPlan(params.goal, params.tasks as PlanTaskInput[], {
           passThreshold: config.passThreshold,
           scaleMax: config.scaleMax,
+          finalChecks: params.finalChecks as CommandCheck[] | undefined,
         });
+        standalonePlan = plan;
         persist();
         updateStatus(ctx);
         pi.events.emit("planner:plan_created", { plan });
@@ -221,6 +255,7 @@ export default function (pi: ExtensionAPI) {
               description: Type.Optional(Type.String()),
               agent: Type.Optional(Type.String()),
               criteria: Type.Optional(Type.Array(CRITERION_SCHEMA)),
+              checks: Type.Optional(Type.Array(COMMAND_CHECK_SCHEMA, { maxItems: 32 })),
               covers: Type.Optional(
                 Type.Array(Type.String(), {
                   description:
@@ -254,8 +289,13 @@ export default function (pi: ExtensionAPI) {
             description: "Follow-up tasks to append to the DAG.",
           }),
         ),
+        finalChecks: Type.Optional(Type.Array(COMMAND_CHECK_SCHEMA, {
+          description: "Replace final checks before any task has been attempted.",
+          maxItems: 32,
+        })),
       }),
       async execute(_id, params, _signal, _onUpdate, ctx) {
+        assertWritable();
         if (!plan) {
           throw new Error("No active plan. Call plan_create first.");
         }
@@ -281,6 +321,7 @@ export default function (pi: ExtensionAPI) {
               description: edit.description,
               agent: edit.agent,
               criteria: edit.criteria,
+              checks: edit.checks as CommandCheck[] | undefined,
               covers: edit.covers,
               artifacts: edit.artifacts,
             },
@@ -290,8 +331,12 @@ export default function (pi: ExtensionAPI) {
         if (params.addTasks && params.addTasks.length > 0) {
           next = addTasks(next, params.addTasks as PlanTaskInput[], options);
         }
+        if (params.finalChecks !== undefined) {
+          next = updateFinalChecks(next, params.finalChecks as CommandCheck[]);
+        }
 
         plan = next;
+        standalonePlan = plan;
         persist();
         updateStatus(ctx);
         pi.events.emit("planner:plan_updated", { plan });
@@ -305,13 +350,41 @@ export default function (pi: ExtensionAPI) {
     }),
   );
 
-  // Loose extension-to-extension composition: the orchestrator applies
-  // scheduler results by emitting the whole updated plan on the shared bus.
+  // One-release compatibility for older Orchestrator versions. New versions
+  // should emit the typed projection event below.
   pi.events.on("planner:set_plan", (data) => {
     const incoming = (data as { plan?: Plan } | undefined)?.plan;
     if (!incoming || typeof incoming.goal !== "string") return;
-    plan = incoming;
-    persist();
+    try {
+      plan = normalizePlan(incoming);
+      standalonePlan = plan;
+      persist();
+    } catch (error) {
+      console.warn(`[planner] Rejected legacy planner:set_plan: ${(error as Error).message}`);
+    }
+  });
+
+  /** Observational projection: Orchestrator owns state while active. */
+  pi.events.on("orchestrator:plan_projection", (data) => {
+    const event = data as { schemaVersion?: number; runId?: string; active?: boolean; plan?: unknown } | undefined;
+    if (!event || event.schemaVersion !== 1 || !event.runId || typeof event.active !== "boolean") return;
+    if (event.active) {
+      if (!event.plan) return;
+      try {
+        if (!activeProjectionRunId) standalonePlan = plan;
+        plan = normalizePlan(event.plan);
+        activeProjectionRunId = event.runId;
+      } catch (error) {
+        console.warn(`[planner] Rejected orchestration projection: ${(error as Error).message}`);
+      }
+    } else if (activeProjectionRunId === event.runId) {
+      if (event.plan) {
+        try { standalonePlan = normalizePlan(event.plan); } catch { /* retain prior standalone plan */ }
+      }
+      activeProjectionRunId = null;
+      plan = standalonePlan;
+      persist();
+    }
   });
 
   pi.on("before_agent_start", async (event) => {
@@ -323,6 +396,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     plan = restoreState(ctx);
+    standalonePlan = plan;
     // Children do not survive a restart: reset in-flight work so the next
     // scheduling pass re-dispatches it idempotently.
     if (plan) {
@@ -349,7 +423,12 @@ export default function (pi: ExtensionAPI) {
     handler: async (args, ctx) => {
       const raw = args.trim().toLowerCase();
       if (raw === "reset" || raw === "clear") {
+        if (activeProjectionRunId) {
+          ctx.ui.notify(`Plan is read-only while orchestration run ${activeProjectionRunId} is active.`, "warning");
+          return;
+        }
         plan = null;
+        standalonePlan = null;
         persist();
         updateStatus(ctx);
         ctx.ui.notify("Plan cleared.", "info");

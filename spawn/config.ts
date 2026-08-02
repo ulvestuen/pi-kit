@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { DEFAULT_TMUX_SESSION } from "../fleet/tmux.ts";
+import { DEFAULT_TMUX_SESSION } from "@pi-kit/agent-types";
 import {
   SPAWN_BACKEND_NAMES,
   type SpawnBackendName,

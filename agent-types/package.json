@@ -1,7 +1,7 @@
 {
   "name": "@pi-kit/agent-types",
   "version": "1.0.0",
-  "description": "Agent-native execution and result contracts for pi-kit — RunId, ArtifactRef, AgentTask, AgentResult, BackendCapabilities, KillResult",
+  "description": "Shared agent registry, discovery, process, command, execution and result contracts for pi-kit",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"

@@ -12,13 +12,23 @@ import { DEFAULT_MAX_ATTEMPTS } from "./scheduler.ts";
 
 const DEFAULT_REVIEW_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_INTEGRATION_TIMEOUT_MS = 5 * 60 * 1000;
-export const DEFAULT_EVIDENCE_AGENT = "auditor";
+export const DEFAULT_EVIDENCE_AGENT = undefined;
+export type ReviewMode = "critic" | "none";
+export type PipelineMode = "barrier" | "per-task";
+export type ControlMode = "deterministic" | "pdca";
+export type ExecutionMode = "local" | "spawn";
 
 /**
  * orchestrator configuration. All fields are optional with sensible
  * defaults, so the extension works with zero configuration.
  */
 export interface OrchestratorConfig extends TmuxSettings {
+  executionMode: ExecutionMode;
+  reviewMode: ReviewMode;
+  pipelineMode: PipelineMode;
+  controlMode: ControlMode;
+  planReview: boolean;
+  verboseDetails: boolean;
   /** Dispatch-wave width, forwarded to the fleet runner. */
   maxConcurrent: number;
   /** Per-task re-dispatch cap after a failed attempt or review. */
@@ -55,6 +65,12 @@ export interface OrchestratorConfig extends TmuxSettings {
 }
 
 interface RawOrchestratorConfig {
+  executionMode?: string;
+  reviewMode?: string;
+  pipelineMode?: string;
+  controlMode?: string;
+  planReview?: boolean | string;
+  verboseDetails?: boolean | string;
   maxConcurrent?: number | string;
   maxAttempts?: number | string;
   isolation?: string;
@@ -129,6 +145,12 @@ function loadRawConfig(): { raw: RawOrchestratorConfig; configPath?: string } {
   return {
     raw: {
       maxConcurrent: process.env.ORCHESTRATOR_MAX_CONCURRENT,
+      executionMode: process.env.ORCHESTRATOR_EXECUTION_MODE,
+      reviewMode: process.env.ORCHESTRATOR_REVIEW_MODE,
+      pipelineMode: process.env.ORCHESTRATOR_PIPELINE_MODE,
+      controlMode: process.env.ORCHESTRATOR_CONTROL_MODE,
+      planReview: process.env.ORCHESTRATOR_PLAN_REVIEW,
+      verboseDetails: process.env.ORCHESTRATOR_VERBOSE_DETAILS,
       maxAttempts: process.env.ORCHESTRATOR_MAX_ATTEMPTS,
       isolation: process.env.ORCHESTRATOR_ISOLATION,
       taskTimeoutMs: process.env.ORCHESTRATOR_TASK_TIMEOUT_MS,
@@ -214,8 +236,18 @@ export function loadConfig(): OrchestratorConfig {
       `outputCapBytes must be at least 1024 (got: ${outputCapBytes})`,
     );
   }
-
+  const choice = <T extends string>(value: string | undefined, fallback: T, allowed: readonly T[], label: string): T => {
+    const result = (value?.trim() || fallback) as T;
+    if (!allowed.includes(result)) throw new Error(`${label} must be ${allowed.map(x => `"${x}"`).join(" or ")}`);
+    return result;
+  };
   return {
+    executionMode: choice(raw.executionMode, "local", ["local", "spawn"], "executionMode"),
+    reviewMode: choice(raw.reviewMode, "critic", ["critic", "none"], "reviewMode"),
+    pipelineMode: choice(raw.pipelineMode, "per-task", ["barrier", "per-task"], "pipelineMode"),
+    controlMode: choice(raw.controlMode, "deterministic", ["deterministic", "pdca"], "controlMode"),
+    planReview: parseBoolean(raw.planReview, false),
+    verboseDetails: parseBoolean(raw.verboseDetails, false),
     maxConcurrent: Math.round(maxConcurrent),
     maxAttempts: Math.round(maxAttempts),
     isolation,

@@ -42,6 +42,12 @@ the DAG (unique ids, no dangling dependencies, no cycles) and persists it;
    and the checkpoint can read per-criterion progress straight off the plan.
    A goal criterion nothing covers is a decomposition gap — fix it before
    dispatching.
+9. **Declare deterministic checks as argv.** When success can be established
+   by a command, add a check with a unique `id`, explicit executable in
+   `command`, and an `args` array, for example
+   `{ "id": "unit", "command": "npm", "args": ["test", "--workspace", "planner"], "timeoutMs": 120000 }`.
+   Never put shell syntax in `command`; `cwd` must be repository-relative.
+   Put whole-plan integration commands in `finalChecks`, not every task.
 
 ## Choosing agents
 
@@ -73,6 +79,9 @@ t2 and t3 run in parallel with disjoint file scopes; t4 is the only join.
   when criteria verifiably pass, `failed` when abandoned.
 - New scope discovered mid-run becomes an appended follow-up task
   (`plan_update.addTasks`), not a silent widening of an existing brief.
+- Review may refine descriptions and checks before dispatch. Once a task has
+  an attempt, its description/checks are immutable; retry findings belong in
+  bounded `attemptFeedback`, not appended to the brief.
 
 ## Related
 

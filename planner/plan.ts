@@ -17,6 +17,30 @@ import {
 import type { ArtifactRef } from "@pi-kit/agent-types";
 
 export const DEFAULT_AGENT = "implementer";
+export const MAX_ATTEMPT_FEEDBACK_ENTRIES = 3;
+export const MAX_ATTEMPT_FEEDBACK_SUMMARY_BYTES = 2048;
+export const MAX_RENDERED_ATTEMPT_FEEDBACK_BYTES = 6144;
+export const MAX_TASK_CHECKS = 32;
+export const MAX_FINAL_CHECKS = 32;
+export const MIN_CHECK_TIMEOUT_MS = 100;
+export const MAX_CHECK_TIMEOUT_MS = 30 * 60 * 1000;
+
+export interface AttemptFeedback {
+  attempt: number;
+  source: "execution" | "check" | "review" | "integration";
+  status: string;
+  summary: string;
+  createdAt: number;
+}
+
+export interface CommandCheck {
+  id: string;
+  command: string;
+  args: string[];
+  /** Repository/worktree-relative lexical path. */
+  cwd?: string;
+  timeoutMs?: number;
+}
 
 export type TaskStatus =
   | "pending" // dependencies not yet met
@@ -46,6 +70,8 @@ export interface PlanTask {
   agent?: string;
   /** pdca-shaped acceptance criteria. */
   criteria: Criterion[];
+  checks: CommandCheck[];
+  attemptFeedback: AttemptFeedback[];
   /**
    * Names of goal-level criteria this task helps satisfy (exact names from
    * the pdca goal loop). Optional: plans persisted before this field
@@ -64,6 +90,7 @@ export interface Plan {
   tasks: PlanTask[];
   createdAt: number;
   updatedAt: number;
+  finalChecks: CommandCheck[];
 }
 
 export interface PlanTaskInput {
@@ -73,6 +100,7 @@ export interface PlanTaskInput {
   dependsOn?: string[];
   agent?: string;
   criteria: CriterionInput[];
+  checks?: CommandCheck[];
   covers?: string[];
 }
 
@@ -80,6 +108,88 @@ export interface CreatePlanOptions {
   passThreshold?: number;
   scaleMax?: number;
   now?: number;
+  finalChecks?: CommandCheck[];
+}
+
+function truncateUtf8(value: string, maxBytes: number): string {
+  const bytes = Buffer.from(value, "utf8");
+  if (bytes.length <= maxBytes) return value;
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  for (let end = maxBytes; end >= 0; end--) {
+    try {
+      return decoder.decode(bytes.subarray(0, end));
+    } catch { /* cut through a multibyte code point */ }
+  }
+  return "";
+}
+
+/** Append immutable retry context while retaining the latest bounded entries. */
+export function appendAttemptFeedback(
+  entries: readonly AttemptFeedback[] | undefined,
+  feedback: AttemptFeedback,
+): AttemptFeedback[] {
+  if (!Number.isInteger(feedback.attempt) || feedback.attempt < 1) {
+    throw new Error("Attempt feedback attempt must be a positive integer");
+  }
+  if (!["execution", "check", "review", "integration"].includes(feedback.source)) {
+    throw new Error(`Invalid attempt feedback source: ${feedback.source}`);
+  }
+  const normalized = {
+    ...feedback,
+    status: String(feedback.status ?? "").trim(),
+    summary: truncateUtf8(String(feedback.summary ?? ""), MAX_ATTEMPT_FEEDBACK_SUMMARY_BYTES),
+  };
+  if (!normalized.status) throw new Error("Attempt feedback status must not be empty");
+  if (!Number.isFinite(normalized.createdAt)) throw new Error("Attempt feedback createdAt must be finite");
+  return [...(entries ?? []), normalized].slice(-MAX_ATTEMPT_FEEDBACK_ENTRIES);
+}
+
+/** Render retry context independently of the task's immutable description. */
+export function renderAttemptFeedback(entries: readonly AttemptFeedback[] | undefined): string {
+  const lines = (entries ?? []).slice(-MAX_ATTEMPT_FEEDBACK_ENTRIES).map(
+    (item) => `[Attempt ${item.attempt} · ${item.source} · ${item.status}] ${item.summary}`,
+  );
+  return truncateUtf8(lines.join("\n"), MAX_RENDERED_ATTEMPT_FEEDBACK_BYTES);
+}
+
+function normalizeChecks(value: unknown, label: string, maxCount: number): CommandCheck[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
+  if (value.length > maxCount) throw new Error(`${label} may contain at most ${maxCount} checks`);
+  const ids = new Set<string>();
+  return value.map((raw, index) => {
+    if (!raw || typeof raw !== "object") throw new Error(`${label}[${index}] must be an object`);
+    const source = raw as Partial<CommandCheck>;
+    const id = String(source.id ?? "").trim();
+    const command = String(source.command ?? "").trim();
+    if (!id) throw new Error(`${label}[${index}] needs a non-empty id`);
+    if (ids.has(id.toLowerCase())) throw new Error(`Duplicate check id in ${label}: ${id}`);
+    ids.add(id.toLowerCase());
+    if (!command) throw new Error(`Check "${id}" needs a non-empty command`);
+    if (!Array.isArray(source.args) || !source.args.every((arg) => typeof arg === "string")) {
+      throw new Error(`Check "${id}" args must be a string array`);
+    }
+    let cwd: string | undefined;
+    if (source.cwd !== undefined) {
+      cwd = String(source.cwd).trim().replaceAll("\\", "/");
+      if (!cwd || cwd.startsWith("/") || /^[A-Za-z]:\//.test(cwd)) {
+        throw new Error(`Check "${id}" cwd must be a non-empty relative path`);
+      }
+      const parts = cwd.split("/");
+      if (parts.some((part) => part === "..") || parts.some((part) => part === "")) {
+        throw new Error(`Check "${id}" cwd must stay inside the repository or worktree`);
+      }
+      cwd = parts.filter((part) => part !== ".").join("/") || ".";
+    }
+    let timeoutMs: number | undefined;
+    if (source.timeoutMs !== undefined) {
+      timeoutMs = Number(source.timeoutMs);
+      if (!Number.isInteger(timeoutMs) || timeoutMs < MIN_CHECK_TIMEOUT_MS || timeoutMs > MAX_CHECK_TIMEOUT_MS) {
+        throw new Error(`Check "${id}" timeoutMs must be an integer between ${MIN_CHECK_TIMEOUT_MS} and ${MAX_CHECK_TIMEOUT_MS}`);
+      }
+    }
+    return { id, command, args: [...source.args], cwd, timeoutMs };
+  });
 }
 
 function normalizeId(id: string): string {
@@ -118,6 +228,8 @@ function buildTask(
     dependsOn: (input.dependsOn ?? []).map(normalizeId).filter(Boolean),
     agent: input.agent?.trim() || undefined,
     criteria,
+    checks: normalizeChecks(input.checks, `Task "${id}" checks`, MAX_TASK_CHECKS),
+    attemptFeedback: [],
     covers: normalizeCovers(input.covers),
     status: "pending",
     attempts: 0,
@@ -201,7 +313,42 @@ export function createPlan(
   const built = tasks.map((t) => buildTask(t, options));
   validateDag(built);
   const now = options.now ?? Date.now();
-  return { goal: normalizedGoal, tasks: built, createdAt: now, updatedAt: now };
+  return {
+    goal: normalizedGoal,
+    tasks: built,
+    createdAt: now,
+    updatedAt: now,
+    finalChecks: normalizeChecks(options.finalChecks, "Plan finalChecks", MAX_FINAL_CHECKS),
+  };
+}
+
+/** Validate and migrate persisted plans. Missing checks/feedback become empty arrays. */
+export function normalizePlan(value: unknown): Plan {
+  if (!value || typeof value !== "object") throw new Error("Persisted plan must be an object");
+  const raw = value as Partial<Plan> & { tasks?: unknown[] };
+  if (!Array.isArray(raw.tasks)) throw new Error("Persisted plan tasks must be an array");
+  const created = createPlan(
+    String(raw.goal ?? ""),
+    raw.tasks.map((item) => {
+      if (!item || typeof item !== "object") throw new Error("Persisted plan task must be an object");
+      const task = item as any;
+      return { ...task, checks: task.checks ?? [] } as PlanTaskInput;
+    }),
+    { now: Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now(), finalChecks: raw.finalChecks ?? [] },
+  );
+  created.updatedAt = Number.isFinite(raw.updatedAt) ? raw.updatedAt! : created.createdAt;
+  created.tasks = created.tasks.map((task, index) => {
+    const source = raw.tasks![index] as any;
+    const status = source.status ?? "pending";
+    if (!TASK_STATUSES.includes(status)) throw new Error(`Invalid task status: ${status}`);
+    const attempts = source.attempts ?? 0;
+    if (!Number.isInteger(attempts) || attempts < 0) throw new Error(`Task "${task.id}" attempts must be a non-negative integer`);
+    let feedback: AttemptFeedback[] = [];
+    for (const item of source.attemptFeedback ?? []) feedback = appendAttemptFeedback(feedback, item);
+    return { ...task, status, attempts, artifacts: Array.isArray(source.artifacts) ? source.artifacts : [], attemptFeedback: feedback } as PlanTask;
+  });
+  validateDag(created.tasks);
+  return created;
 }
 
 export function getTask(plan: Plan, id: string): PlanTask | undefined {
@@ -293,6 +440,7 @@ export interface PlanTaskPatch {
   description?: string;
   agent?: string;
   criteria?: CriterionInput[];
+  checks?: CommandCheck[];
   /** Goal-level criterion names this task helps satisfy. */
   covers?: string[];
   /** Artifacts produced by the task (set on passing review). */
@@ -314,6 +462,9 @@ export function updateTask(
     updated.title = title;
   }
   if (patch.description !== undefined) {
+    if (target.attempts > 0 && patch.description !== target.description) {
+      throw new Error(`Task "${id}" description is immutable after its first attempt; add a follow-up task for scope changes`);
+    }
     const description = patch.description.trim();
     if (!description) {
       throw new Error(`Task "${id}" needs a non-empty description`);
@@ -330,6 +481,10 @@ export function updateTask(
       options.scaleMax ?? DEFAULT_SCALE_MAX,
     );
   }
+  if (patch.checks !== undefined) {
+    if (target.attempts > 0) throw new Error(`Task "${id}" checks are immutable after its first attempt`);
+    updated.checks = normalizeChecks(patch.checks, `Task "${id}" checks`, MAX_TASK_CHECKS);
+  }
   if (patch.covers !== undefined) {
     updated.covers = normalizeCovers(patch.covers);
   }
@@ -341,6 +496,13 @@ export function updateTask(
     updatedAt: options.now ?? Date.now(),
     tasks: plan.tasks.map((task) => (task === target ? updated : task)),
   };
+}
+
+export function updateFinalChecks(plan: Plan, checks: CommandCheck[], now?: number): Plan {
+  if (plan.tasks.some((task) => task.attempts > 0)) {
+    throw new Error("Plan finalChecks are immutable after execution starts");
+  }
+  return { ...plan, finalChecks: normalizeChecks(checks, "Plan finalChecks", MAX_FINAL_CHECKS), updatedAt: now ?? Date.now() };
 }
 
 /** Return a new plan with follow-up tasks appended (full DAG re-validation). */

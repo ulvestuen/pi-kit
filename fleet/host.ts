@@ -26,18 +26,8 @@ import {
   type AgentDefinition,
 } from "./registry.ts";
 import type { SpawnFn, TaskSpec } from "./runner.ts";
+import type { ExecutionMode } from "@pi-kit/agent-types";
 import { sanitizeTmuxName, type TmuxEffects, type TmuxSettings } from "./tmux.ts";
-import {
-  defaultConfig as defaultSpawnConfig,
-  loadConfig as loadSpawnConfig,
-  type SpawnConfig,
-} from "../spawn/config.ts";
-import { createBackends } from "../spawn/host.ts";
-import {
-  cleanupSpawnToolingJobs,
-  createSpawnToolingSpawn,
-} from "../spawn/runner-adapter.ts";
-
 const KILL_GRACE_MS = 3000;
 
 /**
@@ -230,74 +220,72 @@ export interface HostSpawnSettings extends TmuxSettings {
   piBinary?: string;
 }
 
-function loadSpawnDefaults(tag: string): SpawnConfig {
-  try {
-    return loadSpawnConfig();
-  } catch (e: any) {
-    console.error(`[${tag}] ${e?.message ?? e}`);
-    console.error(`[${tag}] Using spawn defaults. Fix spawn config or SPAWN_* env vars, then /reload.`);
-    return defaultSpawnConfig();
-  }
+export interface HostRuntime {
+  mode: ExecutionMode;
+  spawn: SpawnFn;
+  cleanup(): Promise<number>;
+  describe(): Promise<HostSpawnConfig | undefined>;
+  spawnConfig?: HostSpawnConfig;
 }
 
-/** Resolve the spawn-tooling configuration used by fleet/critic/orchestrator. */
-export function loadHostSpawnConfig(
+/** The small portion of Spawn's configuration Fleet exposes to callers. */
+export interface HostSpawnConfig {
+  backend: string;
+  tmuxSession: string;
+  piBinary: string;
+  configPath?: string;
+}
+
+const localSpawnWarnings = new Set<string>();
+
+export function hasExplicitSpawnConfiguration(): boolean {
+  if (process.env.SPAWN_BACKEND?.trim()) return true;
+  const configPath =
+    process.env.SPAWN_CONFIG_PATH ||
+    path.join(
+      process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"),
+      "extensions",
+      "spawn",
+      "spawn.json",
+    );
+  return existsSync(configPath);
+}
+
+/** Select synchronous execution. Local mode does not load/probe/use Spawn. */
+export function createHostRuntime(settings: HostSpawnSettings & { executionMode?: ExecutionMode }, tag: string): HostRuntime {
+  const mode = settings.executionMode ?? "local";
+  if (mode === "local") {
+    if (hasExplicitSpawnConfiguration() && !localSpawnWarnings.has(tag)) {
+      localSpawnWarnings.add(tag);
+      console.warn(
+        `[${tag}] Spawn is configured but executionMode is local; the Spawn backend is ignored. Set executionMode to "spawn" to use it.`,
+      );
+    }
+    return {
+      mode,
+      spawn: nodeSpawn,
+      cleanup: async () => 0,
+      describe: async () => undefined,
+    };
+  }
+  // Keep the compatibility constructor synchronous while placing the package
+  // boundary behind a dynamic import. Merely importing Fleet or constructing a
+  // local runtime therefore cannot evaluate any Spawn module.
+  let initialized: Promise<HostRuntime> | undefined;
+  const initialize = () => initialized ??= createSpawnHostRuntime(settings, tag);
+  return {
+    mode,
+    spawn: async (request) => (await initialize()).spawn(request),
+    cleanup: async () => (await initialize()).cleanup(),
+    describe: async () => (await initialize()).spawnConfig,
+  };
+}
+
+/** Explicit initializer for consumers that need Spawn configuration eagerly. */
+export async function createSpawnHostRuntime(
   settings: HostSpawnSettings,
   tag: string,
-): SpawnConfig {
-  const spawnConfig = loadSpawnDefaults(tag);
-  // Keep the historical fleet/orchestrator/critic tmux-session knob useful for
-  // the spawn tmux backend; other spawn-specific backend fields still come from
-  // spawn.json / SPAWN_*.
-  spawnConfig.tmuxSession = settings.tmuxSession || spawnConfig.tmuxSession;
-  if (settings.piBinary) spawnConfig.piBinary = settings.piBinary;
-
-  if (!settings.tmux && spawnConfig.backend === "tmux") {
-    console.error(
-      `[${tag}] tmux=false no longer disables sub-agent windows when SPAWN_BACKEND=tmux; the spawn tmux backend is the runner. Set SPAWN_BACKEND=microsandbox or exedev to avoid local tmux windows.`,
-    );
-  }
-  if (spawnConfig.backend === "tmux" && !isTmuxAvailable()) {
-    console.error(
-      `[${tag}] SPAWN_BACKEND=tmux but tmux is not installed; sub-agent dispatch will report a backend availability error`,
-    );
-  }
-  return spawnConfig;
-}
-
-/**
- * Resolve the spawn function an extension should hand the runner.
- *
- * Labeled pi sub-agent children now run through the spawn tooling backend
- * registry (tmux/exe.dev/microsandbox). Unlabeled helper commands such as
- * `git worktree add` still use the local node adapter because they are not
- * sub-agent children and need synchronous local side effects.
- */
-export async function cleanupHostSpawnJobs(
-  spawnConfig: SpawnConfig,
-  tag: string,
-): Promise<number> {
-  return cleanupSpawnToolingJobs({
-    config: spawnConfig,
-    backends: createBackends(spawnConfig),
-    jobNamePrefix: tag,
-    onRegistryError: (message) => console.error(`[${tag}] ${message}`),
-    onError: (message) => console.error(`[${tag}] ${message}`),
-  });
-}
-
-export function createHostSpawn(
-  settings: HostSpawnSettings,
-  tag: string,
-  resolvedConfig?: SpawnConfig,
-): SpawnFn {
-  const spawnConfig = resolvedConfig ?? loadHostSpawnConfig(settings, tag);
-
-  return createSpawnToolingSpawn({
-    config: spawnConfig,
-    backends: createBackends(spawnConfig),
-    fallback: nodeSpawn,
-    jobNamePrefix: tag,
-    onRegistryError: (message) => console.error(`[${tag}] ${message}`),
-  });
+): Promise<HostRuntime> {
+  const { createSpawnHostRuntime: initialize } = await import("./spawn-adapter.ts");
+  return initialize(settings, tag, nodeSpawn, isTmuxAvailable);
 }

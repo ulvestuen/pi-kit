@@ -2,6 +2,23 @@
 
 This repository contains pi-related integrations and extensions.
 
+## Verification
+
+Run every workspace test suite from the repository root:
+
+```sh
+npm test
+npm run verify
+```
+
+Both commands run the same real workspace verification. The repository has no
+build artifacts, so it intentionally does not define a `build` script.
+
+Orchestrator command checks belong in each project's plan. The legacy
+`integrationCheck` setting is project-specific compatibility configuration;
+do not install a global default such as `npm run build`, because projects have
+different verification commands and this repository has no build command.
+
 ## Contents
 
 ### Core packages
@@ -11,7 +28,7 @@ This repository contains pi-related integrations and extensions.
 - [`fleet/`](./fleet/) – sub-agent runtime for pi (run concurrent child `pi` processes with per-agent role prompts, models, and tool restrictions; the `fleet_run` tool and `/fleet` command)
 - [`planner/`](./planner/) – plans as data for pi (a validated task DAG with per-task acceptance criteria; the `plan_create`/`plan_update` tools and `/plan` dashboard)
 - [`critic/`](./critic/) – independent advisor/reviewer for pi (fresh-context read-only review with the `critic_review`/`critic_advise` tools and `/critic` command)
-- [`orchestrator/`](./orchestrator/) – thin multi-agent composition layer for pi (`/orchestrate` drives planner + fleet + critic inside a pdca loop)
+- [`orchestrator/`](./orchestrator/) – deterministic multi-agent composition layer for pi (`/orchestrate` drives typed task pipelines and final verification; PDCA remains an optional compatibility control mode)
 - [`spawn/`](./spawn/) – detached sub-agent jobs for pi (launch child `pi` processes as background jobs in tmux windows, on [exe.dev](https://exe.dev) cloud VMs, or in [microsandbox](https://microsandbox.dev) microVMs; the `spawn_agent`/`spawn_jobs`/`spawn_output`/`spawn_kill` tools and `/spawn` command)
 
 ### Integrations

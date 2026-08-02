@@ -10,7 +10,8 @@ import {
 } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentDefinition } from "../fleet/registry.ts";
+import { fileURLToPath } from "node:url";
+import { parsePiJsonOutput, type AgentDefinition } from "@pi-kit/agent-types";
 import {
   buildEnvExports,
   buildJobPiArgs,
@@ -70,9 +71,16 @@ import {
   maintainSpawnJobs,
   selectJobsForPruning,
 } from "./maintenance.ts";
-import { parsePiJsonOutput } from "../fleet/runner.ts";
 import { registryPath } from "./jobs.ts";
 import type { BackendCapabilities, KillResult } from "@pi-kit/agent-types";
+
+describe("package boundary", () => {
+  it("does not import Fleet source", () => {
+    const root = path.dirname(fileURLToPath(import.meta.url));
+    const files = ["index.ts", "jobs.ts", "runner-adapter.ts", "agent-command.ts", "config.ts", "backends/tmux.ts", "backends/exedev.ts"];
+    for (const file of files) assert.doesNotMatch(readFileSync(path.join(root, file), "utf8"), /from\s+["'][^"']*fleet\//);
+  });
+});
 
 function def(
   name: string,

@@ -1,4 +1,5 @@
 {
+  "executionMode": "local",
   "model": "",
   "scaleMax": 10,
   "passThreshold": 8,

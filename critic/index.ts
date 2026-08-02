@@ -3,11 +3,8 @@ import { defineTool } from "@mariozechner/pi-coding-agent";
 import { Type } from "@mariozechner/pi-ai";
 import {
   createFullOutputSaver,
-  cleanupHostSpawnJobs,
-  createHostSpawn,
+  createHostRuntime,
   discoverAgents,
-  isTmuxAvailable,
-  loadHostSpawnConfig,
 } from "../fleet/host.ts";
 import { DEFAULT_TMUX_SESSION } from "../fleet/tmux.ts";
 import type { AgentDefinition } from "../fleet/registry.ts";
@@ -70,6 +67,7 @@ export default function (pi: ExtensionAPI) {
       `[critic] Using defaults. Fix ${getConfigPath()} or the CRITIC_* env vars, then /reload.`,
     );
     config = {
+      executionMode: "local",
       scaleMax: 10,
       passThreshold: 8,
       timeoutMs: 5 * 60 * 1000,
@@ -80,9 +78,8 @@ export default function (pi: ExtensionAPI) {
     };
   }
 
-  const spawnConfig = loadHostSpawnConfig(config, "pi-critic");
-  const spawnTmuxLive = spawnConfig.backend === "tmux" && isTmuxAvailable();
-  const spawn = createHostSpawn(config, "pi-critic", spawnConfig);
+  const runtime = createHostRuntime(config, "pi-critic");
+  const spawn = runtime.spawn;
 
   /** Resolve the critic agent definition, applying the config model override. */
   function criticAgent(cwd: string): AgentDefinition {
@@ -117,7 +114,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   pi.on("session_start", async () => {
-    await cleanupHostSpawnJobs(spawnConfig, "pi-critic");
+    await runtime.cleanup();
   });
 
   pi.registerTool(
@@ -188,20 +185,11 @@ export default function (pi: ExtensionAPI) {
         };
         const prompt = buildCriticPrompt(request);
 
-        let run = await dispatchCritic(ctx.cwd, prompt, signal);
+        const run = await dispatchCritic(ctx.cwd, prompt, signal);
         if (run.status !== "ok") {
           throw new Error(`critic run ${run.status}: ${run.output}`);
         }
-        let review = parseCriticOutput(run.output, request);
-
-        // One automatic re-run before an unscorable review counts.
-        if (!review.passed && review.scores.length === 0) {
-          run = await dispatchCritic(ctx.cwd, prompt, signal);
-          if (run.status === "ok") {
-            const retry = parseCriticOutput(run.output, request);
-            if (retry.scores.length > 0) review = retry;
-          }
-        }
+        const review = parseCriticOutput(run.output, request);
 
         return {
           content: [
@@ -266,8 +254,7 @@ export default function (pi: ExtensionAPI) {
         `  Tools:      ${def.tools?.join(", ") ?? "(parent's tools)"}`,
         `  Scale:      1..${config.scaleMax}, default threshold ${config.passThreshold}`,
         `  Timeout:    ${Math.round(config.timeoutMs / 1000)}s`,
-        `  spawn:      backend ${spawnConfig.backend} (config: ${spawnConfig.configPath ?? "defaults / environment variables"})`,
-        `  tmux:       ${spawnTmuxLive ? `runner windows in session "${spawnConfig.tmuxSession}"` : spawnConfig.backend === "tmux" ? "spawn backend selected but tmux is not installed" : "not used by selected spawn backend"}`,
+        `  execution:  ${runtime.mode}${runtime.spawnConfig ? ` (${runtime.spawnConfig.backend})` : ""}`,
         `  Config:     ${config.configPath ?? "defaults / environment variables"}`,
       ];
       ctx.ui.notify(lines.join("\n"), "info");

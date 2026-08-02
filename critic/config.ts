@@ -12,6 +12,7 @@ const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
  * the extension works with zero configuration.
  */
 export interface CriticConfig extends TmuxSettings {
+  executionMode: "local" | "spawn";
   /** Model override for critic runs; a strong model here pays for itself. */
   model?: string;
   /** Top of the scoring scale (scores run 1..scaleMax). */
@@ -27,6 +28,7 @@ export interface CriticConfig extends TmuxSettings {
 }
 
 interface RawCriticConfig {
+  executionMode?: string;
   model?: string;
   scaleMax?: number | string;
   passThreshold?: number | string;
@@ -87,6 +89,7 @@ function loadRawConfig(): { raw: RawCriticConfig; configPath?: string } {
   return {
     raw: {
       model: process.env.CRITIC_MODEL,
+      executionMode: process.env.CRITIC_EXECUTION_MODE,
       scaleMax: process.env.CRITIC_SCALE_MAX,
       passThreshold: process.env.CRITIC_PASS_THRESHOLD,
       timeoutMs: process.env.CRITIC_TIMEOUT_MS,
@@ -123,6 +126,7 @@ export function loadConfig(): CriticConfig {
   }
 
   return {
+    executionMode: raw.executionMode === "spawn" ? "spawn" : "local",
     model: raw.model?.trim() || undefined,
     scaleMax: Math.round(scaleMax),
     passThreshold: Math.round(passThreshold),

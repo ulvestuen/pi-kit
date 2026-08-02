@@ -11,7 +11,7 @@
 
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
-import { sanitizeTmuxName, shellQuote } from "../../fleet/tmux.ts";
+import { sanitizeCommandName as sanitizeTmuxName, shellQuote } from "@pi-kit/agent-types";
 import {
   buildEnvExports,
   buildJsonEventLogFilter,

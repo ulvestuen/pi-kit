@@ -19,8 +19,7 @@
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
-import type { AgentDefinition } from "../fleet/registry.ts";
-import type { BackendCapabilities, KillResult } from "@pi-kit/agent-types";
+import type { AgentDefinition, BackendCapabilities, KillResult } from "@pi-kit/agent-types";
 
 export type SpawnBackendName = "tmux" | "exedev" | "microsandbox";
 

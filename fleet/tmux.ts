@@ -13,10 +13,10 @@
  * it with fakes and host.ts provides the real ones.
  */
 
-import type { SpawnFn, SpawnOutcome, SpawnRequest } from "./runner.ts";
+import { DEFAULT_TMUX_SESSION, sanitizeCommandName, shellQuote, type SpawnFn, type SpawnOutcome, type SpawnRequest } from "@pi-kit/agent-types";
 
 /** One shared session by default, so a single attach shows every agent. */
-export const DEFAULT_TMUX_SESSION = "pi-agents";
+export { DEFAULT_TMUX_SESSION };
 
 /** Settings shared by every extension that mirrors sub-agents into tmux. */
 export interface TmuxSettings {
@@ -49,14 +49,11 @@ export interface TmuxMirrorOptions {
 
 /** tmux window names: no dots/colons (target syntax) or whitespace. */
 export function sanitizeTmuxName(name: string): string {
-  const cleaned = name.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
-  return cleaned || "task";
+  return sanitizeCommandName(name);
 }
 
 /** Single-quote a string for POSIX shells (the tail command tmux runs). */
-export function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, "'\\''")}'`;
-}
+export { shellQuote };
 
 /** The command a mirror window runs: follow the log from the beginning. */
 export function buildTailCommand(logPath: string): string {

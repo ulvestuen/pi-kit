@@ -13,7 +13,7 @@
  * user-owned resource (`ssh exe.dev rm <vm>` when you are done with it).
  */
 
-import { shellQuote } from "../../fleet/tmux.ts";
+import { shellQuote } from "@pi-kit/agent-types";
 import {
   buildEnvExports,
   buildJsonEventLogFilter,

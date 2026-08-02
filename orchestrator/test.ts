@@ -167,7 +167,7 @@ describe("applyTaskResult", () => {
     );
     const t1 = getTask(plan, "t1")!;
     assert.strictEqual(t1.status, "ready");
-    assert.match(t1.description, /Attempt 1 timeout: task timed out/);
+    assert.match(t1.attemptFeedback[0].summary, /Attempt 1 timeout: task timed out/);
   });
 
   it("fails the task at the attempt cap", () => {
@@ -209,9 +209,9 @@ describe("applyReview", () => {
     );
     const t1 = getTask(plan, "t1")!;
     assert.strictEqual(t1.status, "ready");
-    assert.match(t1.description, /Review of attempt 1 FAILED/);
-    assert.match(t1.description, /- works: not verified/);
-    assert.match(t1.description, /- tests: missing edge case/);
+    assert.match(t1.attemptFeedback[0].summary, /Review of attempt 1 FAILED/);
+    assert.match(t1.attemptFeedback[0].summary, /- works: not verified/);
+    assert.match(t1.attemptFeedback[0].summary, /- tests: missing edge case/);
   });
 
   it("fails the task when review fails at the attempt cap", () => {
@@ -337,7 +337,7 @@ describe("end-to-end simulation: 5-task DAG to FINAL", () => {
     assert.strictEqual(getTask(plan, "t4")!.attempts, 1);
     assert.strictEqual(getTask(plan, "t5")!.attempts, 1);
     // Critic feedback landed in the re-dispatched brief.
-    assert.match(getTask(plan, "t2")!.description, /no test for empty input/);
+    assert.match(getTask(plan, "t2")!.attemptFeedback[0].summary, /no test for empty input/);
     assert.strictEqual(loop.status, "final");
   });
 
@@ -426,9 +426,9 @@ describe("lifecycle retries with critic evidence", () => {
     );
     const t1 = getTask(plan, "t1")!;
     assert.strictEqual(t1.status, "ready");
-    assert.match(t1.description, /Review of attempt 1 FAILED/);
-    assert.match(t1.description, /- tests fail/);
-    assert.match(t1.description, /- missing edge case/);
+    assert.match(t1.attemptFeedback[0].summary, /Review of attempt 1 FAILED/);
+    assert.match(t1.attemptFeedback[0].summary, /- tests fail/);
+    assert.match(t1.attemptFeedback[0].summary, /- missing edge case/);
   });
 
   it("attempts count increments on each dispatch", () => {
@@ -460,7 +460,7 @@ describe("worktree behavior", () => {
     const { buildWorktreeArgs } = await import("../fleet/runner.ts");
     const withParent = buildWorktreeArgs("fleet/task-1-100", "/tmp/wt", "feat-parent");
     assert.deepStrictEqual(withParent, [
-      "worktree", "add", "-b", "fleet/task-1-100", "feat-parent", "/tmp/wt",
+      "worktree", "add", "-b", "fleet/task-1-100", "/tmp/wt", "feat-parent",
     ]);
     const withoutParent = buildWorktreeArgs("fleet/task-1-100", "/tmp/wt");
     assert.deepStrictEqual(withoutParent, [
@@ -760,11 +760,11 @@ describe("end-to-end: legacy plain-text task → structured artifact handoff to 
     // t2 should be re-queued with critic feedback in the brief
     assert.strictEqual(getTask(plan, "t2")!.status, "ready");
     assert.match(
-      getTask(plan, "t2")!.description,
+      getTask(plan, "t2")!.attemptFeedback[0].summary,
       /Review of attempt 1 FAILED/,
     );
     assert.match(
-      getTask(plan, "t2")!.description,
+      getTask(plan, "t2")!.attemptFeedback[0].summary,
       /missing edge case for empty input/,
     );
     // Artifacts from t1 should still be accessible in the plan

@@ -129,8 +129,14 @@ export interface RunEvent {
     | "wave_start"
     | "task_start"
     | "task_end"
+    | "check_start"
+    | "check_end"
+    | "evidence_start"
+    | "evidence_end"
     | "review_start"
     | "review_end"
+    | "commit_start"
+    | "commit_end"
     | "wave_end";
   payload: unknown;
 }

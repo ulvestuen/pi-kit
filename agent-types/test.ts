@@ -10,6 +10,19 @@ import type {
   RunEvent,
   ToolCallSummary,
 } from "./src/types.ts";
+import { parseAgentDefinition, shellQuote, type SpawnFn, type ExecutionMode } from "./src/index.ts";
+
+describe("shared runtime contracts", () => {
+  it("parses agent definitions and exposes process contracts", () => {
+    const definition = parseAgentDefinition("worker.md", "---\nname: worker\ndescription: works\n---\nprompt");
+    const mode: ExecutionMode = "local";
+    const spawn: SpawnFn = async () => ({ exitCode: 0, stdout: "", stderr: "" });
+    assert.strictEqual(definition.name, "worker");
+    assert.strictEqual(mode, "local");
+    assert.strictEqual(typeof spawn, "function");
+    assert.strictEqual(shellQuote("it's"), "'it'\\''s'");
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Round-trip: construct every interface and verify shape

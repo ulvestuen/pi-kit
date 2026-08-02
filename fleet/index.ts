@@ -7,12 +7,10 @@ import { Type } from "@mariozechner/pi-ai";
 import { getConfigPath, loadConfig, type FleetConfig } from "./config.ts";
 import {
   createFullOutputSaver,
-  cleanupHostSpawnJobs,
-  createHostSpawn,
+  createHostRuntime,
   createWorktreeRoot,
   discoverAgents,
   isTmuxAvailable,
-  loadHostSpawnConfig,
 } from "./host.ts";
 import { DEFAULT_TMUX_SESSION } from "./tmux.ts";
 import type { AgentDefinition } from "./registry.ts";
@@ -77,7 +75,8 @@ export default function (pi: ExtensionAPI) {
       maxConcurrent: 4,
       maxBatch: 8,
       defaultTimeoutMs: 10 * 60 * 1000,
-      outputCapBytes: 50 * 1024,
+      outputCapBytes: 8 * 1024,
+      executionMode: "local",
       piBinary: "pi",
       injectSystemPrompt: true,
       tmux: true,
@@ -86,10 +85,8 @@ export default function (pi: ExtensionAPI) {
     };
   }
 
-  const spawnConfig = loadHostSpawnConfig(config, "pi-fleet");
-  /** Whether sub-agents actually get live tmux windows on this host. */
-  const tmuxLive = spawnConfig.backend === "tmux" && isTmuxAvailable();
-  const spawn = createHostSpawn(config, "pi-fleet", spawnConfig);
+  const runtime = createHostRuntime(config, "pi-fleet");
+  const spawn = runtime.spawn;
 
   /** In-flight batch info for /fleet pool status. */
   let activeBatch: FleetStateEntry | null = null;
@@ -170,6 +167,9 @@ export default function (pi: ExtensionAPI) {
                   "Branch to create worktrees from instead of HEAD (for prerequisite branch handoff).",
               }),
             ),
+            inheritChildResources: Type.Optional(Type.Boolean({
+              description: "Load extensions and skills in this child. Default false for isolation.",
+            })),
           }),
           {
             description:
@@ -189,6 +189,7 @@ export default function (pi: ExtensionAPI) {
           inputArtifacts: t.inputArtifacts,
           parentRunIds: t.parentRunIds,
           parentBranch: t.parentBranch,
+          inheritChildResources: t.inheritChildResources,
         }));
 
         const batchId = `batch-${Date.now()}-${++batchCounter}`;
@@ -271,7 +272,7 @@ export default function (pi: ExtensionAPI) {
   );
 
   pi.on("session_start", async (_event, ctx: ExtensionContext) => {
-    await cleanupHostSpawnJobs(spawnConfig, "pi-fleet");
+    await runtime.cleanup();
     // Internal synchronous spawn jobs from an interrupted parent are killed
     // above; mark any batch still recorded as "running" as aborted.
     let latest: FleetStateEntry | null = null;
@@ -294,14 +295,18 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("before_agent_start", async (event) => {
     if (!config.injectSystemPrompt) return;
+    const spawnConfig = await runtime.describe();
+    const tmuxLive = spawnConfig?.backend === "tmux" && isTmuxAvailable();
     return {
-      systemPrompt: `${event.systemPrompt}\n\n${buildSystemPrompt(config, spawnConfig.backend, tmuxLive)}`,
+      systemPrompt: `${event.systemPrompt}\n\n${buildSystemPrompt(config, runtime.mode === "local" ? "local" : spawnConfig?.backend ?? "spawn", tmuxLive)}`,
     };
   });
 
   pi.registerCommand("fleet", {
     description: "List discovered fleet agents and current pool status",
     handler: async (_args, ctx) => {
+      const spawnConfig = await runtime.describe();
+      const tmuxLive = spawnConfig?.backend === "tmux" && isTmuxAvailable();
       const { registry, errors } = discoverAgents(ctx.cwd);
       const agents = [...registry.values()].sort((a, b) =>
         a.name.localeCompare(b.name),
@@ -323,11 +328,11 @@ export default function (pi: ExtensionAPI) {
       lines.push(
         `  Pool: max ${config.maxConcurrent} concurrent, batch cap ${config.maxBatch}, timeout ${Math.round(config.defaultTimeoutMs / 1000)}s`,
       );
-      lines.push(`  spawn: backend ${spawnConfig.backend} (config: ${spawnConfig.configPath ?? "defaults / environment variables"})`);
+      lines.push(runtime.mode === "local" ? "  execution: local (Spawn is not used)" : `  spawn: backend ${spawnConfig?.backend ?? "initializing"} (config: ${spawnConfig?.configPath ?? "defaults / environment variables"})`);
       lines.push(
         tmuxLive
           ? `  tmux: sub-agent runner windows in session "${spawnConfig.tmuxSession}" — attach with: tmux attach -t ${spawnConfig.tmuxSession}`
-          : spawnConfig.backend === "tmux"
+          : spawnConfig?.backend === "tmux"
             ? "  tmux: spawn backend selected but tmux is not installed"
             : "  tmux: not used by the selected spawn backend",
       );

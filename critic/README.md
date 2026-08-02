@@ -1,5 +1,7 @@
 # critic — an independent advisor/reviewer for pi
 
+Execution defaults to synchronous `executionMode: "local"`, which performs no Spawn initialization or probing. Set `executionMode: "spawn"` explicitly to use a configured Spawn backend. Session startup calls the shared Fleet host runtime's `cleanup()`; local cleanup is a no-op.
+
 **critic** removes the conflict of interest from self-checking work: a
 separate agent with **fresh context** and read-only tools inspects the work
 and scores it against an explicit rubric. It is part of the pi-kit

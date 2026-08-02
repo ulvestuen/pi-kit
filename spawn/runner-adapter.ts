@@ -11,12 +11,12 @@
  * are delegated to the provided fallback SpawnFn.
  */
 
-import type { AgentDefinition } from "../fleet/registry.ts";
 import type {
+  AgentDefinition,
   SpawnFn,
   SpawnOutcome,
   SpawnRequest,
-} from "../fleet/runner.ts";
+} from "@pi-kit/agent-types";
 import type { SpawnConfig } from "./config.ts";
 import {
   isTerminal,

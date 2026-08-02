@@ -228,7 +228,5 @@ fakes (plus real temp directories for the file-backed pieces).
 - `config.ts` — configuration loading.
 - `test.ts` — unit tests.
 
-Like the other pi-kit extensions, spawn imports the fleet agent registry
-(`../fleet/registry.ts`, `../fleet/host.ts`, `../fleet/tmux.ts`) via
-workspace-relative paths; a standalone copy needs the `fleet/` folder
-alongside it.
+Spawn and Fleet share registry, discovery, process, and command contracts from
+`@pi-kit/agent-types`. Spawn does not import Fleet source.

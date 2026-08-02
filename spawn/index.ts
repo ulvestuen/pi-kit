@@ -4,8 +4,10 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 import { defineTool } from "@mariozechner/pi-coding-agent";
 import { Type } from "@mariozechner/pi-ai";
-import { discoverAgents } from "../fleet/host.ts";
-import { getAgent } from "../fleet/registry.ts";
+import { discoverAgentRegistry, getAgent } from "@pi-kit/agent-types";
+import { fileURLToPath } from "node:url";
+import * as os from "node:os";
+import * as path from "node:path";
 import {
   defaultConfig,
   getConfigPath,
@@ -69,6 +71,11 @@ function watchHint(job: SpawnJob, config: SpawnConfig): string {
 }
 
 export default function (pi: ExtensionAPI) {
+  const discoverAgents = (cwd: string) => discoverAgentRegistry([
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "fleet", "agents"),
+    path.join(process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent"), "agents"),
+    path.join(cwd, ".pi", "agents"),
+  ]);
   let config: SpawnConfig;
   try {
     config = loadConfig();
