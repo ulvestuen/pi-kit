@@ -27,7 +27,7 @@ import { discoverAgents, nodeSpawn } from "./host.ts";
 describe("direct host execution", () => {
   const fleetDir = path.dirname(fileURLToPath(import.meta.url));
 
-  it("discovers the pinned default model on a fresh install without overrides", () => {
+  it("leaves the model unset on a fresh install without overrides", () => {
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
     process.env.PI_CODING_AGENT_DIR = path.join(fleetDir, ".missing-test-agent-home");
     try {
@@ -35,10 +35,10 @@ describe("direct host execution", () => {
         path.join(fleetDir, ".missing-test-project"),
       );
       assert.deepStrictEqual(errors, []);
-      for (const name of ["auditor", "critic", "implementer"]) {
+      for (const name of ["auditor", "critic", "implementer", "planner", "scout"]) {
         const definition = registry.get(name);
         assert.ok(definition, `${name} must be included in the kit defaults`);
-        assert.strictEqual(definition.model, "openai-codex/gpt-5.6-sol");
+        assert.strictEqual(definition.model, undefined);
       }
     } finally {
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
