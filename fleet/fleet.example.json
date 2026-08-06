@@ -1,8 +1,0 @@
-{
-  "maxConcurrent": 4,
-  "maxBatch": 8,
-  "defaultTimeoutMs": 600000,
-  "outputCapBytes": 8192,
-  "piBinary": "pi",
-  "injectSystemPrompt": true
-}
