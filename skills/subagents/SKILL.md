@@ -36,6 +36,39 @@ extensions/skills; off by default), or `--system-prompt "<text>"` instead of
 The script prints the child's final answer to stdout and exits non-zero on
 failure or timeout.
 
+## Run in a temporary Herdr tab
+
+Before launching a sub-agent, check whether the caller is inside Herdr:
+
+```sh
+test "${HERDR_ENV:-}" = 1
+```
+
+When this succeeds, run **each** sub-agent in its own temporary tab instead of
+in the caller's pane:
+
+1. Run `herdr tab` and `herdr pane` first; the installed CLI is authoritative.
+2. Create an unfocused tab in the caller's workspace and preserve the requested
+   cwd:
+
+   ```sh
+   herdr tab create --workspace "$HERDR_WORKSPACE_ID" --cwd <cwd> --label "subagent: <role>" --no-focus
+   ```
+
+3. Parse `.result.tab.tab_id` and `.result.root_pane.pane_id` from the JSON
+   response. Never infer IDs.
+4. Start the runner in that root pane with `herdr pane run <pane-id> <command>`.
+   This is an ordinary command, so do not use `herdr agent start`. Redirect its
+   output and exit status to unique files in a temporary directory so the
+   caller can wait for completion and recover the exact final answer.
+5. After reading the result, close only the created tab with
+   `herdr tab close <tab-id>` and remove the temporary files. Do this on
+   success, failure, and timeout; keep the user's focus in the calling tab
+   throughout.
+
+For fan-out, create one tab per sub-agent and wait for them in parallel. When
+`HERDR_ENV` is not `1`, invoke the runner directly as shown above.
+
 ## Patterns
 
 - **Fan-out**: run several sub-agents in parallel by launching multiple
