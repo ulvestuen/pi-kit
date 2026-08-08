@@ -8,8 +8,8 @@ description: Search the web with the Kagi Search API from the command line. Use 
 Run a web search through the Kagi Search API using the bundled zero-dependency
 Node script. Requires the `KAGI_API_KEY` environment variable (get a token at
 https://kagi.com/settings?p=api). `KAGI_BASE_URL` optionally overrides the API
-endpoint (default `https://kagi.com/api/v0`; a URL ending in `/api/v1` switches
-to the v1 request format automatically).
+endpoint (default `https://kagi.com/api/v1`; set it to a legacy v0 endpoint only
+when using a legacy API key).
 
 ## Usage
 

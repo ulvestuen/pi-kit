@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { buildSearchRequest, DEFAULT_BASE_URL } from "./kagi-search-request.mjs";
+
 // Kagi web search CLI. Requires KAGI_API_KEY. No dependencies (Node 18+).
 //
 // Usage:
@@ -25,28 +27,15 @@ for (let i = 0; i < args.length; i++) {
 
 const query = positional.join(" ").trim();
 const apiKey = process.env.KAGI_API_KEY;
-const baseUrl = (process.env.KAGI_BASE_URL || "https://kagi.com/api/v0").replace(/\/$/, "");
+const baseUrl = process.env.KAGI_BASE_URL || DEFAULT_BASE_URL;
 
 if (!query) fail('usage: node kagi-search.mjs "query" [--limit 10] [--related] [--json]');
 if (!apiKey) fail("KAGI_API_KEY is not set. Get a token from https://kagi.com/settings?p=api");
 if (!Number.isFinite(opts.limit) || opts.limit < 1 || opts.limit > 100) fail(`--limit must be 1-100 (got: ${opts.limit})`);
 
-// The v0 API is a GET with query params; the v1 API is a POST with a JSON body.
-const isV1 = /\/api\/v1$/.test(baseUrl);
 const limit = Math.round(opts.limit);
-const resp = await fetch(
-  isV1
-    ? `${baseUrl}/search`
-    : `${baseUrl}/search?${new URLSearchParams({ q: query, limit: String(limit) })}`,
-  {
-    method: isV1 ? "POST" : "GET",
-    headers: {
-      Authorization: `Bot ${apiKey}`,
-      ...(isV1 ? { "Content-Type": "application/json", Accept: "application/json" } : {}),
-    },
-    body: isV1 ? JSON.stringify({ query, limit }) : undefined,
-  },
-);
+const request = buildSearchRequest({ baseUrl, apiKey, query, limit });
+const resp = await fetch(request.url, request.init);
 
 if (!resp.ok) {
   const errText = (await resp.text().catch(() => "")).trim();
