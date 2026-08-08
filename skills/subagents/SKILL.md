@@ -30,11 +30,14 @@ node {baseDir}/run-subagent.mjs --role scout "Where is retry logic implemented i
 
 Options: `--model <m>`, `--cwd <dir>`, `--tools a,b,c` (override the role's
 tools), `--timeout <seconds>` (default 600), `--inherit` (let the child load
-extensions/skills; off by default), or `--system-prompt "<text>"` instead of
-`--role` for an ad-hoc role. Set `PI_BINARY` if `pi` is not on `PATH`.
+extensions/skills; off by default), `--stream` (live activity to stderr), or
+`--system-prompt "<text>"` instead of `--role` for an ad-hoc role. Set
+`PI_BINARY` if `pi` is not on `PATH`.
 
-The script prints the child's final answer to stdout and exits non-zero on
-failure or timeout.
+The script prints only the child's final answer to stdout and exits non-zero on
+failure or timeout. With `--stream`, assistant text, provider-exposed thinking,
+and tool activity are written live to stderr; stdout remains safe to capture as
+the authoritative final answer.
 
 ## Run in a temporary Herdr tab
 
@@ -58,10 +61,29 @@ in the caller's pane:
 3. Parse `.result.tab.tab_id` and `.result.root_pane.pane_id` from the JSON
    response. Never infer IDs.
 4. Start the runner in that root pane with `herdr pane run <pane-id> <command>`.
-   This is an ordinary command, so do not use `herdr agent start`. Redirect its
-   output and exit status to unique files in a temporary directory so the
-   caller can wait for completion and recover the exact final answer.
-5. After reading the result, close only the created tab with
+   This is an ordinary command, so do not use `herdr agent start`.
+5. **Always pass `--stream` inside Herdr.** Preserve stdout as the exact final
+   answer while teeing live stderr to the tab and a progress log. A generated
+   Bash script should use this pattern (with unique paths per sub-agent):
+
+   ```bash
+   #!/usr/bin/env bash
+   {
+     node {baseDir}/run-subagent.mjs --stream --role <role> ... "<task>" \
+       >"$result_file"
+     printf '%s\n' "$?" >"$status_file.tmp"
+   } 2>&1 | tee "$progress_file" >&2
+   # Publish completion only after tee has flushed the progress log.
+   mv "$status_file.tmp" "$status_file"
+   ```
+
+   Run the generated script with `bash`, since the stderr tee uses Bash process
+   substitution. Do **not** use `>result 2>&1`: that hides live activity from
+   the Herdr tab and mixes progress with the final answer. The tab should show
+   assistant text, available thinking deltas, tool calls/output, and completion
+   status while the sub-agent runs. On failure, use the progress log for
+   diagnostics; on success, read the result file for the exact final answer.
+6. After reading the result, close only the created tab with
    `herdr tab close <tab-id>` and remove the temporary files. Do this on
    success, failure, and timeout; keep the user's focus in the calling tab
    throughout.
