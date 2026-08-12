@@ -4,7 +4,7 @@
   "description": "pi extensions, integrations, and skills",
   "type": "module",
   "scripts": {
-    "test": "node --test skills/kagi-search/kagi-search-request.test.mjs skills/subagents/run-subagent.test.mjs && npm run test --workspaces --if-present",
+    "test": "node --test skills/kagi-search/kagi-search-request.test.mjs skills/subagents/run-subagent.test.mjs skills/using-jira/jira.test.mjs && npm run test --workspaces --if-present",
     "verify": "npm test"
   },
   "keywords": [

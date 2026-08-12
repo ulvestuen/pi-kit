@@ -27,6 +27,7 @@ useful, a zero-dependency Node script the agent runs from the shell:
 
 - [`skills/exa-search/`](./skills/exa-search/) – web search via the Exa API (`exa-search.mjs`, needs `EXA_API_KEY`)
 - [`skills/kagi-search/`](./skills/kagi-search/) – web search via the Kagi API (`kagi-search.mjs`, needs `KAGI_API_KEY`)
+- [`skills/using-jira/`](./skills/using-jira/) – Jira Cloud and Server/Data Center issue management via a zero-dependency CLI (`jira.mjs`, needs `JIRA_BASE_URL` and `JIRA_AUTH_TOKEN`)
 - [`skills/subagents/`](./skills/subagents/) – delegate focused work to isolated `pi` child processes with role prompts (scout, planner, implementer, critic, auditor) via `run-subagent.mjs`
 - [`skills/pdca/`](./skills/pdca/) – the Plan-Do-Check-Act quality loop, described by a single diagram
 
