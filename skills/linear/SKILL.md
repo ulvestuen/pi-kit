@@ -1,5 +1,5 @@
 ---
-name: managing-linear
+name: linear
 description: Reads and manages Linear teams, users, projects, workflow states, labels, issues, and comments through the Linear GraphQL API. Use when asked to inspect, create, update, or comment on Linear issues, or run a custom Linear GraphQL operation.
 ---
 

@@ -1,5 +1,5 @@
 ---
-name: using-jira
+name: jira
 description: Reads, searches, creates, and updates Jira issues through Jira Cloud or self-hosted Jira REST APIs. Use when asked to inspect or change Jira issues, comments, transitions, or projects and JIRA_BASE_URL plus JIRA_AUTH_TOKEN are configured.
 ---
 
