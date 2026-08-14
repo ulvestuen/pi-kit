@@ -99,8 +99,6 @@ reading.
 
 Goal: add capability only where it keeps the one-diagram, one-page property.
 
-- [ ] **Threema inbound media.** Support inbound image/file messages — only if
-      it fits the existing webhook diagram without new moving parts.
 - [ ] **Skill health check.** A tiny `doctor` script that reports, per skill,
       whether its required environment variables are set — one table, at a
       glance.
