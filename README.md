@@ -5,6 +5,22 @@ This repository contains pi-related integrations and skills.
 See [`ROADMAP.md`](./ROADMAP.md) for the project direction: keeping every
 skill, process, and piece of tooling simple and visually understandable.
 
+```mermaid
+flowchart LR
+    pi(("pi agent")) --> skills
+    pi --> threema
+    subgraph kit["pi-kit"]
+        direction TB
+        subgraph skills["skills/ · plain skills"]
+            search["exa-search · kagi-search<br/>web search"]
+            trackers["jira · linear<br/>issue trackers"]
+            subagents["subagents<br/>delegation roles"]
+            pdca["pdca<br/>quality loop"]
+        end
+        threema["threema/ · extension<br/>send + receive messages"]
+    end
+```
+
 ## Verification
 
 Run every workspace test suite from the repository root:
@@ -16,6 +32,12 @@ npm run verify
 
 Both commands run the same real workspace verification. The repository has no
 build artifacts, so it intentionally does not define a `build` script.
+
+Check skill configuration without exposing any values:
+
+```sh
+node skills/doctor.mjs
+```
 
 ## Contents
 
@@ -34,6 +56,10 @@ useful, a zero-dependency Node script the agent runs from the shell:
 - [`skills/linear/`](./skills/linear/) – read and manage Linear issues through its GraphQL API (`linear.mjs`, needs `LINEAR_API_KEY`)
 - [`skills/subagents/`](./skills/subagents/) – delegate focused work to isolated `pi` child processes with role prompts (scout, planner, implementer, critic, auditor) via `run-subagent.mjs`
 - [`skills/pdca/`](./skills/pdca/) – the Plan-Do-Check-Act quality loop, described by a single diagram
+
+New skills start from [`skills/TEMPLATE.md`](./skills/TEMPLATE.md): diagram
+first, one page of prose, one script and focused test when code is needed, and
+no runtime dependencies.
 
 ## Documentation
 

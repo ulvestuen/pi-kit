@@ -39,11 +39,24 @@ What already matches the principle, and what doesn't yet:
 | Zero-dependency skill scripts | Each skill is one `SKILL.md` + one small `.mjs` | ✅ Simple |
 | PDCA skill | Entire process carried by a single SVG diagram | ✅ The model to copy |
 | Test story | One `npm test` at the root runs everything | ✅ Simple |
-| Skill docs | Prose-only; no diagrams except PDCA | ⚠️ Not visual yet |
-| Subagents skill | Herdr tab procedure is a 6-step prose recipe with an embedded Bash template | ⚠️ Too complex to follow visually |
-| README | A flat link list; no picture of how the pieces fit | ⚠️ Not visual yet |
-| CI | None — tests only run when someone remembers to | ⚠️ Missing safety net |
-| Test coverage | `exa-search.mjs` and the Threema webhook flow lack focused tests | ⚠️ Uneven |
+| Skill docs | Every skill has a diagram and follows the shared template | ✅ Visual |
+| Subagents skill | One tested helper owns the Herdr tab lifecycle | ✅ Simple |
+| README | Architecture and configuration health are visible at a glance | ✅ Visual |
+| CI | GitHub Actions runs the root test command on pushes and pull requests | ✅ Automated |
+| Test coverage | Exa request shaping and the Threema webhook flow have focused tests | ✅ Even |
+
+## Implementation plan
+
+The roadmap is implemented in five reviewable workstreams. Each workstream has
+one owner, a concrete acceptance check, and no build or runtime dependency.
+
+| Workstream | Implementation | Acceptance |
+| --- | --- | --- |
+| Visual foundation | Put the repo map in `README.md`; add a small flow diagram to each skill; add outbound and inbound sequences to `threema/README.md`; define `skills/TEMPLATE.md` | A visitor can identify every component and its data flow before reading commands |
+| Sub-agent simplification | Move Herdr tab creation, streaming, result capture, and cleanup into `run-in-herdr-tab.sh`; replace the prose recipe and patterns list with two diagrams | A focused test proves IDs are parsed, output stays clean, and the temporary tab is closed |
+| CLI consistency | Standardize search docs and flags on `--limit` and `--json`; retain Exa's `--num` as a compatibility alias; isolate and test Exa request shaping | Learning either search skill transfers directly to the other without breaking old Exa calls |
+| Safety net | Run all focused tests from root `npm test`; add a Node 22 GitHub Actions job for pushes and pull requests; exercise the real Threema webhook boundary | Local and CI verification use exactly the same command |
+| Controlled growth | Add `skills/doctor.mjs` for a value-free environment status table; require future skills to use the template, one script, one test, and zero runtime dependencies | `node skills/doctor.mjs` gives an at-a-glance status and the template defines the admission gate |
 
 ## The plan
 
@@ -60,18 +73,18 @@ flowchart LR
 Goal: every component explains itself with a diagram, the way PDCA already
 does.
 
-- [ ] **Repo map in the README.** Add the architecture diagram above (or a
+- [x] **Repo map in the README.** Add the architecture diagram above (or a
       refined version) to `README.md` so the first thing a visitor sees is the
       shape of the project, not a link list.
-- [ ] **One diagram per skill.** Give each `SKILL.md` a small Mermaid diagram
+- [x] **One diagram per skill.** Give each `SKILL.md` a small Mermaid diagram
       at the top: the search and tracker skills get a three-node
       `env vars → CLI → API` strip; `subagents` gets a flow showing
       orchestrator → role → result.
-- [ ] **Threema message-flow diagram.** `threema/README.md` is thorough but
+- [x] **Threema message-flow diagram.** `threema/README.md` is thorough but
       300 lines of prose; add one sequence diagram for outbound send and one
       for the inbound webhook path (Gateway → MAC check → allowlist →
       decrypt → pi), then trim prose the diagrams make redundant.
-- [ ] **Standard skill template.** Write a short `skills/TEMPLATE.md` fixing
+- [x] **Standard skill template.** Write a short `skills/TEMPLATE.md` fixing
       the common shape: frontmatter, diagram, configuration table, commands,
       safety notes. New and existing skills converge on it.
 
@@ -80,18 +93,18 @@ does.
 Goal: remove the places where following the docs requires careful multi-step
 reading.
 
-- [ ] **Script the Herdr procedure.** Replace the 6-step manual tab recipe in
+- [x] **Script the Herdr procedure.** Replace the 6-step manual tab recipe in
       `skills/subagents/SKILL.md` with a small helper (e.g.
       `run-in-herdr-tab.sh`) so the skill doc shrinks to "inside Herdr, run
       this instead" plus one diagram. Cover it with a test alongside
       `run-subagent.test.mjs`.
-- [ ] **Add CI.** One GitHub Actions workflow that runs `npm test` on pushes
+- [x] **Add CI.** One GitHub Actions workflow that runs `npm test` on pushes
       and pull requests — a green check is the simplest possible status
       visualization.
-- [ ] **Even out test coverage.** Add a request-shaping test for
+- [x] **Even out test coverage.** Add a request-shaping test for
       `exa-search.mjs` (mirroring `kagi-search-request.test.mjs`) so every
       skill script has at least one focused test.
-- [ ] **Align the search skills.** `exa-search` and `kagi-search` should share
+- [x] **Align the search skills.** `exa-search` and `kagi-search` should share
       identical doc structure and flag conventions (`--json`, limits, error
       handling) so learning one means knowing both.
 
@@ -99,13 +112,13 @@ reading.
 
 Goal: add capability only where it keeps the one-diagram, one-page property.
 
-- [ ] **Skill health check.** A tiny `doctor` script that reports, per skill,
+- [x] **Skill health check.** A tiny `doctor` script that reports, per skill,
       whether its required environment variables are set — one table, at a
       glance.
-- [ ] **New skills on the template.** Candidate integrations (e.g. GitHub
+- [x] **New skills on the template.** Candidate integrations (e.g. GitHub
       issues, calendar) enter only via the Phase 1 template: diagram first,
       one script, one test, zero dependencies.
-- [ ] **Sub-agent role diagram.** A single picture of how the five roles
+- [x] **Sub-agent role diagram.** A single picture of how the five roles
       (scout, planner, implementer, critic, auditor) compose into the
       plan → implement → review pattern, replacing the prose "Patterns"
       section.

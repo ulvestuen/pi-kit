@@ -5,6 +5,11 @@ description: Delegate focused work to isolated pi sub-agents run as child proces
 
 # Sub-agents
 
+```mermaid
+flowchart LR
+    orchestrator["orchestrator"] --> role["focused role<br/>fresh pi process"] --> result["final result<br/>verify before use"]
+```
+
 Delegate a focused piece of work to a fresh `pi` child process with a role
 prompt and a restricted tool set. Each sub-agent starts with no context beyond
 its role and the task text you give it, so write self-contained briefs.
@@ -41,66 +46,30 @@ the authoritative final answer.
 
 ## Run in a temporary Herdr tab
 
-Before launching a sub-agent, check whether the caller is inside Herdr:
+Inside Herdr, use the helper instead of the direct command:
 
 ```sh
-test "${HERDR_ENV:-}" = 1
+bash {baseDir}/run-in-herdr-tab.sh --role scout --cwd /path/to/repo "Find the retry logic."
 ```
 
-When this succeeds, run **each** sub-agent in its own temporary tab instead of
-in the caller's pane:
-
-1. Run `herdr tab` and `herdr pane` first; the installed CLI is authoritative.
-2. Create an unfocused tab in the caller's workspace and preserve the requested
-   cwd:
-
-   ```sh
-   herdr tab create --workspace "$HERDR_WORKSPACE_ID" --cwd <cwd> --label "subagent: <role>" --no-focus
-   ```
-
-3. Parse `.result.tab.tab_id` and `.result.root_pane.pane_id` from the JSON
-   response. Never infer IDs.
-4. Start the runner in that root pane with `herdr pane run <pane-id> <command>`.
-   This is an ordinary command, so do not use `herdr agent start`.
-5. **Always pass `--stream` inside Herdr.** Preserve stdout as the exact final
-   answer while teeing live stderr to the tab and a progress log. A generated
-   Bash script should use this pattern (with unique paths per sub-agent):
-
-   ```bash
-   #!/usr/bin/env bash
-   {
-     node {baseDir}/run-subagent.mjs --stream --role <role> ... "<task>" \
-       >"$result_file"
-     printf '%s\n' "$?" >"$status_file.tmp"
-   } 2>&1 | tee "$progress_file" >&2
-   # Publish completion only after tee has flushed the progress log.
-   mv "$status_file.tmp" "$status_file"
-   ```
-
-   Run the generated script with `bash`, since the stderr tee uses Bash process
-   substitution. Do **not** use `>result 2>&1`: that hides live activity from
-   the Herdr tab and mixes progress with the final answer. The tab should show
-   assistant text, available thinking deltas, tool calls/output, and completion
-   status while the sub-agent runs. On failure, use the progress log for
-   diagnostics; on success, read the result file for the exact final answer.
-6. After reading the result, close only the created tab with
-   `herdr tab close <tab-id>` and remove the temporary files. Do this on
-   success, failure, and timeout; keep the user's focus in the calling tab
-   throughout.
-
-For fan-out, create one tab per sub-agent and wait for them in parallel. When
-`HERDR_ENV` is not `1`, invoke the runner directly as shown above.
+The helper creates an unfocused tab in `HERDR_WORKSPACE_ID`, preserves `--cwd`,
+forces `--stream`, returns only the final answer, and closes the tab plus its
+temporary files on exit. For fan-out, run one helper process per sub-agent in
+parallel. Outside Herdr, invoke `run-subagent.mjs` directly.
 
 ## Patterns
 
-- **Fan-out**: run several sub-agents in parallel by launching multiple
-  commands in the background and collecting their outputs.
-- **Plan → implement → review**: ask `planner` for a task list, run an
-  `implementer` per task (sequentially, or in parallel when tasks touch
-  disjoint files), then have `critic` score the result and `auditor` verify
-  the claims. Iterate on whatever the critic flags.
-- **Isolation**: for risky parallel edits, run each implementer in its own
-  `git worktree` (create it yourself, pass it via `--cwd`, merge afterwards).
+```mermaid
+flowchart LR
+    scout["scout<br/>find evidence"] --> planner["planner<br/>split work"]
+    planner --> implementer["implementer<br/>make one change"]
+    implementer --> critic["critic<br/>review criteria"]
+    critic -->|fixes| implementer
+    critic --> auditor["auditor<br/>verify claims"]
+```
+
+Fan out scouts for independent questions. Run implementers sequentially unless
+they touch disjoint files; use separate worktrees for risky parallel edits.
 
 ## Rules
 

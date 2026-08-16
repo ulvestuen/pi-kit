@@ -1,11 +1,13 @@
 #!/usr/bin/env node
+import { buildSearchRequest, DEFAULT_BASE_URL } from "./exa-search-request.mjs";
+
 // Exa web search CLI. Requires EXA_API_KEY. No dependencies (Node 18+).
 //
 // Usage:
 //   node exa-search.mjs "query" [options]
 //
 // Options:
-//   --num <n>              Number of results, 1-100 (default 5)
+//   --limit <n>            Number of results, 1-100 (default 5)
 //   --type <type>          auto | neural | keyword | fast | deep | deep-reasoning | instant (default auto)
 //   --category <c>         Exa category filter, e.g. news, "research paper", github, company, pdf
 //   --include-domains a,b  Only return results from these domains
@@ -16,13 +18,14 @@
 //   --json                 Print the raw JSON response instead of formatted text
 
 const args = process.argv.slice(2);
-const opts = { num: 5, type: "auto", maxChars: 1000, json: false };
+const opts = { limit: 5, type: "auto", maxChars: 1000, json: false };
 const positional = [];
 
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
   switch (a) {
-    case "--num": opts.num = Number(args[++i]); break;
+    case "--limit":
+    case "--num": opts.limit = Number(args[++i]); break;
     case "--type": opts.type = args[++i]; break;
     case "--category": opts.category = args[++i]; break;
     case "--include-domains": opts.includeDomains = args[++i].split(",").filter(Boolean); break;
@@ -37,31 +40,14 @@ for (let i = 0; i < args.length; i++) {
 
 const query = positional.join(" ").trim();
 const apiKey = process.env.EXA_API_KEY;
-const baseUrl = (process.env.EXA_BASE_URL || "https://api.exa.ai").replace(/\/$/, "");
+const baseUrl = process.env.EXA_BASE_URL || DEFAULT_BASE_URL;
 
-if (!query) fail('usage: node exa-search.mjs "query" [--num 5] [--type auto] [--json]');
+if (!query) fail('usage: node exa-search.mjs "query" [--limit 5] [--type auto] [--json]');
 if (!apiKey) fail("EXA_API_KEY is not set. Get a key from https://dashboard.exa.ai/api-keys");
-if (!Number.isFinite(opts.num) || opts.num < 1 || opts.num > 100) fail(`--num must be 1-100 (got: ${opts.num})`);
+if (!Number.isFinite(opts.limit) || opts.limit < 1 || opts.limit > 100) fail(`--limit must be 1-100 (got: ${opts.limit})`);
 
-const body = {
-  query,
-  type: opts.type,
-  numResults: Math.round(opts.num),
-};
-if (opts.category) body.category = opts.category;
-if (opts.includeDomains?.length) body.includeDomains = opts.includeDomains;
-if (opts.excludeDomains?.length) body.excludeDomains = opts.excludeDomains;
-if (opts.startDate) body.startPublishedDate = opts.startDate;
-if (opts.endDate) body.endPublishedDate = opts.endDate;
-if (opts.maxChars !== 0) {
-  body.contents = { text: opts.maxChars > 0 ? { maxCharacters: opts.maxChars } : true };
-}
-
-const resp = await fetch(`${baseUrl}/search`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json", "x-api-key": apiKey },
-  body: JSON.stringify(body),
-});
+const request = buildSearchRequest({ baseUrl, apiKey, query, options: opts });
+const resp = await fetch(request.url, request.init);
 
 if (!resp.ok) {
   const errText = (await resp.text().catch(() => "")).trim();

@@ -5,10 +5,20 @@ description: Reads and manages Linear teams, users, projects, workflow states, l
 
 # Linear
 
+```mermaid
+flowchart LR
+    env["LINEAR_API_KEY"] --> cli["linear.mjs"] --> api["Linear GraphQL API"]
+```
+
 Use the bundled zero-dependency Node CLI to interact with Linear's GraphQL API.
-It requires `LINEAR_API_KEY`, a personal API key created in Linear under
-**Settings → Security & access → Personal API keys**. `LINEAR_API_URL` may
-override the default endpoint, `https://api.linear.app/graphql`.
+It requires Node.js 18 or newer.
+
+## Configuration
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `LINEAR_API_KEY` | yes | Personal API key from **Settings → Security & access** |
+| `LINEAR_API_URL` | no | GraphQL endpoint; defaults to `https://api.linear.app/graphql` |
 
 ## Read data
 
@@ -74,3 +84,9 @@ node {baseDir}/linear.mjs graphql --file /tmp/operation.graphql --variables-file
 The CLI prints the GraphQL `data` object as formatted JSON. It exits nonzero and
 prints all GraphQL errors when the API returns any. Never print or expose the
 value of `LINEAR_API_KEY`.
+
+## Safety
+
+- Only mutate Linear when the user clearly requested the exact change.
+- Resolve human-readable names to current UUIDs before a mutation.
+- Report API errors plainly and never automatically retry a mutation.

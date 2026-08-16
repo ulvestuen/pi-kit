@@ -1,123 +1,81 @@
 # Threema extension for pi
 
-A pi extension that lets the agent:
+Send and receive Threema text messages from pi. End-to-End mode encrypts
+outbound messages locally and accepts authenticated inbound webhooks; Basic
+mode sends outbound plaintext to Threema Gateway and cannot receive messages.
 
-- send outbound Threema text messages with the `threema_send` tool
-- receive inbound Threema Gateway webhook messages
-- verify the webhook MAC
-- decrypt inbound end-to-end encrypted Threema text messages
-- inject allowed inbound messages into the current pi conversation
+## Message flow
 
-## What it does
+```mermaid
+sequenceDiagram
+    participant Pi as pi
+    participant Ext as Threema extension
+    participant API as Threema Gateway
+    Pi->>Ext: threema_send(message, recipient?)
+    alt End-to-End mode
+        Ext->>API: GET recipient public key
+        Ext->>Ext: encrypt with X25519 + nonce
+        Ext->>API: POST /send_e2e
+    else Basic mode
+        Ext->>API: POST /send_simple
+    end
+    API-->>Ext: message ID
+    Ext-->>Pi: sent confirmation
+```
 
-Outbound messages can be sent through either Threema Gateway mode, depending on how your Gateway ID is registered:
+```mermaid
+sequenceDiagram
+    participant API as Threema Gateway
+    participant Hook as POST /webhook
+    participant MAC as MAC check
+    participant Allow as sender allowlist
+    participant Crypto as decrypt + deduplicate
+    participant Pi as pi
+    API->>Hook: encrypted callback
+    Hook->>MAC: verify shared-secret HMAC
+    MAC->>Allow: authenticated payload
+    Allow->>Crypto: allowed sender
+    Crypto->>Pi: user message or follow-up
+```
 
-- **End-to-End mode** (`send_e2e`, default) — the extension encrypts each message client-side using your private key and the recipient's public key (looked up from the Gateway and cached in memory). Supports inbound messages.
-- **Basic mode** (`send_simple`) — the extension POSTs plaintext to the Gateway and lets Threema do the encryption server-side. Outbound only; Basic IDs cannot receive inbound webhooks.
-
-Pick the mode that matches your Gateway ID via the `mode` config field (`"e2e"` or `"basic"`). Mixing is not allowed by Threema: an E2E ID can only call `/send_e2e`, and a Basic ID can only call `/send_simple`.
-
-Inbound messages (E2E mode only) are accepted through a local webhook server, validated with the Gateway MAC, decrypted with your Threema private key, and then delivered to pi as user messages.
-
-Currently, inbound **text messages** are supported.
-
-## Security model
-
-By default, inbound messages are only accepted from `THREEMA_RECIPIENT_ID`.
-
-You can override this with `THREEMA_ALLOWED_SENDERS`, a comma-separated allowlist of Threema IDs. Any sender not in that allowlist is rejected.
-
-Duplicate webhook deliveries are deduplicated by message ID and stored in a small local cache so they can still be rejected after reloads and restarts.
+Only text messages are supported. Invalid MACs, wrong Gateway targets,
+unlisted senders, and duplicate message IDs are rejected before delivery.
+Duplicate IDs are persisted under pi's agent directory across restarts.
 
 ## Requirements
 
-- pi installed and working
-- a Threema Gateway ID
-- your Threema Gateway API secret
-- your Threema private key for inbound message decryption
-- a publicly reachable callback URL for the webhook endpoint
-- Node.js 22+ if you want to run the included tests with `npm test`
-
-## Files
-
-- `index.ts` – pi extension entry point
-- `lib.ts` – crypto and helper functions
-- `threema.example.json` – JSON configuration template
-- `.env.example` – legacy environment template
-- `test.ts` – unit tests
+- pi and Node.js 22 or newer
+- a Threema Gateway ID and API secret
+- E2E mode: a 32-byte X25519 private key and a publicly reachable webhook
+- Basic mode: no key material; outbound only
 
 ## Installation
 
-The extension lives in the `threema/` subfolder of the [pi-kit](https://github.com/ulvestuen/pi-kit/) repository. The repository root carries a `pi-package` manifest that exposes `./threema` as an extension, so pi can install it directly from GitHub.
+Install the repository as a pi package:
 
-### Option 1: install as a pi package from GitHub (recommended)
-
-```bash
+```sh
 pi install https://github.com/ulvestuen/pi-kit
 ```
 
-Equivalent shorthands:
+Pin with `git:github.com/ulvestuen/pi-kit@<tag-or-commit>`. To try a checkout
+without installation, run:
 
-```bash
-pi install git:github.com/ulvestuen/pi-kit
-pi install ssh://git@github.com/ulvestuen/pi-kit
-```
-
-Pin to a tag, branch, or commit using the `@<ref>` suffix:
-
-```bash
-pi install git:github.com/ulvestuen/pi-kit@main
-pi install git:github.com/ulvestuen/pi-kit@v1.0.0
-```
-
-Pi clones the repository, runs `npm install`, and registers the extension in `./threema` automatically. See the [pi packages docs](https://pi.dev/docs/latest/packages) for details.
-
-### Option 2: quick test with `--extension`
-
-Clone the repo and point pi at the entry file:
-
-```bash
-git clone https://github.com/ulvestuen/pi-kit.git
+```sh
 pi -e /absolute/path/to/pi-kit/threema/index.ts
-```
-
-This is the fastest way to try it locally without installing.
-
-### Option 3: install as a normal pi extension by copying
-
-Clone the repo, then copy or symlink the `threema/` folder into one of pi's extension locations:
-
-- global: `~/.pi/agent/extensions/pi-threema/`
-- project-local: `.pi/extensions/pi-threema/`
-
-Example:
-
-```bash
-git clone https://github.com/ulvestuen/pi-kit.git
-mkdir -p ~/.pi/agent/extensions
-cp -R pi-kit/threema ~/.pi/agent/extensions/pi-threema
-```
-
-Then start pi normally. If pi is already running, use:
-
-```text
-/reload
 ```
 
 ## Configuration
 
-Create a private JSON config file at the default location `~/.pi/agent/extensions/pi-threema/threema.json`:
+Copy `threema.example.json` to the private default location and restrict it:
 
-```bash
+```sh
 mkdir -p ~/.pi/agent/extensions/pi-threema
-chmod 700 ~/.pi/agent ~/.pi/agent/extensions ~/.pi/agent/extensions/pi-threema
-cp /absolute/path/to/threema/threema.example.json ~/.pi/agent/extensions/pi-threema/threema.json
+cp /absolute/path/to/threema/threema.example.json \
+  ~/.pi/agent/extensions/pi-threema/threema.json
 chmod 600 ~/.pi/agent/extensions/pi-threema/threema.json
 ```
 
-Then edit `~/.pi/agent/extensions/pi-threema/threema.json`.
-
-For an **End-to-End Gateway ID** (default):
+End-to-End mode (default):
 
 ```json
 {
@@ -131,7 +89,7 @@ For an **End-to-End Gateway ID** (default):
 }
 ```
 
-For a **Basic Gateway ID** (outbound only, no key material needed):
+Basic mode:
 
 ```json
 {
@@ -142,165 +100,66 @@ For a **Basic Gateway ID** (outbound only, no key material needed):
 }
 ```
 
-In E2E mode you do **not** need to configure the recipient's public key. The extension automatically fetches it from Threema Gateway using `/pubkeys/<recipientId>` and caches it in memory.
+| Field | Required | Purpose |
+| --- | --- | --- |
+| `apiId` | yes | 8-character Gateway ID |
+| `apiSecret` | yes | Gateway API calls and inbound MAC verification |
+| `recipientId` | yes | Default outbound recipient and default inbound allowlist |
+| `mode` | no | `e2e` (default) or `basic`; must match the Gateway registration |
+| `privateKey` | E2E | 64 hex characters for local encryption and decryption |
+| `allowedSenders` | no | E2E sender IDs; defaults to `recipientId` |
+| `webhookPort` | no | E2E HTTP port; defaults to `7633` |
 
-### JSON config fields
+Recipient public keys are fetched from `/pubkeys/<recipientId>` and cached in
+memory; do not put them in config.
 
-Always required:
-
-- `apiId` – your 8-character Threema Gateway ID
-- `apiSecret` – your Gateway API secret; used for outbound API calls and inbound webhook MAC verification
-- `recipientId` – default outbound recipient (and the default inbound allowlist entry in E2E mode). The recipient public key is looked up automatically; no config field is required for it.
-
-Required in `mode: "e2e"` only:
-
-- `privateKey` – 32-byte X25519 private key as 64 hex characters; used to encrypt outbound E2E messages and decrypt inbound messages.
-
-Optional:
-
-- `mode` – `"e2e"` (default) or `"basic"`. Use `"basic"` for Gateway IDs that were registered without an uploaded public key (Simple Mode); they are outbound-only.
-- `allowedSenders` – inbound sender allowlist as an array of Threema IDs, or a comma-separated string. E2E mode only. If omitted, the extension only accepts inbound messages from `recipientId`.
-- `webhookPort` – local HTTP port for `/webhook` and `/health`. E2E mode only. If omitted, the extension defaults to `7633`.
-
-Environment overrides:
-
-- `THREEMA_CONFIG_PATH` – optional path to a different JSON config file.
-- `PI_CODING_AGENT_DIR` – optional. If set, the default config path becomes `$PI_CODING_AGENT_DIR/extensions/pi-threema/threema.json`, and the duplicate-message cache is stored under `$PI_CODING_AGENT_DIR`.
-- `THREEMA_MODE` – optional. Selects the mode when configuring via env vars instead of JSON.
-
-Legacy environment-variable config is still supported if no JSON config file exists.
-
-The callback URL itself is **not** read from an environment variable. You configure that separately in the Threema Gateway console and point it at `http://<your-host>:<port>/webhook`.
-
-## Starting pi
-
-After creating `~/.pi/agent/extensions/pi-threema/threema.json`, start pi normally:
-
-```bash
-pi -e /absolute/path/to/threema/index.ts
-```
-
-Or, if you installed the extension into a discovered pi extension directory:
-
-```bash
-pi
-```
+Set `THREEMA_CONFIG_PATH` to use another JSON file. `PI_CODING_AGENT_DIR`
+changes both the default config root and duplicate cache location. Legacy
+environment configuration from `.env.example` is used only when no JSON file
+exists; `THREEMA_MODE` selects its mode.
 
 ## Webhook setup
 
-The extension starts an HTTP server on `THREEMA_WEBHOOK_PORT`.
+In E2E mode the extension serves:
 
-Endpoints:
+- `GET /health` → `ok`
+- `POST /webhook` → Gateway callback
 
-- `GET /health` → returns `ok`
-- `POST /webhook` → receives Threema Gateway callbacks
-
-Configure your Threema Gateway callback URL as:
-
-```text
-http://<your-host>:7633/webhook
-```
-
-Replace:
-
-- `<your-host>` with a host reachable by Threema Gateway
-- `7633` with your configured `THREEMA_WEBHOOK_PORT`
-
-If pi is running on a machine behind NAT, you will need a tunnel, reverse proxy, VPN, or other way to expose the webhook endpoint.
+Configure the Gateway callback as
+`http://<publicly-reachable-host>:<webhookPort>/webhook`. Machines behind NAT
+need a tunnel, reverse proxy, VPN, or port forwarding. The callback URL is set
+in the Gateway console, not in the extension config.
 
 ## Usage
 
-### Outbound messages
+The agent calls `threema_send` with required `message` text and an optional
+`recipient` ID. Use it for concise questions, completion notifications, and
+short status updates. An inbound message is injected as a user message; when
+pi is busy it is queued as a follow-up.
 
-Once the extension is loaded, the agent can call the `threema_send` tool.
+Inside pi, `/threema` shows mode, API ID, recipient, allowed senders, webhook
+status, duplicate count, and Gateway credits. Use `/reload` after changing
+configuration.
 
-Typical uses:
+## Verification
 
-- send task completion notifications
-- ask concise follow-up questions
-- send short summaries while you're away from the terminal
+From the repository root:
 
-The tool parameters are:
-
-- `message` – required text
-- `recipient` – optional Threema ID; defaults to `THREEMA_RECIPIENT_ID`
-
-### Inbound messages
-
-When an allowed sender sends a Threema message to your Gateway ID:
-
-1. Threema Gateway calls your webhook
-2. the extension verifies the MAC
-3. the extension checks the sender allowlist
-4. the extension decrypts the message
-5. the message is injected into pi as a user message
-
-If pi is already busy, the inbound message is queued as a follow-up message instead of causing an error.
-
-### Status command
-
-Inside pi, run:
-
-```text
-/threema
-```
-
-This shows:
-
-- configured API ID
-- default recipient
-- allowed senders
-- webhook port and URL template
-- credit count if available
-- whether the webhook server is running
-
-## Running tests
-
-From the `threema/` directory:
-
-```bash
+```sh
 npm test
 ```
 
-This uses Node's TypeScript stripping support to run `test.ts` directly.
+This runs crypto unit tests and a focused webhook test covering MAC validation,
+the sender allowlist, decryption, and busy-agent follow-up delivery.
 
-## Notes and limitations
+## Troubleshooting and safety
 
-- inbound support is currently limited to **text** messages
-- outbound messages use Gateway **End-to-End Mode** (`send_e2e`)
-- recipient public keys are fetched automatically from Threema Gateway and cached only in memory
-- inbound webhook duplicates are deduplicated and stored in a small local cache
-- the webhook server must be reachable from Threema Gateway
-
-## Troubleshooting
-
-### The extension says it is disabled
-
-Make sure all required environment variables are exported, then run:
-
-```text
-/reload
-```
-
-### Inbound messages are rejected
-
-Check:
-
-- the callback URL is reachable
-- `THREEMA_API_SECRET` is correct
-- `THREEMA_PRIVATE_KEY` is correct
-- the sender is included in `THREEMA_ALLOWED_SENDERS`
-- the webhook is targeting the correct Gateway ID
-
-### The webhook server does not receive requests
-
-Check:
-
-- local firewall rules
-- router/NAT forwarding
-- reverse proxy or tunnel configuration
-- `THREEMA_WEBHOOK_PORT`
-
-### The agent does not respond to inbound messages
-
-Check pi is running with a valid model/provider configured and that the extension is loaded.
+- **Extension disabled:** verify the config path and required mode-specific
+  fields, protect the file with mode `600`, then `/reload`.
+- **Webhook rejected:** verify the API secret, private key, target Gateway ID,
+  and `allowedSenders`.
+- **No webhook traffic:** check the public callback, firewall, NAT/proxy, and
+  `webhookPort`; `GET /health` distinguishes reachability from decryption.
+- Never log the API secret or private key. Basic mode sends plaintext to the
+  Gateway by design; use E2E mode when local encryption or inbound messaging is
+  required.

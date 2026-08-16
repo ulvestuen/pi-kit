@@ -5,21 +5,24 @@ description: Reads, searches, creates, and updates Jira issues through Jira Clou
 
 # Jira CLI
 
+```mermaid
+flowchart LR
+    env["JIRA_BASE_URL<br/>JIRA_AUTH_TOKEN"] --> cli["jira.mjs"] --> api["Jira REST API"]
+```
+
 Use the bundled zero-dependency Node.js CLI to interact with Jira Cloud or
 self-hosted Jira Server/Data Center. It requires Node.js 18 or newer.
 
 ## Configuration
 
-Set both required environment variables:
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `JIRA_BASE_URL` | yes | Jira site or server URL |
+| `JIRA_AUTH_TOKEN` | yes | API token or personal access token |
+| `JIRA_EMAIL` | Cloud only | Selects Basic authentication with an API token |
+| `JIRA_API_VERSION` | no | Force REST API `2` or `3` |
 
-```sh
-export JIRA_BASE_URL="https://jira.company.example"
-export JIRA_AUTH_TOKEN="..."
-```
-
-For Jira Cloud, use the site URL, an Atlassian API token, and the account email.
-Setting `JIRA_EMAIL` makes the CLI use Basic authentication with the email and
-API token:
+For Jira Cloud, set the account email as well:
 
 ```sh
 export JIRA_BASE_URL="https://company.atlassian.net"

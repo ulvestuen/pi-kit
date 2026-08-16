@@ -5,12 +5,22 @@ description: Search the web with the Exa search API from the command line. Use w
 
 # Exa web search
 
-Run a web search through the Exa API using the bundled zero-dependency Node
-script. Requires the `EXA_API_KEY` environment variable (get a key at
-https://dashboard.exa.ai/api-keys). `EXA_BASE_URL` optionally overrides the
-API endpoint (default `https://api.exa.ai`).
+```mermaid
+flowchart LR
+    env["EXA_API_KEY"] --> cli["exa-search.mjs"] --> api["Exa Search API"]
+```
 
-## Usage
+Run a web search through Exa with the bundled zero-dependency Node script.
+Requires Node.js 18 or newer.
+
+## Configuration
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `EXA_API_KEY` | yes | Exa API key from https://dashboard.exa.ai/api-keys |
+| `EXA_BASE_URL` | no | API endpoint; defaults to `https://api.exa.ai` |
+
+## Commands
 
 ```sh
 node {baseDir}/exa-search.mjs "your search query"
@@ -20,7 +30,7 @@ Useful options:
 
 | Flag | Meaning |
 | --- | --- |
-| `--num <n>` | number of results, 1-100 (default 5) |
+| `--limit <n>` | number of results, 1-100 (default 5) |
 | `--type <t>` | `auto`, `neural`, `keyword`, `fast`, `deep`, `deep-reasoning`, `instant` (default `auto`) |
 | `--category <c>` | filter, e.g. `news`, `"research paper"`, `github`, `company`, `pdf` |
 | `--include-domains a,b` / `--exclude-domains a,b` | domain filters |
@@ -31,14 +41,17 @@ Useful options:
 Examples:
 
 ```sh
-node {baseDir}/exa-search.mjs "state of WebGPU adoption" --num 8 --category news --start-date 2026-01-01
+node {baseDir}/exa-search.mjs "state of WebGPU adoption" --limit 8 --category news --start-date 2026-01-01
 node {baseDir}/exa-search.mjs "rust async runtime comparison" --include-domains github.com --json
 ```
 
-## Notes
+`--num` remains accepted as a compatibility alias for `--limit`.
+
+## Safety
 
 - Results include the page text (capped at `--max-chars`) so you can usually
   answer from the output without fetching pages separately.
 - Cite result URLs when reporting findings to the user.
 - If the script exits with an API error, report it plainly; do not retry more
   than once.
+- Never print `EXA_API_KEY`.

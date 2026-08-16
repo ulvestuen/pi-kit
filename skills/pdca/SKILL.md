@@ -5,11 +5,11 @@ description: Drive a task to an explicit quality bar with a Plan-Do-Check-Act lo
 
 # PDCA
 
+![The PDCA loop](pdca-cycle.svg)
+
 Work the task as a Plan-Do-Check-Act loop. The whole process is in the
 diagram — study it and run the loop yourself, keeping the criteria and scores
 in your working notes:
-
-![The PDCA loop](pdca-cycle.svg)
 
 In short: define strict, measurable success criteria up front (scoreable 1-10,
 default bar 8/10). Then loop — plan one small step targeting the weakest
