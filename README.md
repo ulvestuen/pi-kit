@@ -2,6 +2,9 @@
 
 This repository contains pi-related integrations and skills.
 
+See [`ROADMAP.md`](./ROADMAP.md) for the project direction: keeping every
+skill, process, and piece of tooling simple and visually understandable.
+
 ## Verification
 
 Run every workspace test suite from the repository root:
