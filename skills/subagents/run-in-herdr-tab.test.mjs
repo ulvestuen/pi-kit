@@ -39,6 +39,40 @@ test("Herdr helper survives shell reparsing and preserves exact arguments", asyn
   }
 });
 
+test("Herdr helper recognizes every runner option without reparsing option values", async () => {
+  const fixture = await createFixture();
+  try {
+    const result = await run(helper, [
+      "--cwd", fixture.cwd,
+      "--timeout", "08",
+      "--system-prompt", "--cwd",
+      "--tools", "read,grep",
+      "--model", "test-model",
+      "--inherit",
+      "--stream",
+      "inspect",
+    ], fixture.env());
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stdout, "Herdr result\n");
+    const childArgs = JSON.parse(await readFile(fixture.argsLog, "utf8"));
+    assert.deepEqual(childArgs, [
+      "--mode", "json",
+      "--no-session",
+      "--system-prompt", "--cwd",
+      "--model", "test-model",
+      "--tools", "read,grep",
+      "inspect",
+    ]);
+
+    const commands = await readFile(fixture.herdrLog, "utf8");
+    assert.match(commands, new RegExp(`--cwd ${escapeRegExp(fixture.cwd.replaceAll(" ", "\\ "))}`));
+    assert.match(commands, /--label subagent:.*custom/);
+  } finally {
+    await fixture.remove();
+  }
+});
+
 test("Herdr helper closes a partially created tab when the pane ID is missing", async () => {
   const fixture = await createFixture("partial-create");
   try {
@@ -170,4 +204,8 @@ function run(command, args, env) {
     child.on("error", reject);
     child.on("close", (code) => resolve({ code, stdout, stderr }));
   });
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

@@ -22,6 +22,11 @@ for ((i = 0; i < ${#args[@]}; i++)); do
       i=$((i + 1))
       role="${args[i]:-missing}"
       ;;
+    --system-prompt|--tools|--model)
+      # These options do not affect the tab, but their values may look like
+      # helper options and must not be parsed a second time here.
+      i=$((i + 1))
+      ;;
     --cwd)
       i=$((i + 1))
       requested_cwd="${args[i]:-}"
@@ -29,6 +34,8 @@ for ((i = 0; i < ${#args[@]}; i++)); do
     --timeout)
       i=$((i + 1))
       timeout_seconds="${args[i]:-600}"
+      ;;
+    --inherit|--stream)
       ;;
   esac
 done

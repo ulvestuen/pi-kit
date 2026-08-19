@@ -29,8 +29,22 @@ you need to know exactly how that role behaves, or add new role files there.
 
 ## Running a sub-agent
 
+Choose the launcher from the environment **before** constructing the command:
+
+- When `HERDR_ENV=1`, always use `run-in-herdr-tab.sh`. Do not invoke
+  `run-subagent.mjs` directly from Herdr.
+- Otherwise, invoke `run-subagent.mjs` directly.
+
+Both launchers accept the same arguments. For example, inside Herdr:
+
 ```sh
-node {baseDir}/run-subagent.mjs --role scout "Where is retry logic implemented in this repo? Cite files and lines."
+bash {baseDir}/run-in-herdr-tab.sh --role scout --model <model> "Where is retry logic implemented in this repo? Cite files and lines."
+```
+
+Outside Herdr:
+
+```sh
+node {baseDir}/run-subagent.mjs --role scout --model <model> "Where is retry logic implemented in this repo? Cite files and lines."
 ```
 
 Options: `--model <m>`, `--cwd <dir>`, `--tools a,b,c` (override the role's
@@ -46,16 +60,17 @@ the authoritative final answer.
 
 ## Run in a temporary Herdr tab
 
-Inside Herdr, use the helper instead of the direct command:
+The Herdr helper supports every option listed above, creates one temporary tab
+per sub-agent, and passes all arguments—including `--model`—to the direct
+runner:
 
 ```sh
 bash {baseDir}/run-in-herdr-tab.sh --role scout --cwd /path/to/repo "Find the retry logic."
 ```
 
-The helper creates an unfocused tab in `HERDR_WORKSPACE_ID`, preserves `--cwd`,
-forces `--stream`, returns only the final answer, and closes the tab plus its
-temporary files on exit. For fan-out, run one helper process per sub-agent in
-parallel. Outside Herdr, invoke `run-subagent.mjs` directly.
+It creates an unfocused tab in `HERDR_WORKSPACE_ID`, preserves `--cwd`, forces
+`--stream`, returns only the final answer, and closes the tab plus its temporary
+files on exit. For fan-out, run one helper process per sub-agent in parallel.
 
 ## Patterns
 
