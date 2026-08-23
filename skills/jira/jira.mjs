@@ -3,6 +3,8 @@
 
 import { readFile } from "node:fs/promises";
 
+const REQUEST_TIMEOUT_MS = 30_000;
+
 const HELP = `Usage: node jira.mjs <command> [arguments] [options]
 
 Commands:
@@ -67,7 +69,8 @@ async function main() {
     }
     case "search": {
       const limit = parseInteger(takeOption(args, "--limit") ?? "50", "--limit", 1, 100);
-      const startAt = parseInteger(takeOption(args, "--start-at") ?? "0", "--start-at", 0);
+      const startAtValue = takeOption(args, "--start-at");
+      const startAt = parseInteger(startAtValue ?? "0", "--start-at", 0);
       const nextPageToken = takeOption(args, "--next-page-token");
       const fieldsValue = takeOption(args, "--fields");
       const [jql] = takePositionals(args, 1, "search requires <jql>");
@@ -76,9 +79,11 @@ async function main() {
       const body = { jql, maxResults: limit };
       if (fields?.length) body.fields = fields;
       if (apiVersion === 3) {
+        if (startAtValue !== undefined) fail("--start-at is only supported by Jira Server/Data Center; use --next-page-token for Jira Cloud");
         if (nextPageToken) body.nextPageToken = nextPageToken;
         printResult(await request(config, api("/search/jql"), { method: "POST", body }));
       } else {
+        if (nextPageToken !== undefined) fail("--next-page-token is only supported by Jira Cloud; use --start-at for Jira Server/Data Center");
         body.startAt = startAt;
         printResult(await request(config, api("/search"), { method: "POST", body }));
       }
@@ -179,19 +184,20 @@ async function request(config, path, { method = "GET", body } = {}) {
     Accept: "application/json",
     Authorization: config.authorization,
   };
-  const init = { method, headers };
+  const init = { method, headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) };
   if (body !== undefined) {
     headers["Content-Type"] = "application/json";
     init.body = JSON.stringify(body);
   }
 
   let response;
+  let text;
   try {
     response = await fetch(`${config.baseUrl}${normalizedPath}`, init);
+    text = await response.text();
   } catch (error) {
     fail(`Jira request failed: ${error.message}`);
   }
-  const text = await response.text();
   let data = null;
   if (text) {
     try {

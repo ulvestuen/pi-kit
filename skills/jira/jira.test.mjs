@@ -143,6 +143,22 @@ test("uses platform-specific search endpoints and pagination", async () => {
   });
 });
 
+test("rejects pagination options for the wrong Jira platform", async () => {
+  await withJira("Cloud", async ({ baseUrl, requests }) => {
+    const result = await runCli(baseUrl, ["search", "project = ABC", "--start-at", "50"]);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /--start-at is only supported by Jira Server\/Data Center/);
+    assert.equal(requests.length, 1);
+  });
+
+  await withJira("Data Center", async ({ baseUrl, requests }) => {
+    const result = await runCli(baseUrl, ["search", "project = ABC", "--next-page-token", "cloud-page"]);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /--next-page-token is only supported by Jira Cloud/);
+    assert.equal(requests.length, 1);
+  });
+});
+
 test("preserves a Jira context path and rejects unsafe base URL components", async () => {
   await withJira("Cloud", async ({ baseUrl, requests }) => {
     const result = await runCli(`${baseUrl}/jira/`, ["request", "GET", "/rest/api/2/myself"]);
@@ -161,6 +177,30 @@ test("rejects fragments in arbitrary request paths", async () => {
   const result = await runCli("https://jira.example", ["request", "GET", "/rest/api/2/myself#fragment"]);
   assert.equal(result.code, 1);
   assert.match(result.stderr, /request path must not contain a fragment/);
+});
+
+test("reports response-body failures without an uncaught stack trace", async () => {
+  const server = createServer((request, response) => {
+    response.writeHead(200, {
+      "Content-Type": "application/json",
+      "Content-Length": "100",
+    });
+    response.write('{"key":');
+    setImmediate(() => response.destroy());
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const { port } = server.address();
+    const result = await runCli(
+      `http://127.0.0.1:${port}`,
+      ["request", "GET", "/rest/api/2/myself"],
+    );
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /^Jira request failed:/);
+    assert.doesNotMatch(result.stderr, /\n\s+at /);
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
 });
 
 test("accepts flag-like positional text after the option terminator", async () => {

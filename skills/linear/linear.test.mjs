@@ -5,14 +5,34 @@ import { buildOperation, requestLinear } from "./linear.mjs";
 
 describe("Linear CLI operations", () => {
   it("builds a paginated team issue query", async () => {
-    const operation = await buildOperation(["issues", "--team", "team-id", "--limit", "25", "--after", "cursor"]);
+    const operation = await buildOperation([
+      "issues", "--team", "team-id", "--limit", "25", "--after", "cursor",
+      "--filter", '{"state":{"type":{"eq":"started"}}}',
+    ]);
 
     assert.match(operation.query, /team\(id: \$teamId\)/);
     assert.deepEqual(operation.variables, {
       teamId: "team-id",
       first: 25,
       after: "cursor",
+      filter: { state: { type: { eq: "started" } } },
     });
+  });
+
+  it("builds paginated issue search and comment queries", async () => {
+    const search = await buildOperation(["search-issues", "login crash", "--limit", "10"]);
+    assert.match(search.query, /searchIssues\(term: \$term/);
+    assert.deepEqual(search.variables, { term: "login crash", first: 10, after: undefined, filter: undefined });
+
+    const comments = await buildOperation(["comments", "ENG-123", "--limit", "25", "--after", "cursor"]);
+    assert.match(comments.query, /comments\(first: \$first, after: \$after\)/);
+    assert.deepEqual(comments.variables, { id: "ENG-123", first: 25, after: "cursor" });
+  });
+
+  it("adds server-side filters to metadata collections", async () => {
+    const operation = await buildOperation(["users", "--filter", '{"name":{"containsIgnoreCase":"alex"}}']);
+    assert.match(operation.query, /\$filter: UserFilter/);
+    assert.deepEqual(operation.variables.filter, { name: { containsIgnoreCase: "alex" } });
   });
 
   it("rejects an explicitly empty team filter", async () => {
@@ -82,6 +102,8 @@ describe("Linear API request", () => {
     assert.deepEqual(data, { viewer: { id: "user-id" } });
     assert.equal(captured.url, "https://linear.test/graphql");
     assert.equal(captured.init.headers.Authorization, "secret-test-key");
+    assert.ok(captured.init.signal instanceof AbortSignal);
+    assert.equal(captured.init.signal.aborted, false);
     assert.deepEqual(JSON.parse(captured.init.body), {
       query: "query Me { viewer { id } }",
       variables: { test: true },
@@ -96,6 +118,24 @@ describe("Linear API request", () => {
         fetchImpl: async () => new Response('{"errors":[{"message":"Not authorized"}]}', { status: 200 }),
       }),
       /Linear GraphQL error: Not authorized/,
+    );
+  });
+
+  it("normalizes and redacts response-body failures", async () => {
+    const apiKey = "secret-test-key";
+    await assert.rejects(
+      () => requestLinear({
+        query: "query Me { viewer { id } }",
+        apiKey,
+        fetchImpl: async () => ({
+          text: async () => { throw new Error(`body failed for ${apiKey}`); },
+        }),
+      }),
+      (error) => {
+        assert.equal(error.message, "Linear API request failed: body failed for [REDACTED]");
+        assert.doesNotMatch(error.message, new RegExp(apiKey));
+        return true;
+      },
     );
   });
 

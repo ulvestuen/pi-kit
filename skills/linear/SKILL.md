@@ -1,6 +1,6 @@
 ---
 name: linear
-description: Reads and manages Linear teams, users, projects, workflow states, labels, issues, and comments through the Linear GraphQL API. Use when asked to inspect, create, update, or comment on Linear issues, or run a custom Linear GraphQL operation.
+description: Reads and manages Linear teams, users, projects, workflow states, labels, issues, and comments through the Linear GraphQL API. Use when asked to inspect, create, update, or comment on Linear issues, or run a custom Linear GraphQL operation and LINEAR_API_KEY is configured.
 ---
 
 # Linear
@@ -31,12 +31,25 @@ node {baseDir}/linear.mjs states --limit 100
 node {baseDir}/linear.mjs labels --limit 100
 node {baseDir}/linear.mjs issues --limit 25
 node {baseDir}/linear.mjs issues --team TEAM_UUID --limit 25
+node {baseDir}/linear.mjs search-issues 'login crash' --limit 25
 node {baseDir}/linear.mjs issue ENG-123
+node {baseDir}/linear.mjs comments ENG-123 --limit 50
 ```
 
-Collection commands accept `--limit <1-250>` and `--after <cursor>`. Their JSON
-output includes `pageInfo`; pass `pageInfo.endCursor` to `--after` when
-`pageInfo.hasNextPage` is true.
+List commands and `comments` accept `--limit <1-250>` and `--after <cursor>`.
+Their JSON output includes `pageInfo`; pass `pageInfo.endCursor` to `--after`
+when `pageInfo.hasNextPage` is true. `comments` can retrieve every comment page
+after the first 50 returned by `issue`.
+
+`teams`, `users`, `projects`, `states`, `labels`, `issues`, and `search-issues`
+accept `--filter '<json>'` using Linear's corresponding GraphQL filter input.
+Prefer server-side filters and `search-issues` over fetching whole collections
+and filtering locally:
+
+```sh
+node {baseDir}/linear.mjs users --filter '{"name":{"containsIgnoreCase":"alex"}}'
+node {baseDir}/linear.mjs issues --filter '{"state":{"type":{"eq":"started"}}}'
+```
 
 ## Create and modify issues
 
@@ -83,7 +96,7 @@ node {baseDir}/linear.mjs graphql --file /tmp/operation.graphql --variables-file
 
 The CLI prints the GraphQL `data` object as formatted JSON. It exits nonzero and
 prints all GraphQL errors when the API returns any. Never print or expose the
-value of `LINEAR_API_KEY`.
+value of `LINEAR_API_KEY`. Requests time out after 30 seconds.
 
 ## Safety
 

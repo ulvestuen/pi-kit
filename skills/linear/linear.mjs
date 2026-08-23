@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
 export const DEFAULT_API_URL = "https://api.linear.app/graphql";
+export const REQUEST_TIMEOUT_MS = 30_000;
 
 const ISSUE_FIELDS = `
   id
@@ -26,55 +27,71 @@ const ISSUE_FIELDS = `
 
 const operations = {
   viewer: `query Viewer { viewer { id name displayName email active } }`,
-  teams: `query Teams($first: Int!, $after: String) {
-    teams(first: $first, after: $after) {
+  teams: `query Teams($first: Int!, $after: String, $filter: TeamFilter) {
+    teams(first: $first, after: $after, filter: $filter) {
       nodes { id key name }
       pageInfo { hasNextPage endCursor }
     }
   }`,
-  users: `query Users($first: Int!, $after: String) {
-    users(first: $first, after: $after) {
+  users: `query Users($first: Int!, $after: String, $filter: UserFilter) {
+    users(first: $first, after: $after, filter: $filter) {
       nodes { id name displayName email active }
       pageInfo { hasNextPage endCursor }
     }
   }`,
-  projects: `query Projects($first: Int!, $after: String) {
-    projects(first: $first, after: $after) {
+  projects: `query Projects($first: Int!, $after: String, $filter: ProjectFilter) {
+    projects(first: $first, after: $after, filter: $filter) {
       nodes { id name description url progress targetDate lead { id name } teams { nodes { id key name } } }
       pageInfo { hasNextPage endCursor }
     }
   }`,
-  states: `query WorkflowStates($first: Int!, $after: String) {
-    workflowStates(first: $first, after: $after) {
+  states: `query WorkflowStates($first: Int!, $after: String, $filter: WorkflowStateFilter) {
+    workflowStates(first: $first, after: $after, filter: $filter) {
       nodes { id name type color position team { id key name } }
       pageInfo { hasNextPage endCursor }
     }
   }`,
-  labels: `query IssueLabels($first: Int!, $after: String) {
-    issueLabels(first: $first, after: $after) {
+  labels: `query IssueLabels($first: Int!, $after: String, $filter: IssueLabelFilter) {
+    issueLabels(first: $first, after: $after, filter: $filter) {
       nodes { id name description color team { id key name } }
       pageInfo { hasNextPage endCursor }
     }
   }`,
-  issues: `query Issues($first: Int!, $after: String) {
-    issues(first: $first, after: $after) {
+  issues: `query Issues($first: Int!, $after: String, $filter: IssueFilter) {
+    issues(first: $first, after: $after, filter: $filter) {
       nodes { ${ISSUE_FIELDS} }
       pageInfo { hasNextPage endCursor }
     }
   }`,
-  teamIssues: `query TeamIssues($teamId: String!, $first: Int!, $after: String) {
+  teamIssues: `query TeamIssues($teamId: String!, $first: Int!, $after: String, $filter: IssueFilter) {
     team(id: $teamId) {
       id key name
-      issues(first: $first, after: $after) {
+      issues(first: $first, after: $after, filter: $filter) {
         nodes { ${ISSUE_FIELDS} }
         pageInfo { hasNextPage endCursor }
       }
+    }
+  }`,
+  searchIssues: `query SearchIssues($term: String!, $first: Int!, $after: String, $filter: IssueFilter) {
+    searchIssues(term: $term, first: $first, after: $after, filter: $filter) {
+      nodes { ${ISSUE_FIELDS} }
+      pageInfo { hasNextPage endCursor }
+      totalCount
     }
   }`,
   issue: `query Issue($id: String!) {
     issue(id: $id) {
       ${ISSUE_FIELDS}
       comments(first: 50) {
+        nodes { id body createdAt updatedAt user { id name email } }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }`,
+  comments: `query IssueComments($id: String!, $first: Int!, $after: String) {
+    issue(id: $id) {
+      id identifier title
+      comments(first: $first, after: $after) {
         nodes { id body createdAt updatedAt user { id name email } }
         pageInfo { hasNextPage endCursor }
       }
@@ -105,6 +122,7 @@ export async function requestLinear({
   if (!apiKey) throw new CliError("LINEAR_API_KEY is not set. Create a personal API key in Linear under Settings → Security & access.");
 
   let response;
+  let text;
   try {
     response = await fetchImpl(apiUrl, {
       method: "POST",
@@ -114,12 +132,13 @@ export async function requestLinear({
         Accept: "application/json",
       },
       body: JSON.stringify({ query, variables }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
+    text = await response.text();
   } catch (error) {
     throw new CliError(redact(`Linear API request failed: ${error.message}`, apiKey));
   }
 
-  const text = await response.text();
   let payload;
   try {
     payload = JSON.parse(text);
@@ -162,19 +181,40 @@ export async function buildOperation(argv, readFileImpl = readFile) {
     case "projects":
     case "states":
     case "labels":
-      assertOptions(options, ["limit", "after"], command);
-      return { query: operations[command], variables: pagination() };
+      assertOptions(options, ["limit", "after", "filter"], command);
+      return {
+        query: operations[command],
+        variables: { ...pagination(), filter: parseOptionalJsonObject(options.filter, "--filter") },
+      };
     case "issues": {
-      assertOptions(options, ["limit", "after", "team"], command);
-      const variables = pagination();
+      assertOptions(options, ["limit", "after", "team", "filter"], command);
+      const variables = { ...pagination(), filter: parseOptionalJsonObject(options.filter, "--filter") };
       if (options.team !== undefined) {
         return { query: operations.teamIssues, variables: { teamId: stringValue(options.team, "--team"), ...variables } };
       }
       return { query: operations.issues, variables };
     }
+    case "search-issues": {
+      assertOptions(options, ["_", "limit", "after", "filter"], command);
+      return {
+        query: operations.searchIssues,
+        variables: {
+          term: onePositional(options, "search-issues <term>"),
+          ...pagination(),
+          filter: parseOptionalJsonObject(options.filter, "--filter"),
+        },
+      };
+    }
     case "issue": {
       assertOptions(options, ["_"], command);
       return { query: operations.issue, variables: { id: onePositional(options, "issue <id>") } };
+    }
+    case "comments": {
+      assertOptions(options, ["_", "limit", "after"], command);
+      return {
+        query: operations.comments,
+        variables: { id: onePositional(options, "comments <issue-id>"), ...pagination() },
+      };
     }
     case "create-issue": {
       assertOptions(options, issueOptionNames(true), command);
@@ -289,6 +329,10 @@ function parseJsonObject(value, label) {
   return parsed;
 }
 
+function parseOptionalJsonObject(value, label) {
+  return value === undefined ? undefined : parseJsonObject(value, label);
+}
+
 function onePositional(options, usage) {
   if (options._.length !== 1) throw new CliError(`usage: linear.mjs ${usage}`);
   return options._[0];
@@ -324,9 +368,11 @@ export const HELP = `Usage: node linear.mjs <command> [options]
 
 Read commands:
   viewer
-  teams|users|projects|states|labels [--limit N] [--after CURSOR]
-  issues [--team TEAM_UUID] [--limit N] [--after CURSOR]
+  teams|users|projects|states|labels [--filter JSON] [--limit N] [--after CURSOR]
+  issues [--team TEAM_UUID] [--filter JSON] [--limit N] [--after CURSOR]
+  search-issues <TERM> [--filter JSON] [--limit N] [--after CURSOR]
   issue <ID>
+  comments <ISSUE_ID> [--limit N] [--after CURSOR]
 
 Write commands:
   create-issue --team UUID --title TEXT [issue fields]

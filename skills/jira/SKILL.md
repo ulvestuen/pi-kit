@@ -54,7 +54,9 @@ node {baseDir}/jira.mjs transition ABC-123 31
 
 Search options are `--limit <n>`, `--fields <comma-separated names>`,
 `--start-at <n>` for self-hosted pagination, and `--next-page-token <token>`
-for Cloud pagination. Commands print Jira's JSON response to stdout.
+for Cloud pagination. Platform-specific pagination options are rejected when
+used with the wrong Jira deployment. Commands print Jira's JSON response to
+stdout. Requests time out after 30 seconds.
 
 Use `request` for API operations not covered by a convenience command. Its path
 is relative to `JIRA_BASE_URL` and should include the REST API version:
