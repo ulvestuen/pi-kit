@@ -48,9 +48,39 @@ token. It does not support OAuth access tokens.
 
 ## Commands
 
+Treat options as command-specific. Do not add an option to a command unless it
+appears in that command's signature below; the CLI rejects every unexpected
+argument. In particular, always fetch an issue with exactly:
+
 ```sh
 node {baseDir}/jira.mjs issue ABC-123
-node {baseDir}/jira.mjs search 'project = ABC AND status != Done' --limit 20
+```
+
+The `issue` command accepts only the issue key. **Never pass `--fields` to
+`issue`.** To fetch only selected fields, use the `request` command instead:
+
+```sh
+node {baseDir}/jira.mjs request GET '/rest/api/3/issue/ABC-123?fields=summary,status'
+```
+
+These are the complete supported signatures:
+
+```text
+issue <key>
+search <jql> [--limit <n>] [--fields <comma-separated-names>] [--next-page-token <token>]
+projects
+create <project> <type> <summary> [--description <text>] [--fields <json|@file>]
+update <key> --fields <json|@file>
+comment <key> <text>
+transitions <key>
+transition <key> <transition-id>
+request <method> <path> [--data <json|@file>]
+```
+
+Examples:
+
+```sh
+node {baseDir}/jira.mjs search 'project = ABC AND status != Done' --limit 20 --fields summary,status
 node {baseDir}/jira.mjs projects
 node {baseDir}/jira.mjs create ABC Task 'Investigate login failures'
 node {baseDir}/jira.mjs create ABC Bug 'Login fails' --description 'Steps...' --fields '{"priority":{"name":"High"}}'
@@ -60,9 +90,10 @@ node {baseDir}/jira.mjs transitions ABC-123
 node {baseDir}/jira.mjs transition ABC-123 31
 ```
 
-Search options are `--limit <n>` for the page size,
-`--fields <comma-separated names>`, and `--next-page-token <token>`. Commands
-print Jira's JSON response to stdout. Requests time out after 30 seconds.
+`--fields` is overloaded but not global: for `search` it is a comma-separated
+list of response field names; for `create` and `update` it is a JSON object or
+`@path/to/file.json`. Commands print Jira's JSON response to stdout. Requests
+time out after 30 seconds.
 
 Use `request` for API operations not covered by a convenience command. Its path
 is relative to `JIRA_BASE_URL`, must remain beneath that base URL, and should
@@ -74,9 +105,8 @@ node {baseDir}/jira.mjs request POST /rest/api/3/issue/ABC-123/watchers --data '
 node {baseDir}/jira.mjs request PUT /rest/api/3/issue/ABC-123 --data @payload.json
 ```
 
-For `create` and `update`, `--fields` accepts JSON directly or
-`@path/to/file.json`. The `request` command's `--data` option accepts either
-form as well.
+The `request` command's `--data` option accepts JSON directly or
+`@path/to/file.json`.
 Use `--` before positional text that begins with `--`, for example:
 
 ```sh
