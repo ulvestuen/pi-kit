@@ -51,7 +51,7 @@ Plain skills under [`skills/`](./skills/) — each is a `SKILL.md` plus, where
 useful, a zero-dependency Node script the agent runs from the shell:
 
 - [`skills/exa-search/`](./skills/exa-search/) – web search via the Exa API (`exa-search.mjs`, needs `EXA_API_KEY`)
-- [`skills/jira/`](./skills/jira/) – Jira Cloud and Server/Data Center issue management via a zero-dependency CLI (`jira.mjs`, needs `JIRA_BASE_URL` and `JIRA_AUTH_TOKEN`)
+- [`skills/jira/`](./skills/jira/) – Jira Cloud issue management with scoped or unscoped API tokens via a zero-dependency CLI (`jira.mjs`, needs `JIRA_BASE_URL`, `JIRA_EMAIL`, and `JIRA_AUTH_TOKEN`)
 - [`skills/kagi-search/`](./skills/kagi-search/) – web search via the Kagi API (`kagi-search.mjs`, needs `KAGI_API_KEY`)
 - [`skills/linear/`](./skills/linear/) – read and manage Linear issues through its GraphQL API (`linear.mjs`, needs `LINEAR_API_KEY`)
 - [`skills/subagents/`](./skills/subagents/) – delegate focused work to isolated `pi` child processes with role prompts (scout, planner, implementer, critic, auditor) via `run-subagent.mjs`

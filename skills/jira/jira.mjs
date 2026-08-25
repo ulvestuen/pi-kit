@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Jira Cloud and Server/Data Center REST CLI. No dependencies (Node 18+).
+// Jira Cloud REST CLI. No dependencies (Node 18+).
 
 import { readFile } from "node:fs/promises";
 
@@ -20,18 +20,17 @@ Commands:
 
 Options:
   --description <text>                Description for create
-  --fields <json|@file>               Additional/create/update fields
-  --limit <n>                         Search result limit (default 50)
-  --start-at <n>                      Server/Data Center search offset
-  --next-page-token <token>           Jira Cloud search page token
+  --fields <names>                    Search fields, comma-separated
+  --fields <json|@file>               Create/update fields
+  --limit <n>                         Search page size (default 50)
+  --next-page-token <token>           Search page token
   --data <json|@file>                 Body for request
   --help                              Show this help
 
 Environment:
-  JIRA_BASE_URL       Jira site URL (required)
-  JIRA_AUTH_TOKEN     Cloud API token or Server/Data Center PAT (required)
-  JIRA_EMAIL          Enables Basic auth for Jira Cloud API tokens (optional)
-  JIRA_API_VERSION    Force REST API version 2 or 3 (optional)`;
+  JIRA_BASE_URL       Jira Cloud API base URL (required)
+  JIRA_EMAIL          Atlassian account email (required)
+  JIRA_AUTH_TOKEN     Atlassian API token (required)`;
 
 async function main() {
   const args = process.argv.slice(2);
@@ -52,8 +51,7 @@ async function main() {
     return;
   }
 
-  const apiVersion = await resolveApiVersion(config);
-  const api = (path) => `/rest/api/${apiVersion}${path}`;
+  const api = (path) => `/rest/api/3${path}`;
 
   switch (command) {
     case "issue": {
@@ -69,8 +67,6 @@ async function main() {
     }
     case "search": {
       const limit = parseInteger(takeOption(args, "--limit") ?? "50", "--limit", 1, 100);
-      const startAtValue = takeOption(args, "--start-at");
-      const startAt = parseInteger(startAtValue ?? "0", "--start-at", 0);
       const nextPageToken = takeOption(args, "--next-page-token");
       const fieldsValue = takeOption(args, "--fields");
       const [jql] = takePositionals(args, 1, "search requires <jql>");
@@ -78,15 +74,8 @@ async function main() {
       const fields = fieldsValue?.split(",").map((field) => field.trim()).filter(Boolean);
       const body = { jql, maxResults: limit };
       if (fields?.length) body.fields = fields;
-      if (apiVersion === 3) {
-        if (startAtValue !== undefined) fail("--start-at is only supported by Jira Server/Data Center; use --next-page-token for Jira Cloud");
-        if (nextPageToken) body.nextPageToken = nextPageToken;
-        printResult(await request(config, api("/search/jql"), { method: "POST", body }));
-      } else {
-        if (nextPageToken !== undefined) fail("--next-page-token is only supported by Jira Cloud; use --start-at for Jira Server/Data Center");
-        body.startAt = startAt;
-        printResult(await request(config, api("/search"), { method: "POST", body }));
-      }
+      if (nextPageToken) body.nextPageToken = nextPageToken;
+      printResult(await request(config, api("/search/jql"), { method: "POST", body }));
       break;
     }
     case "create": {
@@ -101,7 +90,7 @@ async function main() {
         summary,
         ...extraFields,
       };
-      if (description !== undefined) fields.description = apiVersion === 3 ? adf(description) : description;
+      if (description !== undefined) fields.description = adf(description);
       printResult(await request(config, api("/issue"), { method: "POST", body: { fields } }));
       break;
     }
@@ -120,7 +109,7 @@ async function main() {
     case "comment": {
       const [key, text] = takePositionals(args, 2, "comment requires <key> <text>");
       rejectExtra(args);
-      const body = { body: apiVersion === 3 ? adf(text) : text };
+      const body = { body: adf(text) };
       printResult(await request(config, api(`/issue/${encodeURIComponent(key)}/comment`), { method: "POST", body }));
       break;
     }
@@ -146,45 +135,53 @@ async function main() {
 
 function getConfig() {
   const configuredBaseUrl = process.env.JIRA_BASE_URL;
+  const email = process.env.JIRA_EMAIL;
   const token = process.env.JIRA_AUTH_TOKEN;
   if (!configuredBaseUrl) fail("JIRA_BASE_URL is not set");
+  if (!email) fail("JIRA_EMAIL is not set");
   if (!token) fail("JIRA_AUTH_TOKEN is not set");
   let url;
   try {
     url = new URL(configuredBaseUrl);
-    if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error();
   } catch {
-    fail("JIRA_BASE_URL must be a valid HTTP(S) URL");
+    fail("JIRA_BASE_URL must be a valid URL");
+  }
+  if (url.protocol !== "https:") {
+    fail("JIRA_BASE_URL must use HTTPS");
   }
   if (url.username || url.password || url.search || url.hash) {
     fail("JIRA_BASE_URL must not contain credentials, a query, or a fragment");
   }
-  url.pathname = url.pathname.replace(/\/+$/, "");
-  const baseUrl = url.toString().replace(/\/$/, "");
-  const authorization = process.env.JIRA_EMAIL
-    ? `Basic ${Buffer.from(`${process.env.JIRA_EMAIL}:${token}`).toString("base64")}`
-    : `Bearer ${token}`;
-  return { baseUrl, authorization };
-}
-
-async function resolveApiVersion(config) {
-  const forced = process.env.JIRA_API_VERSION?.trim();
-  if (forced) {
-    if (forced !== "2" && forced !== "3") fail("JIRA_API_VERSION must be 2 or 3");
-    return Number(forced);
+  const basePath = url.pathname.replace(/\/+$/, "");
+  const gatewayPath = /^\/ex\/jira\/[^/]+$/.test(basePath);
+  const validCloudUrl = (
+    !basePath && url.hostname.endsWith(".atlassian.net")
+    || gatewayPath && url.hostname === "api.atlassian.com"
+  );
+  if (!validCloudUrl) {
+    fail("JIRA_BASE_URL must be https://<site>.atlassian.net or https://api.atlassian.com/ex/jira/<cloudId>");
   }
-  const result = await request(config, "/rest/api/2/serverInfo");
-  return String(result.data?.deploymentType ?? "").toLowerCase() === "cloud" ? 3 : 2;
+  const authorization = `Basic ${Buffer.from(`${email}:${token}`).toString("base64")}`;
+  return { baseUrl: `${url.origin}${basePath}`, basePath, authorization };
 }
 
 async function request(config, path, { method = "GET", body } = {}) {
   if (path.includes("#")) fail("Jira request path must not contain a fragment");
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  const targetUrl = new URL(`${config.baseUrl}${normalizedPath}`);
+  if (config.basePath && !targetUrl.pathname.startsWith(`${config.basePath}/`)) {
+    fail("Jira request path must remain under JIRA_BASE_URL");
+  }
   const headers = {
     Accept: "application/json",
     Authorization: config.authorization,
   };
-  const init = { method, headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) };
+  const init = {
+    method,
+    headers,
+    redirect: "error",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  };
   if (body !== undefined) {
     headers["Content-Type"] = "application/json";
     init.body = JSON.stringify(body);
@@ -193,7 +190,7 @@ async function request(config, path, { method = "GET", body } = {}) {
   let response;
   let text;
   try {
-    response = await fetch(`${config.baseUrl}${normalizedPath}`, init);
+    response = await fetch(targetUrl, init);
     text = await response.text();
   } catch (error) {
     fail(`Jira request failed: ${error.message}`);

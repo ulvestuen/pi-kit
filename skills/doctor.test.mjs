@@ -14,14 +14,15 @@ test("doctor reports configured and missing variables without exposing values", 
   const output = renderHealthCheck({
     EXA_API_KEY: "do-not-print-me",
     JIRA_BASE_URL: "https://jira.test",
+    JIRA_EMAIL: "user@example.com",
     JIRA_AUTH_TOKEN: "token",
   });
 
   assert.match(output, /exa-search\s+\| EXA_API_KEY\s+\| ready/);
-  assert.match(output, /jira\s+\| JIRA_BASE_URL, JIRA_AUTH_TOKEN\s+\| ready/);
+  assert.match(output, /jira\s+\| JIRA_BASE_URL, JIRA_EMAIL, JIRA_AUTH_TOKEN\s+\| ready/);
   assert.match(output, /kagi-search\s+\| KAGI_API_KEY\s+\| missing KAGI_API_KEY/);
   assert.match(output, /pdca\s+\| —\s+\| ready/);
-  assert.doesNotMatch(output, /do-not-print-me|https:\/\/jira\.test|token/);
+  assert.doesNotMatch(output, /do-not-print-me|https:\/\/jira\.test|user@example\.com|token/);
 });
 
 test("doctor prints its table when invoked from a path containing spaces", async () => {
