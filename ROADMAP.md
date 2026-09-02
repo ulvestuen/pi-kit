@@ -8,7 +8,7 @@ not more documentation.
 
 ## Where the project is today
 
-pi-kit is a small toolkit for the `pi` agent: six plain skills and one
+pi-kit is a small toolkit for the `pi` agent: seven plain skills and one
 extension, all zero-dependency Node scripts verified by `npm test` from the
 repository root.
 
@@ -19,6 +19,7 @@ flowchart LR
         subgraph skills["skills/ (plain skills)"]
             search["exa-search / kagi-search<br/>web search CLIs"]
             trackers["jira / linear<br/>issue-tracker CLIs"]
+            observability["datadog<br/>observability API CLI"]
             subagents["subagents<br/>delegate to pi child processes"]
             pdca["pdca<br/>quality loop (diagram-driven)"]
         end

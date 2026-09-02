@@ -3,6 +3,7 @@
 import { pathToFileURL } from "node:url";
 
 export const REQUIREMENTS = [
+  ["datadog", ["DD_API_KEY", "DD_APP_KEY"]],
   ["exa-search", ["EXA_API_KEY"]],
   ["jira", ["JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_AUTH_TOKEN"]],
   ["kagi-search", ["KAGI_API_KEY"]],

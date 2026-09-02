@@ -14,6 +14,7 @@ flowchart LR
         subgraph skills["skills/ · plain skills"]
             search["exa-search · kagi-search<br/>web search"]
             trackers["jira · linear<br/>issue trackers"]
+            observability["datadog<br/>observability API"]
             subagents["subagents<br/>delegation roles"]
             pdca["pdca<br/>quality loop"]
         end
@@ -50,6 +51,7 @@ node skills/doctor.mjs
 Plain skills under [`skills/`](./skills/) — each is a `SKILL.md` plus, where
 useful, a zero-dependency Node script the agent runs from the shell:
 
+- [`skills/datadog/`](./skills/datadog/) – read and manage Datadog monitors and access other Datadog APIs via a zero-dependency CLI (`datadog.mjs`, needs `DD_API_KEY` and `DD_APP_KEY`; optionally `DD_SITE`)
 - [`skills/exa-search/`](./skills/exa-search/) – web search via the Exa API (`exa-search.mjs`, needs `EXA_API_KEY`)
 - [`skills/jira/`](./skills/jira/) – Jira Cloud issue management with scoped or unscoped API tokens via a zero-dependency CLI (`jira.mjs`, needs `JIRA_BASE_URL`, `JIRA_EMAIL`, and `JIRA_AUTH_TOKEN`)
 - [`skills/kagi-search/`](./skills/kagi-search/) – web search via the Kagi API (`kagi-search.mjs`, needs `KAGI_API_KEY`)

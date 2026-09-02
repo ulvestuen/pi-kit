@@ -12,16 +12,20 @@ const doctor = fileURLToPath(new URL("./doctor.mjs", import.meta.url));
 
 test("doctor reports configured and missing variables without exposing values", () => {
   const output = renderHealthCheck({
+    DD_API_KEY: "datadog-api-key",
+    DD_APP_KEY: "datadog-app-key",
     EXA_API_KEY: "do-not-print-me",
     JIRA_BASE_URL: "https://jira.test",
     JIRA_EMAIL: "user@example.com",
     JIRA_AUTH_TOKEN: "token",
   });
 
+  assert.match(output, /datadog\s+\| DD_API_KEY, DD_APP_KEY\s+\| ready/);
   assert.match(output, /exa-search\s+\| EXA_API_KEY\s+\| ready/);
   assert.match(output, /jira\s+\| JIRA_BASE_URL, JIRA_EMAIL, JIRA_AUTH_TOKEN\s+\| ready/);
   assert.match(output, /kagi-search\s+\| KAGI_API_KEY\s+\| missing KAGI_API_KEY/);
   assert.match(output, /pdca\s+\| —\s+\| ready/);
+  assert.doesNotMatch(output, /datadog-(api|app)-key/);
   assert.doesNotMatch(output, /do-not-print-me|https:\/\/jira\.test|user@example\.com|token/);
 });
 
