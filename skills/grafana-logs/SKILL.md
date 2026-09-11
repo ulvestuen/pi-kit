@@ -1,9 +1,9 @@
 ---
-name: querying-grafana-logs
+name: grafana-logs
 description: Queries Grafana Loki logs with the GCX CLI and discovers log labels and streams. Use when asked to search Grafana logs, investigate application errors, or correlate log events during an incident.
 ---
 
-# Querying Grafana logs
+# Grafana logs
 
 ```diagram
 ┌──────────────────────┐     ┌──────────┐     ┌───────────────────┐

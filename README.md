@@ -53,10 +53,11 @@ useful, a zero-dependency Node script the agent runs from the shell:
 
 - [`skills/datadog/`](./skills/datadog/) – read and manage Datadog monitors and access other Datadog APIs via a zero-dependency CLI (`datadog.mjs`, needs `DD_API_KEY` and `DD_APP_KEY`; optionally `DD_SITE`)
 - [`skills/exa-search/`](./skills/exa-search/) – web search via the Exa API (`exa-search.mjs`, needs `EXA_API_KEY`)
+- [`skills/grafana-logs/`](./skills/grafana-logs/) – search Grafana Loki logs and discover labels and streams using the pre-installed, authenticated `gcx` CLI; no bundled script or authentication setup
+- [`skills/grafana-metrics/`](./skills/grafana-metrics/) – discover and query Grafana Prometheus metrics with PromQL using the pre-installed, authenticated `gcx` CLI; no bundled script or authentication setup
 - [`skills/jira/`](./skills/jira/) – Jira Cloud issue management with scoped or unscoped API tokens via a zero-dependency CLI (`jira.mjs`, needs `JIRA_BASE_URL`, `JIRA_EMAIL`, and `JIRA_AUTH_TOKEN`)
 - [`skills/kagi-search/`](./skills/kagi-search/) – web search via the Kagi API (`kagi-search.mjs`, needs `KAGI_API_KEY`)
 - [`skills/linear/`](./skills/linear/) – read and manage Linear issues through its GraphQL API (`linear.mjs`, needs `LINEAR_API_KEY`)
-- [`skills/querying-grafana-logs/`](./skills/querying-grafana-logs/) – search Grafana Loki logs and discover labels and streams using the pre-installed, authenticated `gcx` CLI; no bundled script or authentication setup
 - [`skills/subagents/`](./skills/subagents/) – delegate focused work to isolated `pi` child processes with role prompts (scout, planner, implementer, critic, auditor) via `run-subagent.mjs`
 - [`skills/pdca/`](./skills/pdca/) – the Plan-Do-Check-Act quality loop, described by a single diagram
 
