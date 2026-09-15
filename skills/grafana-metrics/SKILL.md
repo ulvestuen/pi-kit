@@ -1,109 +1,124 @@
 ---
 name: grafana-metrics
-description: Queries Grafana Prometheus metrics with the GCX CLI and discovers metric names, labels, metadata, and series. Use when asked to fetch metrics, inspect rates or latency, compare trends, or investigate service health in Grafana.
+description: Queries Grafana Cloud Prometheus metrics and discovers names, labels, and metadata through the hosted MCP server using a Node.js proxy with OAuth login and token refresh. Use when inspecting rates, latency, trends, or service health in Grafana; no gcx CLI is needed.
 ---
 
 # Grafana metrics
 
 ```diagram
-┌──────────────────────┐     ┌─────────────┐     ┌────────────────────────────┐
-│ PromQL + time window │────▶│ gcx metrics │────▶│ Grafana Prometheus metrics │
-└──────────────────────┘     └─────────────┘     └────────────────────────────┘
+┌─────────────────┐     ┌───────────────────┐     ┌────────────────────┐
+│ Browser consent │────▶│ grafana.mjs       │────▶│ Grafana Cloud MCP  │
+│ OAuth + PKCE    │     │ PromQL → MCP call │     │ Prometheus metrics │
+└─────────────────┘     └───────────────────┘     └────────────────────┘
 ```
 
-Use the pre-installed, authenticated `gcx` CLI directly. No installation,
-login, credentials, or bundled script is needed. Use the configured default
-Prometheus datasource when unambiguous; otherwise discover and select its UID.
-Use `grafana-logs` for Loki log events rather than Prometheus metrics.
+Run the bundled zero-dependency Node.js 22+ script at
+`{baseDir}/grafana.mjs`. It proxies shell commands to
+`https://mcp.grafana.com/mcp` using Streamable HTTP, not legacy SSE transport.
+This skill directory is self-contained; no sibling directories are required.
 
-## Workflow
+## Configuration and login
 
-1. Establish the service, environment, metric or symptom, and time window.
-   Inspect `gcx config current-context`. If the target is ambiguous, clarify
-   before querying. Add `--context NAME` for one invocation without changing
-   the saved default. Discover datasources with
-   `gcx --context NAME datasources list --type prometheus -o json`, replacing
-   `NAME` with the confirmed context. Select with `--datasource UID`, not a
-   display name; pass it explicitly if no default is configured. Keep the
-   context and datasource consistent across discovery and queries.
-2. Discover metric names, metadata, and labels before constructing PromQL.
-   Confirm the metric type, units, and actual label values; replace the example
-   metrics and labels below with ones present in the target datasource.
-3. Choose an instant query for a snapshot or a range query for a trend. Start
-   with narrow selectors and a short window; choose a positive `--step` to
-   control evaluation density and aggregate away unnecessary series.
-4. Report the context/datasource, exact PromQL, evaluation time or range and
-   timezone, step, units, and relevant values or peaks. Separate measurements
-   from causal hypotheses. Empty results are not zero; missing samples and
-   `NaN`/infinite values must not be silently converted to zero.
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `GRAFANA_URL` | no | HTTPS stack origin, e.g. `https://your-stack.grafana.net`; sent as `X-Grafana-URL` and used to isolate cached logins |
+| `GRAFANA_OAUTH_PORT` | no | Loopback callback port; default `8787` |
+| `XDG_CONFIG_HOME` | no | Credential storage root; default `~/.config` (keep outside the repository) |
 
-## Commands
+Run `node {baseDir}/grafana.mjs status` first. If needed, have the
+user run `node {baseDir}/grafana.mjs login` and open the printed
+authorization URL in a browser on the same computer. Select the intended stack
+if prompted. The proxy handles public-client registration, OAuth authorization
+code + PKCE/state validation, secure local storage, and automatic token refresh.
+Only **Read access** is needed; leave **Query access** and **Write access** off.
 
-Check `gcx metrics <command> --help` if the installed version differs. Options
-are command-specific; do not copy flags from `gcx logs` or another metrics CLI.
+For an orb, SSH session, or other remote shell, use this two-step Bash flow
+in the user's terminal (not agent tool arguments):
 
 ```sh
-# Discover metric names, type/help metadata, labels, and matching series.
-gcx metrics list-names --prefix http_ --limit 50 -o json
-gcx metrics metadata --metric http_requests_total -o json
-gcx metrics labels --metric http_requests_total -o json
-gcx metrics labels --metric http_requests_total --label job -o json
-gcx metrics series '{__name__="http_requests_total",job="checkout"}' --since 30m -o json
-
-# Snapshot at an explicit instant; omit --time only when "now" is intended.
-gcx metrics query 'up{job="checkout"}' --time '2026-09-10T10:15:00Z' -o json
-
-# Request rate per second, grouped by job, over the last 30 minutes.
-gcx metrics query 'sum by (job) (rate(http_requests_total{job="checkout"}[5m]))' \
-  --since 30m --step 1m -o json
-
-# Classic-histogram p95 latency in seconds during an exact incident window.
-gcx --context prod metrics query --datasource PROMETHEUS_UID \
-  'histogram_quantile(0.95, sum by (le, job) (rate(http_request_duration_seconds_bucket{job="checkout"}[5m])))' \
-  --from '2026-09-10T10:00:00Z' --to '2026-09-10T10:15:00Z' \
-  --step 1m -o json
+node {baseDir}/grafana.mjs login --manual
+# Open the printed Grafana URL. After consent, the loopback page may fail to load.
+# Copy its complete address, including code and state. Within five minutes:
+read -r -s -p 'Paste callback URL: ' callback; printf '\n'
+printf '%s\n' "$callback" | node {baseDir}/grafana.mjs login --callback
+unset callback
 ```
 
-| Option | Meaning |
-| --- | --- |
-| `query --time TIME` | Instant evaluation; incompatible with `--from`, `--to`, or `--since` |
-| `query/series --since 30m` | Range ending now (or at `--to`); incompatible with `--from` |
-| `query/series --from TIME --to TIME` | Explicit range; both required, preferably RFC3339 with timezone offsets |
-| `query --step 1m` | Range evaluation interval, not the PromQL lookback window or scrape interval |
-| `list-names --prefix TEXT --limit N` | Case-sensitive name filter and output cap; default 100, while 0 removes the cap |
-| `labels --metric METRIC --label LABEL` | Values for a label on one metric; omit `--label` for label names |
-| `list-names/labels/series --match SELECTOR` | Scope series lookup; repeated selectors form a union, not an intersection |
-| `metadata --metric METRIC` | Type/help metadata for one metric, not sample values |
-| `-o json` | Structured output for analysis; preserve timestamps, labels, and values |
+Never paste callback URLs, codes, or tokens into chat or command arguments.
+The two skills share credentials when `GRAFANA_URL` is identical; no second login
+is needed. Tokens live in owner-only files (0600) under
+`~/.config/pi-kit/grafana/` (0700), or the corresponding XDG directory. They are
+not encrypted. Run commands sequentially to avoid competing refreshes.
+`status` is a local expiry check, not remote validation of the connection.
+Ctrl-C stops new work and waits for any in-flight OAuth exchange/save before
+releasing the lock; shutdown can take up to the request's 30-second timeout.
 
-Without time flags, `query` is instant and `series` is unbounded. Always bound
-series discovery. `list-names`, `labels`, and `metadata` have no time-range
-flags, so their results do not establish presence during an incident.
-Only `list-names` has `--limit`; it and name filters apply after fetching names.
-Prefer `--match` for server-side scoping. Queries, labels, metadata, and series
-have no result-limit flag. A larger step reduces evaluation points, not series
-cardinality, and can hide short spikes. Convert user-local times to explicit
-offsets or UTC, accounting for daylight saving time.
+## Discover, then query
 
-Single-quote PromQL to preserve shell operators and quotes. Use `rate` for
-per-second counter rates or `increase` for estimated counter changes over a
-window; apply them before aggregation to handle resets. Do not apply `rate`
-to gauges. Choose a rate window with enough scrapes (typically at least four
-scrape intervals); `[5m]` and `--step 1m` serve different purposes. For classic
-histogram quantiles, retain `le` when aggregating bucket rates, as above; do not
-average precomputed quantiles. Preserve units and use the same selectors and
-resolution for comparisons.
+```sh
+node {baseDir}/grafana.mjs tools list_datasources
+node {baseDir}/grafana.mjs call list_datasources '{"type":"prometheus"}'
+node {baseDir}/grafana.mjs tools list_prometheus_metric_names
+node {baseDir}/grafana.mjs tools list_prometheus_metric_metadata
+node {baseDir}/grafana.mjs tools list_prometheus_label_names
+node {baseDir}/grafana.mjs tools list_prometheus_label_values
+node {baseDir}/grafana.mjs tools query_prometheus
+# Write arguments matching the discovered inputSchema, then execute:
+node {baseDir}/grafana.mjs call query_prometheus --file /tmp/prometheus-query.json
+```
 
-## Safety
+Inspect the live `inputSchema` before each kind of call. Do not guess names,
+time formats/units, query-type values, or step syntax from another CLI.
+`tools [NAME]` follows tool-list pagination and returns only allowed read tools.
+`call NAME 'JSON'` passes an object unchanged; `--file PATH` reads a JSON file,
+and `--file -` reads stdin. Output preserves the complete MCP result, including
+`content`, `structuredContent`, and `isError`; tool errors exit nonzero. Handle
+pagination inside a tool's data result using that tool's schema. The proxy also
+allows `query_prometheus_histogram`, `get_datasource`, and `generate_deeplink`.
 
-- Keep this workflow read-only. Do not change contexts, datasources, recording
-  rules, alerts, or Adaptive Metrics aggregation rules to investigate metrics.
-- Labels may contain secrets or personal data. Redact sensitive values and
-  report only the series and samples needed; never enable insecure HTTP logging.
-- On empty results, check the target, names, labels, timezone, and scrape gaps
-  before widening the query. On timeouts or rate limits, narrow selectors or
-  ranges rather than repeatedly requesting larger results.
-- Report permission, authentication, or missing-configuration errors without
-  printing credentials or attempting login/setup; those are outside this skill.
+1. Confirm stack, service, environment, symptom, and time window. Discover the
+   Prometheus datasource and keep its UID consistent across calls; clarify
+   ambiguous targets rather than choosing silently.
+2. Discover metric names, type/help metadata, units, and actual label values
+   before writing PromQL. Scope discovery by selectors/time when supported.
+3. Use an instant query for a snapshot or a bounded range query for a trend.
+   Specify the evaluation time or start/end plus a positive step using the
+   schema's units. A larger step reduces evaluation points, not series count,
+   and may hide short spikes. Aggregate unnecessary series instead.
+4. Report stack/datasource, exact PromQL, time window/timezone, step, units, and
+   relevant values or peaks. Convert local times to explicit offsets or UTC,
+   accounting for daylight saving. Empty results are not zero; preserve gaps,
+   `NaN`, and infinite values. Separate measurements from causal hypotheses.
 
-Reference: [GCX metrics command reference](https://github.com/grafana/gcx/blob/main/docs/reference/cli/gcx_metrics.md).
+PromQL examples (replace names and values with discovered ones):
+
+```promql
+up{job="checkout"}
+sum by (job) (rate(http_requests_total{job="checkout"}[5m]))
+histogram_quantile(0.95, sum by (le, job) (rate(http_request_duration_seconds_bucket{job="checkout"}[5m])))
+```
+
+Use `rate` for per-second counter rates, `increase` for estimated counter changes,
+and neither for gauges. Apply them before aggregation to handle resets. Choose
+a rate window containing enough scrapes (typically at least four intervals).
+The `[5m]` lookback and query step serve different purposes. Retain `le` when
+aggregating classic histogram buckets; do not average precomputed quantiles.
+
+## Safety and failures
+
+- The proxy requests only `grafana:read` and blocks raw SQL and write tools.
+  Do not change datasources, recording rules, or alerts to investigate metrics.
+- Redact sensitive label values, never print the token cache, and remove
+  temporary query files after use. Report only the series/samples needed.
+- Check target, names, labels, timezone, and scrape gaps before widening empty
+  queries. Narrow selectors/ranges after HTTP 429, timeouts, or server errors;
+  these failures are not automatically retried. HTTP 401 triggers one refresh
+  retry; an expired MCP session is reopened once.
+- HTTP 403: check Assistant terms, the **Assistant Cloud MCP User** role (or
+  `grafana-assistant-app.cloud-mcp:access`), and read consent. Revoked refresh
+  tokens or Grafana's 30-day refresh limit require a new browser login.
+- `node {baseDir}/grafana.mjs logout` removes local credentials only.
+  Revoke remote access in **Assistant → Settings → Connectors → MCP clients**.
+  Cloud MCP access counts toward Grafana Assistant active-user usage.
+
+Reference: [Grafana Cloud MCP server](https://grafana.com/docs/grafana-cloud/ai-tools/mcp-servers/cloud-mcp/).
