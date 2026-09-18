@@ -14,7 +14,6 @@ flowchart LR
         subgraph skills["skills/ · plain skills"]
             search["exa-search · kagi-search<br/>web search"]
             trackers["jira · linear<br/>issue trackers"]
-            observability["datadog<br/>observability API"]
             subagents["subagents<br/>delegation roles"]
             pdca["pdca<br/>quality loop"]
         end
@@ -51,7 +50,6 @@ node skills/doctor.mjs
 Plain skills under [`skills/`](./skills/) — each is a `SKILL.md` plus, where
 useful, a zero-dependency Node script the agent runs from the shell:
 
-- [`skills/datadog/`](./skills/datadog/) – read and manage Datadog monitors and access other Datadog APIs via a zero-dependency CLI (`datadog.mjs`, needs `DD_API_KEY` and `DD_APP_KEY`; optionally `DD_SITE`)
 - [`skills/exa-search/`](./skills/exa-search/) – web search via the Exa API (`exa-search.mjs`, needs `EXA_API_KEY`)
 - [`skills/grafana-logs/`](./skills/grafana-logs/) – search Grafana Cloud Loki logs through the hosted MCP server; bundled Node.js proxy with OAuth browser login, PKCE, and automatic token refresh; no `gcx` required
 - [`skills/grafana-metrics/`](./skills/grafana-metrics/) – discover and query Grafana Cloud Prometheus metrics through its bundled read-only MCP proxy, sharing the OAuth login with the logs skill

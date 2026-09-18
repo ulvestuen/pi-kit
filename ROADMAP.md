@@ -19,7 +19,6 @@ flowchart LR
         subgraph skills["skills/ (plain skills)"]
             search["exa-search / kagi-search<br/>web search CLIs"]
             trackers["jira / linear<br/>issue-tracker CLIs"]
-            observability["datadog<br/>observability API CLI"]
             subagents["subagents<br/>delegate to pi child processes"]
             pdca["pdca<br/>quality loop (diagram-driven)"]
         end
