@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 export const REQUIREMENTS = [
   ["exa-search", ["EXA_API_KEY"]],
@@ -9,6 +10,7 @@ export const REQUIREMENTS = [
   ["linear", ["LINEAR_API_KEY"]],
   ["pdca", []],
   ["subagents", []],
+  ["tldraw-offline", []],
 ];
 
 export function renderHealthCheck(env = process.env) {
@@ -31,6 +33,9 @@ export function renderHealthCheck(env = process.env) {
   ].join("\n");
 }
 
-if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+if (
+  process.argv[1] &&
+  realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+) {
   console.log(renderHealthCheck());
 }

@@ -22,6 +22,7 @@ test("doctor reports configured and missing variables without exposing values", 
   assert.match(output, /jira\s+\| JIRA_BASE_URL, JIRA_EMAIL, JIRA_AUTH_TOKEN\s+\| ready/);
   assert.match(output, /kagi-search\s+\| KAGI_API_KEY\s+\| missing KAGI_API_KEY/);
   assert.match(output, /pdca\s+\| —\s+\| ready/);
+  assert.match(output, /tldraw-offline\s+\| —\s+\| ready/);
   assert.doesNotMatch(output, /do-not-print-me|https:\/\/jira\.test|user@example\.com|token/);
 });
 
