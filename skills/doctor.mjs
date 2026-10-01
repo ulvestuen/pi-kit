@@ -11,6 +11,7 @@ export const REQUIREMENTS = [
   ["pdca", []],
   ["subagents", []],
   ["tldraw-offline", []],
+  ["using-jev", ["TYPESAFE_API_KEY"]],
 ];
 
 export function renderHealthCheck(env = process.env) {

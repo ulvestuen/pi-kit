@@ -61,6 +61,7 @@ useful, a zero-dependency Node script the agent runs from the shell:
 - [`skills/tldraw-offline/`](./skills/tldraw-offline/) – inspect, edit, lint, and script open tldraw Desktop canvases through the local agent API (`tq.mjs` handles per-launch discovery and authentication)
 - [`skills/subagents/`](./skills/subagents/) – delegate focused work to isolated `pi` child processes with role prompts (scout, planner, implementer, critic, auditor) via `run-subagent.mjs`
 - [`skills/pdca/`](./skills/pdca/) – the Plan-Do-Check-Act quality loop, described by a single diagram
+- [`skills/using-jev/`](./skills/using-jev/) – make TypeSafe JEV API requests for yes/no probabilities, choices, and scores (`jev.mjs`, needs `TYPESAFE_API_KEY`)
 
 Each Grafana skill includes its own `grafana.mjs` and test file directly in
 [`grafana-logs/`](./skills/grafana-logs/) or
