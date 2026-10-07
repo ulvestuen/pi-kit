@@ -4,14 +4,15 @@
   "description": "pi extensions, integrations, and skills",
   "type": "module",
   "scripts": {
-    "test": "node --test skills/doctor.test.mjs skills/exa-search/exa-search-request.test.mjs skills/grafana-logs/grafana.test.mjs skills/grafana-metrics/grafana.test.mjs skills/jira/jira.test.mjs skills/kagi-search/kagi-search-request.test.mjs skills/linear/linear.test.mjs skills/tldraw-offline/tq.test.mjs skills/subagents/run-in-herdr-tab.test.mjs skills/subagents/run-subagent.test.mjs skills/using-jev/jev.test.mjs && npm run test --workspaces --if-present",
+    "test": "node --test skills/doctor.test.mjs skills/exa-search/exa-search-request.test.mjs skills/grafana-logs/grafana.test.mjs skills/grafana-metrics/grafana.test.mjs skills/jira/jira.test.mjs skills/kagi-search/kagi-search-request.test.mjs skills/linear/linear.test.mjs skills/tldraw-offline/tq.test.mjs skills/using-jev/jev.test.mjs && npm run test --workspaces --if-present",
     "verify": "npm test"
   },
   "keywords": [
     "pi-package"
   ],
   "workspaces": [
-    "threema"
+    "threema",
+    "subagents"
   ],
   "repository": {
     "type": "git",
@@ -19,7 +20,8 @@
   },
   "pi": {
     "extensions": [
-      "./threema"
+      "./threema",
+      "./subagents/index.ts"
     ],
     "skills": [
       "./skills"

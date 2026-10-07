@@ -5,21 +5,11 @@ This repository contains pi-related integrations and skills.
 See [`ROADMAP.md`](./ROADMAP.md) for the project direction: keeping every
 skill, process, and piece of tooling simple and visually understandable.
 
-```mermaid
-flowchart LR
-    pi(("pi agent")) --> skills
-    pi --> threema
-    subgraph kit["pi-kit"]
-        direction TB
-        subgraph skills["skills/ · plain skills"]
-            search["exa-search · kagi-search<br/>web search"]
-            trackers["jira · linear<br/>issue trackers"]
-            canvas["tldraw-offline<br/>desktop canvas automation"]
-            subagents["subagents<br/>delegation roles"]
-            pdca["pdca<br/>quality loop"]
-        end
-        threema["threema/ · extension<br/>send + receive messages"]
-    end
+```text
+Pi agent
+├─ skills/       search · issue trackers · canvas · delegation guidance · PDCA
+├─ subagents/    extension → fresh SDK sessions → live progress + results
+└─ threema/      extension → send + receive messages
 ```
 
 ## Verification
@@ -44,7 +34,10 @@ node skills/doctor.mjs
 
 ### Extensions
 
+The extensions target Pi **1.1.0+** using the `@earendil-works` SDK packages.
+
 - [`threema/`](./threema/) – Threema integration for pi
+- [`subagents/`](./subagents/) – standalone Pi SDK delegation with five roles, live progress, bounded parallelism, and cancellation; no Herdr or shell launcher
 
 ### Skills
 
@@ -60,7 +53,7 @@ useful, a zero-dependency Node script the agent runs from the shell:
 - [`skills/linear/`](./skills/linear/) – read and manage Linear issues through its GraphQL API (`linear.mjs`, needs `LINEAR_API_KEY`)
 - [`skills/cloudwatch-logs/`](./skills/cloudwatch-logs/) – look up AWS CloudWatch Logs and run Logs Insights queries directly with an installed, pre-authenticated AWS CLI; no additional credentials or scripts
 - [`skills/tldraw-offline/`](./skills/tldraw-offline/) – inspect, edit, lint, and script open tldraw Desktop canvases through the local agent API (`tq.mjs` handles per-launch discovery and authentication)
-- [`skills/subagents/`](./skills/subagents/) – delegate focused work to isolated `pi` child processes with role prompts (scout, planner, implementer, critic, auditor) via `run-subagent.mjs`
+- [`skills/subagents/`](./skills/subagents/) – delegation guidance for the `subagent` tool supplied by the subagents extension
 - [`skills/pdca/`](./skills/pdca/) – the Plan-Do-Check-Act quality loop, described by a single diagram
 - [`skills/using-jev/`](./skills/using-jev/) – make TypeSafe JEV API requests for yes/no probabilities, choices, and scores (`jev.mjs`, needs `TYPESAFE_API_KEY`)
 

@@ -8,26 +8,14 @@ not more documentation.
 
 ## Where the project is today
 
-pi-kit is a small toolkit for the `pi` agent: seven plain skills and one
-extension, all zero-dependency Node scripts verified by `npm test` from the
-repository root.
+pi-kit is a small toolkit for the `pi` agent: plain skills plus Threema and
+subagents extensions, verified by `npm test` from the repository root.
 
-```mermaid
-flowchart LR
-    subgraph pikit["pi-kit"]
-        direction TB
-        subgraph skills["skills/ (plain skills)"]
-            search["exa-search / kagi-search<br/>web search CLIs"]
-            trackers["jira / linear<br/>issue-tracker CLIs"]
-            subagents["subagents<br/>delegate to pi child processes"]
-            pdca["pdca<br/>quality loop (diagram-driven)"]
-        end
-        subgraph ext["threema/ (extension)"]
-            threema["send + receive<br/>Threema messages"]
-        end
-    end
-    pi(("pi agent")) --> skills
-    pi --> ext
+```text
+Pi agent
+├─ skills/       search · issue trackers · delegation guidance · PDCA
+├─ subagents/    SDK sessions + live terminal progress
+└─ threema/      send + receive messages
 ```
 
 ### Review snapshot (August 2026)
@@ -40,7 +28,7 @@ What already matches the principle, and what doesn't yet:
 | PDCA skill | Entire process carried by a single SVG diagram | ✅ The model to copy |
 | Test story | One `npm test` at the root runs everything | ✅ Simple |
 | Skill docs | Every skill has a diagram and follows the shared template | ✅ Visual |
-| Subagents skill | One tested helper owns the Herdr tab lifecycle | ✅ Simple |
+| Subagents | Standalone SDK extension owns delegation and progress; skill provides guidance | ✅ Simple |
 | README | Architecture and configuration health are visible at a glance | ✅ Visual |
 | CI | GitHub Actions runs the root test command on pushes and pull requests | ✅ Automated |
 | Test coverage | Exa request shaping and the Threema webhook flow have focused tests | ✅ Even |
@@ -53,7 +41,7 @@ one owner, a concrete acceptance check, and no build or runtime dependency.
 | Workstream | Implementation | Acceptance |
 | --- | --- | --- |
 | Visual foundation | Put the repo map in `README.md`; add a small flow diagram to each skill; add outbound and inbound sequences to `threema/README.md`; define `skills/TEMPLATE.md` | A visitor can identify every component and its data flow before reading commands |
-| Sub-agent simplification | Move Herdr tab creation, streaming, result capture, and cleanup into `run-in-herdr-tab.sh`; replace the prose recipe and patterns list with two diagrams | A focused test proves IDs are parsed, output stays clean, and the temporary tab is closed |
+| Sub-agent simplification | Replace shell/Herdr launchers with a standalone Pi SDK extension and live progress panel | Focused tests prove fresh sessions, role tool restrictions, bounded workers, cancellation and cleanup |
 | CLI consistency | Standardize search docs and flags on `--limit` and `--json`; retain Exa's `--num` as a compatibility alias; isolate and test Exa request shaping | Learning either search skill transfers directly to the other without breaking old Exa calls |
 | Safety net | Run all focused tests from root `npm test`; add a Node 22 GitHub Actions job for pushes and pull requests; exercise the real Threema webhook boundary | Local and CI verification use exactly the same command |
 | Controlled growth | Add `skills/doctor.mjs` for a value-free environment status table; require future skills to use the template, one script, one test, and zero runtime dependencies | `node skills/doctor.mjs` gives an at-a-glance status and the template defines the admission gate |
@@ -93,11 +81,9 @@ does.
 Goal: remove the places where following the docs requires careful multi-step
 reading.
 
-- [x] **Script the Herdr procedure.** Replace the 6-step manual tab recipe in
-      `skills/subagents/SKILL.md` with a small helper (e.g.
-      `run-in-herdr-tab.sh`) so the skill doc shrinks to "inside Herdr, run
-      this instead" plus one diagram. Cover it with a test alongside
-      `run-subagent.test.mjs`.
+- [x] **Remove the Herdr dependency.** The `subagents/` extension now creates
+      fresh Pi SDK sessions and renders progress directly in Pi. The skill
+      describes when and how to delegate; shell launchers are removed.
 - [x] **Add CI.** One GitHub Actions workflow that runs `npm test` on pushes
       and pull requests — a green check is the simplest possible status
       visualization.
