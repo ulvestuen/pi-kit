@@ -7,6 +7,7 @@ export const REQUIREMENTS = [
   ["exa-search", ["EXA_API_KEY"]],
   ["jira", ["JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_AUTH_TOKEN"]],
   ["kagi-search", ["KAGI_API_KEY"]],
+  ["orchestrate", []],
   ["pdca", []],
   ["subagents", []],
   ["tldraw-offline", []],

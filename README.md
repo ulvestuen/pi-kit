@@ -51,6 +51,7 @@ useful, a zero-dependency Node script the agent runs from the shell:
 - [`skills/kagi-search/`](./skills/kagi-search/) – web search via the Kagi API (`kagi-search.mjs`, needs `KAGI_API_KEY`)
 - [`skills/cloudwatch-logs/`](./skills/cloudwatch-logs/) – look up AWS CloudWatch Logs and run Logs Insights queries directly with an installed, pre-authenticated AWS CLI; no additional credentials or scripts
 - [`skills/tldraw-offline/`](./skills/tldraw-offline/) – inspect, edit, lint, and script open tldraw Desktop canvases through the local agent API (`tq.mjs` handles per-launch discovery and authentication)
+- [`skills/orchestrate/`](./skills/orchestrate/) – outcome-first workflow with task dependencies, user checkpoints, bounded delegation, and acceptance, regression, and scope audits; load with `/skill:orchestrate`
 - [`skills/subagents/`](./skills/subagents/) – delegation guidance for the `subagent` tool supplied by the subagents extension
 - [`skills/pdca/`](./skills/pdca/) – the Plan-Do-Check-Act quality loop, described by a single diagram
 - [`skills/using-jev/`](./skills/using-jev/) – make TypeSafe JEV API requests for yes/no probabilities, choices, and scores (`jev.mjs`, needs `TYPESAFE_API_KEY`)

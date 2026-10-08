@@ -21,3 +21,8 @@ the loop.
 
 Skip the loop for trivial single-step tasks; the overhead only pays off when
 iteration against an explicit bar adds value.
+
+With [task orchestration](../orchestrate/SKILL.md), run PDCA inside a
+bounded task, not around the scheduler. Return the result and evidence, or the
+unmet criteria and blocker. “Done” here means that task met its bar; the parent
+still accepts its evidence, integrates changes, and checks the overall outcome.

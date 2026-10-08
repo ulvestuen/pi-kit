@@ -20,8 +20,12 @@ extension; there is no shell fallback and no Herdr requirement.
 | `scout` | Explore one question with `path:line` evidence | read, grep, find, ls |
 | `planner` | Break a goal into tasks and acceptance criteria | read, grep, find, ls |
 | `implementer` | Implement and verify one scoped task | read, bash, edit, write |
-| `critic` | Independently review against explicit criteria | read, grep, find, ls |
+| `critic` | Review intended behaviour; findings by default, scores on request | read, grep, find, ls |
 | `auditor` | Verify with exact command evidence | read, bash, grep, find, ls |
+
+For task dependencies, user checkpoints, integration, and audit patterns, use
+the [orchestrate skill](../orchestrate/SKILL.md). The parent owns
+that workflow; the tool runs batches, not a dependency-aware task scheduler.
 
 Call the tool with a batch of self-contained briefs:
 
