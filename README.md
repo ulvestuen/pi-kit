@@ -7,10 +7,53 @@ skill, process, and piece of tooling simple and visually understandable.
 
 ```text
 Pi agent
-├─ skills/       search · issue trackers · canvas · delegation guidance · PDCA
+├─ skills/       search · issue trackers · canvas · orchestration · PDCA
 ├─ subagents/    extension → fresh SDK sessions → live progress + results
 └─ threema/      extension → send + receive messages
 ```
+
+## Opt into the coding baseline
+
+[`CODING.md`](./CODING.md) is a short reusable policy for investigating,
+implementing, and verifying coding tasks. [`AGENTS.md`](./AGENTS.md) adds facts
+and check commands for working on pi-kit itself. Neither is installed into
+your personal configuration by `pi install`; no companion skill is required.
+
+To use the baseline in every project on the machine where you run Pi:
+
+1. Review `CODING.md` and your existing global instructions. Pi's agent
+   directory defaults to `~/.pi/agent/`, or `PI_CODING_AGENT_DIR` when set.
+2. Merge the policy text once into the active context file there, normally
+   `AGENTS.md`, preserving existing instructions and resolving contradictions.
+   Pi selects the first existing file per directory in this order:
+   `AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD`.
+   Edit the active file instead of creating one that shadows existing rules.
+   If none exists, create `AGENTS.md`. Copy the policy text, not just a link,
+   so it is included at startup rather than requiring a later file read.
+3. Keep project architecture and exact verification commands in each project's
+   own context file. Do not copy pi-kit's commands into unrelated projects.
+4. Start a fresh `pi --verbose` session and check that the startup header lists
+   the intended instruction files. Use `/reload` after later edits. For deeper
+   inspection after a turn, `/debug` saves session messages in the agent
+   directory's `pi-debug.log`; keep that file private and inspect its system
+   messages for the policy. Do not use `/share` for this check.
+
+Use context instructions rather than replacing `SYSTEM.md`: replacement
+prompts bypass Pi's normal base/tool guidance. No model setting or global file
+is changed by this repository. To opt out, remove only the policy section you
+added, preserve your other instructions, and reload or start a fresh session.
+See Pi's [configuration](https://pi.dev/docs/latest/configuration) and
+[terminal usage](https://pi.dev/docs/latest/usage) documentation.
+
+### Check whether it helps
+
+Compare a reproducible bug fix, a small feature following an existing pattern,
+and a review with a known defect. Use fresh sessions and separate disposable
+checkouts from the same starting state. Keep the provider/model and thinking
+level fixed between the current setup and the revised one; change one thing
+at a time. Record accepted behavior, defects, corrective prompts, elapsed time,
+and reported usage/cost. Keep session traces local and repeat surprising results.
+Fixture tests verify the harness contracts, not real-model coding quality.
 
 ## Verification
 
@@ -52,7 +95,6 @@ useful, a zero-dependency Node script the agent runs from the shell:
 - [`skills/cloudwatch-logs/`](./skills/cloudwatch-logs/) – look up AWS CloudWatch Logs and run Logs Insights queries directly with an installed, pre-authenticated AWS CLI; no additional credentials or scripts
 - [`skills/tldraw-offline/`](./skills/tldraw-offline/) – inspect, edit, lint, and script open tldraw Desktop canvases through the local agent API (`tq.mjs` handles per-launch discovery and authentication)
 - [`skills/orchestrate/`](./skills/orchestrate/) – outcome-first workflow with task dependencies, user checkpoints, bounded delegation, and acceptance, regression, and scope audits; load with `/skill:orchestrate`
-- [`skills/subagents/`](./skills/subagents/) – delegation guidance for the `subagent` tool supplied by the subagents extension
 - [`skills/pdca/`](./skills/pdca/) – the Plan-Do-Check-Act quality loop, described by a single diagram
 - [`skills/using-jev/`](./skills/using-jev/) – make TypeSafe JEV API requests for yes/no probabilities, choices, and scores (`jev.mjs`, needs `TYPESAFE_API_KEY`)
 

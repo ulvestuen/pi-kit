@@ -22,9 +22,15 @@ npm ci
 pi -e ./subagents/index.ts
 ```
 
-Ask Pi to delegate a task, or load `/skill:subagents` for the role workflow.
-The extension also works without the skill; its tool includes delegation
-guidance. `subagents/` can be installed on its own as a local Pi package.
+Ask Pi to delegate a task. The tool includes its own delegation guidance.
+`subagents/` can be installed on its own as a local Pi package.
+
+The tool describes each role and its allowed tools directly from the bundled
+role definitions. Work directly by default; delegate a bounded independent
+task or a useful fresh-context review, not a mandatory sequence of roles.
+Provide the goal, scope, paths, decisions, acceptance checks, and required
+evidence. A critic cannot run git or tests: supply a readable diff for change
+reviews and use an auditor when command-backed verification is needed.
 
 The `subagent` tool accepts `tasks: [{ role, task, cwd?, model? }]`,
 `concurrency` (default 2, max 4), and `timeout` (seconds per child, default
@@ -48,10 +54,13 @@ the children; they are not automatically added to the parent's provider usage.
 Parent cancellation and session shutdown/reload also abort children and
 dispose their sessions. Individual failures do not discard successful sibling
 answers. Progress is available as structured tool updates in non-TUI modes.
+A `completed` status means the child returned, not that its acceptance checks
+passed. Inspect the changes and evidence before accepting work; after a failure
+or cancellation, inspect partial edits before retrying.
 
 ## Isolation and tradeoffs
 
-Each child has a fresh in-memory conversation, explicit role prompt and tool
+Each child has a fresh in-memory conversation, appended role prompt and tool
 allowlist, and separate settings/resources and model runtime. Authentication
 and provider requests delegate to the parent's public model registry at request
 time, preserving CLI key overrides, OAuth refresh, custom providers, headers,
@@ -60,9 +69,25 @@ The active model and thinking level are inherited unless a task overrides the
 model. Virtual/router models require an explicit physical `provider/model-id`:
 Pi's extension facade does not expose their routing definitions to child SDK
 runtimes.
-Repository `AGENTS.md`/`CLAUDE.md` instructions remain available; parent
-conversation history, extensions, skills, and prompt templates do not.
-No project-local executable agent definitions are discovered.
+
+Pi's normal prompt assembly remains intact: the default base (or an applicable
+configured `SYSTEM.md`), configured `APPEND_SYSTEM.md`, and discovered global
+and repository context files remain available. Role instructions and the
+no-nesting rule are appended instead of replacing that baseline. A trusted
+project's prompt file takes precedence over the matching global file; Pi does
+not combine both files of the same name.
+
+Children inherit the parent's project-trust decision only for the same
+resolved working-directory path. Another `cwd`, including a worktree or
+subdirectory, does not inherit that trust: its `.pi/SYSTEM.md` and
+`.pi/APPEND_SYSTEM.md` are not loaded. Global prompt files and ancestor/cwd
+`AGENTS.md`/`CLAUDE.md` context still load; context-file discovery is not
+trust-gated. This does not sandbox shell commands or file reads.
+
+The parent's assembled prompt, conversation history, extensions, skills, and
+prompt templates are not copied. Supply any task-specific skill instructions
+or readable references explicitly. No project-local executable agent
+definitions are discovered.
 
 SDK sessions avoid subprocess startup and JSONL parsing, and provide typed
 events and cancellation. They **are not security or crash-isolation boundaries**:

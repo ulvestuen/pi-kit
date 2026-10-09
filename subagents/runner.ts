@@ -37,21 +37,31 @@ export interface Details {
 }
 type Child = Pick<AgentSession, "subscribe" | "prompt" | "abort" | "dispose" | "messages">;
 type SessionFactory = (options: CreateAgentSessionOptions) => Promise<{ session: Child }>;
-type Parent = Pick<CreateAgentSessionOptions, "model" | "thinkingLevel"> & {
+type Parent = Pick<CreateAgentSessionOptions, "model" | "thinkingLevel" | "agentDir"> & {
   cwd: string;
   modelRegistry: ModelRegistry;
+  projectTrusted: boolean;
 };
+
+export async function loadRole(role: Role) {
+  if (!roles.includes(role)) throw new Error(`Unknown role: ${role}`);
+  const raw = await readFile(new URL(`./roles/${role}.md`, import.meta.url), "utf8");
+  const frontmatter = raw.match(/^---\n([\s\S]*?)\n---\n/);
+  const description = frontmatter?.[1].match(/^description:\s*(.+)$/m)?.[1].trim();
+  const tools = frontmatter?.[1].match(/^tools:\s*(.+)$/m)?.[1].split(",").map((s) => s.trim());
+  if (!frontmatter || !description || !tools?.length || tools.some((tool) => !tool)) {
+    throw new Error(`Invalid role definition: ${role}`);
+  }
+  return { role, description, tools, prompt: raw.slice(frontmatter[0].length).trim() };
+}
 
 async function childOptions(
   task: Task,
   parent: Parent,
 ): Promise<CreateAgentSessionOptions> {
-  if (!roles.includes(task.role)) throw new Error(`Unknown role: ${task.role}`);
+  const role = await loadRole(task.role);
   const cwd = path.resolve(parent.cwd, task.cwd ?? ".");
-  const raw = await readFile(new URL(`./roles/${task.role}.md`, import.meta.url), "utf8");
-  const frontmatter = raw.match(/^---\n([\s\S]*?)\n---\n/);
-  const tools = frontmatter?.[1].match(/^tools:\s*(.+)$/m)?.[1].split(",").map((s) => s.trim());
-  if (!frontmatter || !tools) throw new Error(`Invalid role definition: ${task.role}`);
+  const agentDir = parent.agentDir ?? getAgentDir();
   let model = parent.model;
   if (task.model) {
     const slash = task.model.indexOf("/");
@@ -83,25 +93,32 @@ async function childOptions(
     stream: registry.stream.bind(registry),
     streamSimple: registry.streamSimple.bind(registry),
   });
-  const settingsManager = SettingsManager.inMemory();
+  // Trust in the parent's cwd does not grant trust to another worktree or folder.
+  const settingsManager = SettingsManager.inMemory({}, {
+    projectTrusted: parent.projectTrusted && cwd === path.resolve(parent.cwd),
+  });
   const resourceLoader = new DefaultResourceLoader({
     cwd,
-    agentDir: getAgentDir(),
+    agentDir,
     settingsManager,
     noExtensions: true,
     noSkills: true,
     noPromptTemplates: true,
     noThemes: true,
-    systemPrompt: raw.slice(frontmatter[0].length).trim(),
-    appendSystemPrompt: ["Do not delegate further or launch nested Pi sessions. Complete the assigned task directly."],
+    appendSystemPromptOverride: (base) => [
+      ...base,
+      role.prompt,
+      "Do not delegate further or launch nested Pi sessions. Complete the assigned task directly.",
+    ],
   });
   await resourceLoader.reload();
   return {
     cwd,
+    agentDir,
     model,
     modelRuntime,
     thinkingLevel: parent.thinkingLevel,
-    tools,
+    tools: role.tools,
     settingsManager,
     resourceLoader,
     sessionManager: SessionManager.inMemory(cwd),

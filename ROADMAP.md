@@ -13,7 +13,7 @@ subagents extensions, verified by `npm test` from the repository root.
 
 ```text
 Pi agent
-├─ skills/       search · issue trackers · delegation guidance · PDCA
+├─ skills/       search · issue trackers · orchestration · PDCA
 ├─ subagents/    SDK sessions + live terminal progress
 └─ threema/      send + receive messages
 ```
@@ -28,7 +28,7 @@ What already matches the principle, and what doesn't yet:
 | PDCA skill | Entire process carried by a single SVG diagram | ✅ The model to copy |
 | Test story | One `npm test` at the root runs everything | ✅ Simple |
 | Skill docs | Every skill has a diagram and follows the shared template | ✅ Visual |
-| Subagents | Standalone SDK extension owns delegation and progress; skill provides guidance | ✅ Simple |
+| Subagents | Standalone SDK extension owns delegation, progress, and tool guidance | ✅ Simple |
 | README | Architecture and configuration health are visible at a glance | ✅ Visual |
 | CI | GitHub Actions runs the root test command on pushes and pull requests | ✅ Automated |
 | Test coverage | Exa request shaping and the Threema webhook flow have focused tests | ✅ Even |
@@ -66,8 +66,7 @@ does.
       shape of the project, not a link list.
 - [x] **One diagram per skill.** Give each `SKILL.md` a small Mermaid diagram
       at the top: the search and tracker skills get a three-node
-      `env vars → CLI → API` strip; `subagents` gets a flow showing
-      orchestrator → role → result.
+      `env vars → CLI → API` strip.
 - [x] **Threema message-flow diagram.** `threema/README.md` is thorough but
       300 lines of prose; add one sequence diagram for outbound send and one
       for the inbound webhook path (Gateway → MAC check → allowlist →
@@ -82,8 +81,8 @@ Goal: remove the places where following the docs requires careful multi-step
 reading.
 
 - [x] **Remove the Herdr dependency.** The `subagents/` extension now creates
-      fresh Pi SDK sessions and renders progress directly in Pi. The skill
-      describes when and how to delegate; shell launchers are removed.
+      fresh Pi SDK sessions and renders progress directly in Pi. Its tool
+      includes delegation guidance; shell launchers are removed.
 - [x] **Add CI.** One GitHub Actions workflow that runs `npm test` on pushes
       and pull requests — a green check is the simplest possible status
       visualization.

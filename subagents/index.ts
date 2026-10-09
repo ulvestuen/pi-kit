@@ -1,9 +1,10 @@
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, truncateHead, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { progressLines, roles, runBatch, type Details } from "./runner.ts";
+import { loadRole, progressLines, roles, runBatch, type Details } from "./runner.ts";
 
-export default function (pi: ExtensionAPI) {
+export default async function (pi: ExtensionAPI) {
+  const definitions = await Promise.all(roles.map(loadRole));
   const active = new Set<AbortController>();
   const pending = new Set<Promise<Details>>();
   let closing = false;
@@ -12,11 +13,16 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool(defineTool({
     name: "subagent",
     label: "Subagents",
-    description: "Delegate 1–8 focused tasks to fresh Pi SDK sessions. Roles: scout, planner, implementer, critic, auditor. Returns final answers and per-task status. No parent conversation, extensions or skills are inherited. Tasks share filesystem permissions; this is not a sandbox.",
+    description: [
+      "Delegate 1–8 focused tasks to fresh Pi SDK sessions. Returns final answers and per-task status. Children load applicable user/repository instructions, but do not inherit this conversation, extensions or skills. Tasks share filesystem permissions; this is not a sandbox.",
+      ...definitions.map((role) => `${role.role}: ${role.description} Tools: ${role.tools.join(", ")}.`),
+    ].join("\n"),
     promptSnippet: "subagent: delegate focused work with live progress and role-restricted tools.",
     promptGuidelines: [
-      "Give each subagent a self-contained brief with scope, evidence needed, and acceptance criteria; it cannot see this conversation.",
-      "Use parallel tasks only for independent work. Serialize edits in the same checkout or use separate worktrees via cwd. Verify returned claims.",
+      "Work directly by default. Use subagent for a bounded independent task or useful fresh-context review, not a mandatory role pipeline; do not launch shell-based agents.",
+      "Give each subagent a self-contained brief with the goal, scope, paths, settled decisions, acceptance checks, and required evidence. Supply any needed skill instructions or readable references explicitly.",
+      "Use parallel tasks only for independent work. Serialize overlapping edits or use separate worktrees via cwd. A critic cannot run git or tests; provide a readable diff for change reviews and use an auditor for command-backed checks.",
+      "A completed status only means the child returned. Inspect changes and verify claims before accepting the work. After failure, cancellation, or timeout, inspect partial changes before retrying.",
     ],
     exposure: "model-only",
     executionMode: "sequential",
@@ -24,8 +30,8 @@ export default function (pi: ExtensionAPI) {
       tasks: Type.Array(Type.Object({
         role: Type.Union(roles.map((role) => Type.Literal(role))),
         task: Type.String({ minLength: 1, description: "Self-contained task brief" }),
-        cwd: Type.Optional(Type.String({ description: "Working directory, relative to the parent cwd or absolute" })),
-        model: Type.Optional(Type.String({ description: "provider/model-id; defaults to the active parent model" })),
+        cwd: Type.Optional(Type.String({ description: "Working directory, relative to the parent cwd or absolute. A different directory does not inherit project trust for .pi prompt files." })),
+        model: Type.Optional(Type.String({ description: "provider/model-id; defaults to the active parent model. Required when the parent uses a virtual/router model." })),
       }), { minItems: 1, maxItems: 8 }),
       concurrency: Type.Optional(Type.Integer({ minimum: 1, maximum: 4, description: "Default 2; use 1 for overlapping edits" })),
       timeout: Type.Optional(Type.Integer({ minimum: 1, maximum: 3600, description: "Seconds per child including setup; default 600" })),
@@ -44,6 +50,7 @@ export default function (pi: ExtensionAPI) {
             model: ctx.model,
             modelRegistry: ctx.modelRegistry,
             thinkingLevel: ctx.thinkingLevel ?? pi.getThinkingLevel(),
+            projectTrusted: ctx.isProjectTrusted(),
           },
           concurrency: params.concurrency ?? 2,
           timeoutMs: (params.timeout ?? 600) * 1000,

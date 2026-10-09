@@ -55,10 +55,11 @@ and rubric in the child's brief; children do not inherit the parent's skills.
 
 ## Delegate with a purpose
 
-Use the Pi `subagent` tool and the [subagents skill](../subagents/SKILL.md) for
-its API and limits. If unavailable, do the work directly or report the missing
-capability; do not launch shell-based agents. Children have fresh context and
-no inherited skills: include needed instructions, not just a skill name.
+Use the Pi `subagent` tool supplied by the [subagents extension](../../subagents/README.md).
+Its tool definition describes the API and limits. If unavailable, do the work
+directly or report the missing capability; do not launch shell-based agents.
+Children have fresh context and no inherited skills: include needed instructions,
+not just a skill name.
 
 | Pattern | Use when | Assignment |
 | --- | --- | --- |

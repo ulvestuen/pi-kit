@@ -9,7 +9,6 @@ export const REQUIREMENTS = [
   ["kagi-search", ["KAGI_API_KEY"]],
   ["orchestrate", []],
   ["pdca", []],
-  ["subagents", []],
   ["tldraw-offline", []],
   ["using-jev", ["TYPESAFE_API_KEY"]],
 ];

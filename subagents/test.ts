@@ -5,12 +5,12 @@ import path from "node:path";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import {
-  createAssistantMessageEventStream, InMemoryCredentialStore,
+  createAssistantMessageEventStream, getCurrentSystemPrompt, getCurrentTools, InMemoryCredentialStore,
   type AssistantMessage, type Context, type Model,
   type StreamOptions, type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import {
-  createAgentSession, ModelRegistry, ModelRuntime,
+  createAgentSession, DefaultResourceLoader, ModelRegistry, ModelRuntime, SessionManager, SettingsManager,
   type AgentSessionEvent, type ExtensionAPI,
   type ExtensionToolContext, type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
@@ -26,7 +26,7 @@ const model: Model<any> = {
 };
 const modelRuntime = await ModelRuntime.create({ credentials: new InMemoryCredentialStore(), modelsPath: null, refreshOnCreate: false });
 const modelRegistry = new ModelRegistry(modelRuntime);
-const parent = { cwd: process.cwd(), model, modelRegistry, thinkingLevel: "high" as const };
+const parent = { cwd: process.cwd(), model, modelRegistry, thinkingLevel: "high" as const, projectTrusted: false };
 
 function message(text: string, stopReason: AssistantMessage["stopReason"] = "stop"): AssistantMessage {
   return {
@@ -55,6 +55,7 @@ function fakeSession(prompt: (emit: (event: AgentSessionEvent) => void, task: st
 
 test("real SDK sessions restrict tools, inherit model/auth/thinking, retain instructions, and isolate history/resources", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "pi-kit-sdk-"));
+  const agentDir = path.join(dir, "agent");
   const contexts: TranscriptContext[] = [];
   modelRegistry.registerProvider("pi-kit-test", {
     apiKey: "non-secret-fixture", api: model.api,
@@ -71,6 +72,7 @@ test("real SDK sessions restrict tools, inherit model/auth/thinking, retain inst
       return stream;
     },
   });
+  await mkdir(agentDir);
   await writeFile(path.join(dir, "AGENTS.md"), "Always cite local evidence.");
   await writeFile(path.join(dir, "evidence.txt"), "asymmetric evidence ✓");
   await mkdir(path.join(dir, ".pi", "extensions"), { recursive: true });
@@ -79,7 +81,7 @@ test("real SDK sessions restrict tools, inherit model/auth/thinking, retain inst
   const sessions: Awaited<ReturnType<typeof createAgentSession>>["session"][] = [];
   try {
     const result = await runBatch([{ role: "scout", task: "Find evidence." }, { role: "critic", task: "Check the evidence." }], {
-      parent: { ...parent, cwd: dir }, concurrency: 2, timeoutMs: 5000,
+      parent: { ...parent, cwd: dir, agentDir }, concurrency: 2, timeoutMs: 5000,
       onUpdate: (d) => updates.push(d),
       createSession: async (options) => {
         assert.notEqual(options.modelRuntime, modelRuntime);
@@ -107,9 +109,82 @@ test("real SDK sessions restrict tools, inherit model/auth/thinking, retain inst
     assert.equal(contexts.length, 4);
     assert.equal(contexts.filter((c) => !c.messages.some((m) => m.role === "assistant")).length, 2);
     assert.ok(contexts.every((c) => c.messages.filter((m) => m.role === "user").length === 1));
+    for (const context of contexts) {
+      const prompt = getCurrentSystemPrompt(context.messages);
+      assert.match(prompt, /expert coding assistant/);
+      assert.match(prompt, /<rules>/);
+      assert.match(prompt, /Always cite local evidence/);
+      assert.match(prompt, /read-only exploration agent|independent critic/);
+      assert.equal(prompt.split("Do not delegate further or launch nested Pi sessions.").length - 1, 1);
+    }
     assert.ok(contexts.some((c) => c.messages.some((m) => m.role === "toolResult" && m.content.some((part) => part.type === "text" && part.text.includes("asymmetric evidence")))));
     assert.ok(updates.some((d) => d.results.some((r) => r.status === "running")));
     assert.deepEqual(updates[0].results.map((r) => r.status), ["queued", "queued"], "snapshots must not mutate after delivery");
+  } finally {
+    modelRegistry.unregisterProvider("pi-kit-test");
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("child prompts preserve configured additions without extending project trust or accumulating role instructions", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "pi-kit-prompts-"));
+  const agentDir = path.join(dir, "agent");
+  const cwd = path.join(dir, "project");
+  const otherCwd = path.join(dir, "other-project");
+  const prompts: string[] = [];
+  modelRegistry.registerProvider("pi-kit-test", {
+    apiKey: "non-secret-fixture", api: model.api,
+    streamSimple: (_model, context) => {
+      prompts.push(getCurrentSystemPrompt(context.messages));
+      const stream = createAssistantMessageEventStream();
+      const final = message("Prompt fixture finished");
+      stream.push({ type: "start", partial: final });
+      stream.push({ type: "done", reason: "stop", message: final });
+      stream.end();
+      return stream;
+    },
+  });
+  try {
+    await mkdir(agentDir);
+    await writeFile(path.join(agentDir, "AGENTS.md"), "GLOBAL_CONTEXT_FIXTURE");
+    await writeFile(path.join(agentDir, "APPEND_SYSTEM.md"), "GLOBAL_APPEND_FIXTURE");
+    for (const project of [cwd, otherCwd]) {
+      await mkdir(path.join(project, ".pi"), { recursive: true });
+      await writeFile(path.join(project, "AGENTS.md"), "PROJECT_CONTEXT_FIXTURE");
+      await writeFile(path.join(project, ".pi", "SYSTEM.md"), "PROJECT_BASE_FIXTURE");
+      await writeFile(path.join(project, ".pi", "APPEND_SYSTEM.md"), "PROJECT_APPEND_FIXTURE");
+    }
+    const cases = [
+      { projectTrusted: false, customBase: false, childCwd: cwd, base: /expert coding assistant/, append: "GLOBAL_APPEND_FIXTURE" },
+      { projectTrusted: false, customBase: true, childCwd: cwd, base: /GLOBAL_BASE_FIXTURE/, append: "GLOBAL_APPEND_FIXTURE" },
+      { projectTrusted: true, customBase: true, childCwd: cwd, base: /PROJECT_BASE_FIXTURE/, append: "PROJECT_APPEND_FIXTURE" },
+      { projectTrusted: true, customBase: true, childCwd: otherCwd, base: /GLOBAL_BASE_FIXTURE/, append: "GLOBAL_APPEND_FIXTURE" },
+    ];
+    for (const scenario of cases) {
+      if (scenario.customBase) await writeFile(path.join(agentDir, "SYSTEM.md"), "GLOBAL_BASE_FIXTURE");
+      prompts.length = 0;
+      const result = await runBatch(Array.from({ length: 2 }, () => ({
+        role: "implementer" as const, task: "Inspect prompt delivery.", cwd: scenario.childCwd,
+      })), {
+        parent: { ...parent, cwd, agentDir, projectTrusted: scenario.projectTrusted },
+        concurrency: 1, timeoutMs: 5000,
+      });
+      assert.deepEqual(result.results.map((r) => r.status), ["completed", "completed"], JSON.stringify(result));
+      assert.equal(prompts.length, 2);
+      for (const prompt of prompts) {
+        assert.match(prompt, scenario.base);
+        assert.match(prompt, /GLOBAL_CONTEXT_FIXTURE/);
+        assert.match(prompt, /PROJECT_CONTEXT_FIXTURE/);
+        assert.equal(prompt.split(scenario.append).length - 1, 1);
+        assert.equal(prompt.split("You implement exactly one task.").length - 1, 1);
+        assert.equal(prompt.split("Do not delegate further or launch nested Pi sessions.").length - 1, 1);
+        if (scenario.append === "GLOBAL_APPEND_FIXTURE") {
+          assert.doesNotMatch(prompt, /PROJECT_BASE_FIXTURE|PROJECT_APPEND_FIXTURE/);
+        } else {
+          assert.doesNotMatch(prompt, /GLOBAL_BASE_FIXTURE|GLOBAL_APPEND_FIXTURE/);
+        }
+      }
+    }
   } finally {
     modelRegistry.unregisterProvider("pi-kit-test");
     await rm(dir, { recursive: true, force: true });
@@ -299,11 +374,64 @@ test("invalid batch limits and unknown models do not start children", async () =
   assert.match(virtual.results[0].error!, /physical provider\/model-id/);
 });
 
-function captureExtension() {
+test("the extension exposes role capabilities and delegation guidance to Pi without a skill", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "pi-kit-extension-"));
+  const contexts: TranscriptContext[] = [];
+  let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
+  modelRegistry.registerProvider("pi-kit-test", {
+    apiKey: "non-secret-fixture", api: model.api,
+    streamSimple: (_model, context) => {
+      contexts.push(context);
+      const stream = createAssistantMessageEventStream();
+      const final = message("Main agent fixture finished");
+      stream.push({ type: "start", partial: final });
+      stream.push({ type: "done", reason: "stop", message: final });
+      stream.end();
+      return stream;
+    },
+  });
+  try {
+    const settingsManager = SettingsManager.inMemory({}, { projectTrusted: false });
+    const resourceLoader = new DefaultResourceLoader({
+      cwd: dir, agentDir: dir, settingsManager,
+      noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true,
+      extensionFactories: [extension],
+    });
+    await resourceLoader.reload();
+    assert.deepEqual(resourceLoader.getExtensions().errors, []);
+    ({ session } = await createAgentSession({
+      cwd: dir, agentDir: dir, model, modelRuntime, settingsManager, resourceLoader,
+      sessionManager: SessionManager.inMemory(dir),
+    }));
+    await session.bindExtensions({});
+    await session.prompt("Inspect the available delegation capabilities.");
+    assert.equal(contexts.length, 1);
+    const context = contexts[0];
+    const tool = getCurrentTools(context.messages).find((tool) => tool.name === "subagent");
+    assert.ok(tool, "subagent must be declared without loading a skill");
+    for (const role of ["scout", "planner", "implementer", "critic", "auditor"]) {
+      assert.match(tool.description, new RegExp(`${role}: .+Tools:`));
+    }
+    assert.match(tool.description, /critic:.*read-only.*Tools: read, grep, find, ls/);
+    assert.match(tool.description, /auditor:.*shell access.*Tools: read, bash/);
+    const prompt = getCurrentSystemPrompt(context.messages);
+    assert.match(prompt, /Work directly by default/);
+    assert.match(prompt, /self-contained brief/);
+    assert.match(prompt, /completed status only means the child returned/);
+    assert.match(prompt, /critic cannot run git or tests/);
+    assert.doesNotMatch(prompt, /<available_skills>/);
+  } finally {
+    session?.dispose();
+    modelRegistry.unregisterProvider("pi-kit-test");
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+async function captureExtension() {
   let tool: ToolDefinition<any, Details>;
   let command: { handler: (args: string, ctx: any) => Promise<void> };
   const events = new Map<string, Function>();
-  extension({
+  await extension({
     registerTool: (value: typeof tool) => { tool = value; },
     registerCommand: (_name: string, value: typeof command) => { command = value; },
     on: (name: string, handler: Function) => { events.set(name, handler); },
@@ -313,7 +441,7 @@ function captureExtension() {
 }
 
 test("tool renderer shows progress at narrow widths, expands answers, and command clears the UI", async () => {
-  const { tool, command, events } = captureExtension();
+  const { tool, command, events } = await captureExtension();
   const details: Details = { results: [{ role: "scout", task: "Find evidence", id: 1,
     status: "completed", activity: "Finished", tools: 3, tokens: 42, cost: 0.1,
     elapsedMs: 2500, answer: "Evidence in retry.ts:17" }] };
@@ -343,9 +471,10 @@ test("tool renderer shows progress at narrow widths, expands answers, and comman
 });
 
 test("shutdown cancels pending batch, clears UI and suppresses late progress writes", async () => {
-  const { tool, events } = captureExtension();
+  const { tool, events } = await captureExtension();
   const writes: string[] = [];
   const ctx = { cwd: process.cwd(), model, modelRegistry, hasUI: true, mode: "tui",
+    isProjectTrusted: () => false,
     ui: { setWidget: (_key: string, value: unknown) => writes.push(value ? "widget" : "clear widget"),
       setStatus: (_key: string, value: unknown) => writes.push(value ? "status" : "clear status") } } as unknown as ExtensionToolContext;
   const pending = tool.execute("fixture", { tasks: [{ role: "scout", task: "inspect" }] }, undefined, undefined, ctx);
@@ -357,9 +486,9 @@ test("shutdown cancels pending batch, clears UI and suppresses late progress wri
 });
 
 test("RPC clients receive structured updates without terminal widget calls", async () => {
-  const { tool, command, events } = captureExtension();
+  const { tool, command, events } = await captureExtension();
   assert.equal(tool.exposure, "model-only");
-  const ctx = { ...parent, hasUI: true, mode: "rpc", ui: {
+  const ctx = { ...parent, hasUI: true, mode: "rpc", isProjectTrusted: () => false, ui: {
     setWidget: () => { throw new Error("Terminal-only widget called in RPC"); },
     setStatus: () => { throw new Error("Terminal-only status called in RPC"); },
   } } as unknown as ExtensionToolContext;
