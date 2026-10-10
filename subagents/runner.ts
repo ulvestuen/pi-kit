@@ -12,6 +12,7 @@ import {
   type CreateAgentSessionOptions,
   type ModelRegistry,
 } from "@earendil-works/pi-coding-agent";
+import { ChildTrace, type Transcript } from "./trace.ts";
 
 export const roles = ["scout", "planner", "implementer", "critic", "auditor"] as const;
 export type Role = (typeof roles)[number];
@@ -31,6 +32,7 @@ export interface Progress extends Task {
   elapsedMs: number;
   answer: string;
   error?: string;
+  transcript?: Transcript;
 }
 export interface Details {
   results: Progress[];
@@ -161,6 +163,7 @@ export async function runBatch(
     result.status = "running";
     result.activity = "Starting isolated SDK session";
     update();
+    const trace = new ChildTrace();
     let session: Child | undefined;
     let unsubscribe: (() => void) | undefined;
     let aborting: Promise<void> | undefined;
@@ -178,12 +181,19 @@ export async function runBatch(
     }, 1000);
     // Token events can arrive much faster than a terminal can redraw.
     let lastUpdate = 0;
+    let streamTimer: ReturnType<typeof setTimeout> | undefined;
+    const flushStream = () => {
+      streamTimer = undefined;
+      lastUpdate = Date.now();
+      result.elapsedMs = lastUpdate - started;
+      result.transcript = trace.snapshot();
+      update();
+    };
     const streamUpdate = () => {
-      result.elapsedMs = Date.now() - started;
-      if (Date.now() - lastUpdate >= 100) {
-        lastUpdate = Date.now();
-        update();
-      }
+      if (streamTimer) return;
+      const wait = 100 - (Date.now() - lastUpdate);
+      if (wait <= 0) flushStream();
+      else streamTimer = setTimeout(flushStream, wait);
     };
     try {
       const config = await childOptions(result, options.parent);
@@ -191,6 +201,7 @@ export async function runBatch(
       session = (await (options.createSession ?? createAgentSession)(config)).session;
       if (cancelled || options.signal?.aborted) throw new Error("Cancelled during setup");
       unsubscribe = session.subscribe((event) => {
+        trace.accept(event);
         if (event.type === "tool_execution_start") {
           result.tools++;
           const target = event.args?.path ?? event.args?.command ?? "";
@@ -238,6 +249,8 @@ export async function runBatch(
         unsubscribe?.();
         session.dispose();
       }
+      clearTimeout(streamTimer);
+      result.transcript = trace.snapshot();
       result.elapsedMs = Date.now() - started;
       update();
     }

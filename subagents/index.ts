@@ -2,11 +2,13 @@ import { Type } from "@earendil-works/pi-ai";
 import { defineTool, truncateHead, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { loadRole, progressLines, roles, runBatch, type Details } from "./runner.ts";
+import { agentTranscript, SubagentView } from "./view.ts";
 
 export default async function (pi: ExtensionAPI) {
   const definitions = await Promise.all(roles.map(loadRole));
   const active = new Set<AbortController>();
   const pending = new Set<Promise<Details>>();
+  const viewers = new Set<(details: Details | undefined) => void>();
   let closing = false;
   let latest: Details | undefined;
 
@@ -58,9 +60,10 @@ export default async function (pi: ExtensionAPI) {
           onUpdate(details) {
             if (closing) return;
             latest = details;
+            for (const viewer of viewers) viewer(details);
             const lines = progressLines(details);
             if (ctx.mode === "tui") {
-              ctx.ui.setWidget("subagents", lines);
+              ctx.ui.setWidget("subagents", [...lines, "/subagents watch [id] · inspect live thinking and tools"]);
               ctx.ui.setStatus("subagents", lines[0]);
             }
             onUpdate?.({ content: [{ type: "text", text: lines.join("\n") }], details });
@@ -91,14 +94,14 @@ export default async function (pi: ExtensionAPI) {
       if (!result.details) return new Text(result.content.filter((c) => c.type === "text").map((c) => c.text).join("\n"), 0, 0);
       const details = result.details as Details;
       const lines = progressLines(details);
-      if (isPartial) return new Text(theme.fg("muted", `${lines[0]} · live progress below`), 0, 0);
+      if (isPartial && !expanded) return new Text(theme.fg("muted", `${lines[0]} · live progress below · /subagents watch`), 0, 0);
       const body = lines.map((line, i) => {
         const status = details.results[i - 1]?.status;
         const color = i === 0 ? "accent" : status === "completed" ? "success" : status === "running" ? "accent" : status === "queued" ? "muted" : "error";
         return theme.fg(color, line);
       }).join("\n");
       const answers = expanded ? details.results.map((r) =>
-        `\n#${r.id} ${r.role}: ${r.task}\n${r.answer || r.error || r.activity}`,
+        `\n\n#${r.id} ${r.role}\n${agentTranscript(r)}`,
       ).join("\n") : "";
       return new Text(body + answers, 0, 0);
     },
@@ -111,13 +114,46 @@ export default async function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("subagents", {
-    description: "Subagent status; /subagents cancel or /subagents clear",
+    description: "Subagent status; watch [id] for live transcripts, cancel, or clear",
     handler: async (args, ctx) => {
-      if (args.trim() === "cancel") {
+      const input = args.trim();
+      if (/^watch(?:\s|$)/.test(input)) {
+        const match = input.match(/^watch(?:\s+([1-8]))?$/);
+        if (!match) {
+          ctx.ui.notify("Usage: /subagents watch [1–8]", "warning");
+          return;
+        }
+        if (!latest) {
+          ctx.ui.notify("No subagents have run in this session", "info");
+          return;
+        }
+        const selected = match[1] ? Number(match[1]) - 1 : 0;
+        if (!latest.results[selected]) {
+          ctx.ui.notify(`No subagent #${selected + 1} in the latest batch`, "warning");
+          return;
+        }
+        if (ctx.mode !== "tui") {
+          ctx.ui.notify("Live viewer requires TUI mode; transcripts are in tool update/result details.results[].transcript", "info");
+          return;
+        }
+        let listener: ((details: Details | undefined) => void) | undefined;
+        try {
+          await ctx.ui.custom<void>((tui, theme, _keys, done) => {
+            const view = new SubagentView(latest!, selected, theme,
+              () => Math.floor(tui.terminal.rows * 0.9), () => tui.requestRender(), () => done());
+            listener = (details) => details ? view.update(details) : done();
+            viewers.add(listener);
+            return view;
+          }, { overlay: true, overlayOptions: { width: "96%", maxHeight: "90%" } });
+        } finally {
+          if (listener) viewers.delete(listener);
+        }
+      } else if (input === "cancel") {
         for (const controller of active) controller.abort();
         ctx.ui.notify("Cancelling active subagents", "info");
-      } else if (args.trim() === "clear") {
+      } else if (input === "clear") {
         latest = undefined;
+        for (const viewer of viewers) viewer(undefined);
         if (ctx.mode === "tui") {
           ctx.ui.setWidget("subagents", undefined);
           ctx.ui.setStatus("subagents", undefined);
@@ -134,6 +170,7 @@ export default async function (pi: ExtensionAPI) {
 
   pi.on("session_shutdown", async (_event, ctx) => {
     closing = true;
+    for (const viewer of viewers) viewer(undefined);
     for (const controller of active) controller.abort();
     await Promise.allSettled(pending);
     if (ctx.mode === "tui") {

@@ -17,6 +17,8 @@ import {
 import { visibleWidth } from "@earendil-works/pi-tui";
 import extension from "./index.ts";
 import { progressLines, roles, runBatch, type Details } from "./runner.ts";
+import { transcriptText } from "./trace.ts";
+import { agentTranscript, SubagentView } from "./view.ts";
 
 const model: Model<any> = {
   type: "chat", api: "pi-kit-test", provider: "pi-kit-test", id: "fixture", name: "Fixture",
@@ -65,10 +67,22 @@ test("real SDK sessions restrict tools, inherit model/auth/thinking, retain inst
       const stream = createAssistantMessageEventStream();
       const toolResult = context.messages.find((m) => m.role === "toolResult");
       const final = message(toolResult ? "Found: asymmetric evidence ✓" : "intermediate text", toolResult ? "stop" : "toolUse");
-      if (!toolResult) final.content = [{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "evidence.txt" } }];
-      stream.push({ type: "start", partial: final });
-      stream.push({ type: "done", reason: final.stopReason as "stop" | "toolUse", message: final });
-      stream.end();
+      void (async () => {
+        if (!toolResult) {
+          final.content = [{ type: "thinking", thinking: "Check the local evidence first.", thinkingSignature: "must-not-retain-signature" }];
+          stream.push({ type: "start", partial: final });
+          stream.push({ type: "thinking_delta", contentIndex: 0, delta: "Check the local evidence first.", partial: final });
+          await delay(150);
+          final.content.push({ type: "toolCall", id: "read-1", name: "read", arguments: { path: "evidence" } });
+          stream.push({ type: "toolcall_delta", contentIndex: 1, delta: '{"path":"evidence', partial: final });
+          await delay(150);
+          final.content[1] = { type: "toolCall", id: "read-1", name: "read", arguments: { path: "evidence.txt" } };
+        } else {
+          stream.push({ type: "start", partial: final });
+        }
+        stream.push({ type: "done", reason: final.stopReason as "stop" | "toolUse", message: final });
+        stream.end();
+      })();
       return stream;
     },
   });
@@ -120,6 +134,17 @@ test("real SDK sessions restrict tools, inherit model/auth/thinking, retain inst
     assert.ok(contexts.some((c) => c.messages.some((m) => m.role === "toolResult" && m.content.some((part) => part.type === "text" && part.text.includes("asymmetric evidence")))));
     assert.ok(updates.some((d) => d.results.some((r) => r.status === "running")));
     assert.deepEqual(updates[0].results.map((r) => r.status), ["queued", "queued"], "snapshots must not mutate after delivery");
+    assert.ok(updates.some((d) => d.results.some((r) => r.status === "running" && transcriptText(r.transcript).includes("Check the local evidence first."))));
+    assert.ok(updates.some((d) => d.results.some((r) => r.transcript?.entries.some((e) => e.kind === "tool" && e.status === "preparing" && e.args.includes('"evidence"')))));
+    for (const child of result.results) {
+      const tools = child.transcript!.entries.filter((entry) => entry.kind === "tool");
+      assert.equal(tools.length, 1, "generation and execution must share one tool card");
+      assert.equal(tools[0].status, "completed");
+      assert.match(tools[0].args, /evidence.txt/);
+      assert.match(tools[0].output, /asymmetric evidence ✓/);
+      assert.match(transcriptText(child.transcript), /Assistant:\nFound: asymmetric evidence ✓/);
+      assert.doesNotMatch(JSON.stringify(child.transcript), /must-not-retain-signature/);
+    }
   } finally {
     modelRegistry.unregisterProvider("pi-kit-test");
     await rm(dir, { recursive: true, force: true });
@@ -283,6 +308,107 @@ test("bounded workers preserve input order even when siblings finish out of orde
   assert.ok(children.every((c) => c.disposed && c.unsubscribed));
 });
 
+test("live tool snapshots replace output, stay separate per child, and survive cancellation", async () => {
+  const controller = new AbortController();
+  const updates: Details[] = [];
+  let ready = 0;
+  const result = await runBatch(["alpha", "beta"].map((task) => ({ role: "auditor", task })), {
+    parent, concurrency: 2, timeoutMs: 5000, signal: controller.signal,
+    onUpdate: (details) => updates.push(details),
+    createSession: async () => {
+      const child = fakeSession(async (emit, task) => {
+        const args = { command: `check-${task}` };
+        emit({ type: "tool_execution_start", toolCallId: "same-id", toolName: "bash", args });
+        emit({ type: "tool_execution_update", toolCallId: "same-id", toolName: "bash", args,
+          partialResult: { content: [{ type: "text", text: `${task}: first` }] } });
+        await delay(150);
+        emit({ type: "tool_execution_update", toolCallId: "same-id", toolName: "bash", args,
+          partialResult: { content: [{ type: "text", text: `${task}: first\n${task}: second` }] } });
+        await delay(150);
+        if (task === "alpha") {
+          emit({ type: "tool_execution_end", toolCallId: "same-id", toolName: "bash", isError: true,
+            result: { content: [{ type: "text", text: "alpha: final error" }] } });
+        }
+        const waiting = child.wait();
+        if (++ready === 2) controller.abort();
+        await waiting;
+      });
+      return { session: child };
+    },
+  });
+  assert.deepEqual(result.results.map((r) => r.status), ["cancelled", "cancelled"]);
+  for (const [index, task] of ["alpha", "beta"].entries()) {
+    const first = updates.find((d) => d.results[index].transcript?.entries.some((e) => e.kind === "tool" && e.output === `${task}: first`));
+    assert.ok(first, "partial output must arrive before the child settles");
+    assert.equal(first.results[index].status, "running");
+    const tool = result.results[index].transcript!.entries[0];
+    assert.equal(tool.kind, "tool");
+    if (tool.kind !== "tool") throw new Error("Expected tool transcript");
+    assert.equal(tool.args, JSON.stringify({ command: `check-${task}` }, null, 2));
+    assert.equal(tool.output, task === "alpha" ? "alpha: final error" : "beta: first\nbeta: second");
+    assert.equal(tool.status, task === "alpha" ? "failed" : "running");
+    assert.equal(first.results[index].transcript!.entries[0].kind === "tool" && first.results[index].transcript!.entries[0].output, `${task}: first`, "delivered snapshots must not change");
+  }
+});
+
+test("transcripts bound retained content and omit binary data without changing final answers", async () => {
+  const result = await runBatch([{ role: "scout", task: "inspect" }], {
+    parent, concurrency: 1, timeoutMs: 5000,
+    createSession: async () => ({ session: fakeSession(async (emit) => {
+      for (let i = 0; i < 45; i++) {
+        const partial = message(`turn ${i}: ${"x".repeat(9000)} tail ${i}`);
+        emit({ type: "message_start", message: partial });
+        emit({ type: "message_end", message: partial });
+      }
+      emit({ type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 500,
+        errorMessage: `${"x".repeat(9000)} retry error tail` });
+      emit({ type: "tool_execution_end", toolCallId: "image", toolName: "read", isError: false,
+        result: { content: [{ type: "image", data: "must-not-retain-base64", mimeType: "image/png" }] } });
+    }) }),
+  });
+  const child = result.results[0];
+  assert.equal(child.answer, "Final fixture answer");
+  assert.equal(child.transcript!.entries.length, 40);
+  assert.equal(child.transcript!.truncated, true);
+  assert.ok(child.transcript!.entries.every((e) => e.kind === "tool" || e.text.length <= 8192));
+  const text = transcriptText(child.transcript);
+  assert.match(text, /Earlier transcript entries omitted/);
+  assert.match(text, /Earlier content omitted/);
+  assert.match(text, /tail 44/);
+  assert.match(text, /retry error tail/);
+  assert.match(text, /\[image omitted\]/);
+  assert.doesNotMatch(text, /tail 0\b|must-not-retain-base64/);
+});
+
+test("completed transcripts show multi-block final answers once, preserving earlier text and final thinking", async () => {
+  const earlier = message("Repeated conclusion", "toolUse");
+  const final = message("");
+  final.content = [
+    { type: "thinking", thinking: "Final verification rationale" },
+    { type: "text", text: "Repeated conclusion" },
+    { type: "text", text: `${"x".repeat(9000)} final answer tail` },
+  ];
+  const session = fakeSession(async (emit) => {
+    for (const message of [earlier, final]) {
+      emit({ type: "message_start", message });
+      emit({ type: "message_end", message });
+    }
+  });
+  session.messages = [earlier, final];
+  const result = await runBatch([{ role: "scout", task: "inspect" }], {
+    parent, concurrency: 1, timeoutMs: 5000, createSession: async () => ({ session }),
+  });
+  const child = result.results[0];
+  assert.equal(child.answer, `Repeated conclusion\n${"x".repeat(9000)} final answer tail`);
+  assert.match(transcriptText(child.transcript), /Earlier content omitted/);
+  assert.match(transcriptText(child.transcript), /final answer tail/, "structured details retain the streamed text");
+  const text = agentTranscript(child);
+  assert.equal(text.split("final answer tail").length - 1, 1);
+  assert.equal(text.split("Repeated conclusion").length - 1, 2, "earlier assistant text must not be mistaken for the final message");
+  assert.match(text, /Final verification rationale/);
+  assert.doesNotMatch(text, /Earlier content omitted/);
+});
+
 test("all bundled roles keep their explicit tool lists; cwd and provider/model overrides are resolved", async () => {
   const alternate = { ...model, provider: "fixture-provider", id: "alternate" };
   const registry = Object.create(modelRegistry) as ModelRegistry;
@@ -440,7 +566,7 @@ async function captureExtension() {
   return { tool: tool!, command: command!, events };
 }
 
-test("tool renderer shows progress at narrow widths, expands answers, and command clears the UI", async () => {
+test("tool renderer expands live transcripts at narrow widths and keeps old results readable", async () => {
   const { tool, command, events } = await captureExtension();
   const details: Details = { results: [{ role: "scout", task: "Find evidence", id: 1,
     status: "completed", activity: "Finished", tools: 3, tokens: 42, cost: 0.1,
@@ -457,8 +583,16 @@ test("tool renderer shows progress at narrow widths, expands answers, and comman
   const partial = tool.renderResult!(result, { expanded: false, isPartial: true }, theme, {} as any).render(100);
   assert.match(partial.join("\n"), /live progress below/);
   assert.doesNotMatch(partial.join("\n"), /3 tools/);
+  details.results[0].transcript = { truncated: false, entries: [
+    { id: 1, kind: "thinking", text: "Inspect the retry boundary\u001b[2J\u001b]52;c;evil\u0007" },
+    { id: 2, kind: "tool", toolCallId: "read", name: "read", args: '{"path":"retry.ts"}', output: "line 17", status: "completed" },
+  ] };
   const expandedPartial = tool.renderResult!(result, { expanded: true, isPartial: true }, theme, {} as any).render(100);
-  assert.deepEqual(expandedPartial, partial, "live widget owns per-agent progress even when tool results are expanded");
+  assert.match(expandedPartial.join("\n"), /Thinking:\s+Inspect the retry boundary/);
+  assert.match(expandedPartial.join("\n"), /Tool: read · completed/);
+  assert.match(expandedPartial.join("\n"), /line 17/);
+  assert.doesNotMatch(expandedPartial.join("\n"), /\u001b|evil/);
+  assert.ok(expandedPartial.every((line) => visibleWidth(line) <= 100));
   assert.equal(await events.get("tool_result")!({ toolName: "read", details }), undefined);
   assert.equal(await events.get("tool_result")!({ toolName: "subagent", details }), undefined);
   details.results[0].status = "failed";
@@ -468,6 +602,158 @@ test("tool renderer shows progress at narrow widths, expands answers, and comman
   assert.deepEqual(cleared, [["subagents", undefined], ["subagents", undefined]]);
   details.results[0].activity = "malicious\n\u001b[2J text";
   assert.ok(progressLines(details).every((line) => !/[\x00-\x1f\x7f-\x9f]/.test(line)));
+});
+
+test("watch selects a child, refreshes while open, keeps completed transcripts and closes on shutdown", { timeout: 10000 }, async () => {
+  const { tool, command, events } = await captureExtension();
+  const gate = () => {
+    let resolve = () => {};
+    const promise = new Promise<void>((done) => { resolve = done; });
+    return { promise, resolve };
+  };
+  const first = gate();
+  const second = gate();
+  const advance = gate();
+  const finish = gate();
+  let view: SubagentView | undefined;
+  const theme = { fg: (_color: string, text: string) => text } as any;
+  const ctx = { ...parent, mode: "tui", isProjectTrusted: () => false, ui: {
+    setWidget() {}, setStatus() {},
+    custom: (factory: Function) => new Promise<void>((done) => {
+      view = factory({ terminal: { rows: 30 }, requestRender() {} }, theme, {}, done);
+    }),
+  } } as unknown as ExtensionToolContext;
+  modelRegistry.registerProvider("pi-kit-test", {
+    apiKey: "non-secret-fixture", api: model.api,
+    streamSimple: (_model, context) => {
+      const task = context.messages.find((m) => m.role === "user");
+      const name = JSON.stringify(task).includes("alpha") ? "alpha" : "beta";
+      const stream = createAssistantMessageEventStream();
+      const partial = message(`${name} phase one`);
+      stream.push({ type: "start", partial });
+      stream.push({ type: "text_delta", contentIndex: 0, delta: `${name} phase one`, partial });
+      void (async () => {
+        await advance.promise;
+        partial.content = [{ type: "text", text: `${name} phase one; phase two` }];
+        stream.push({ type: "text_delta", contentIndex: 0, delta: "; phase two", partial });
+        await finish.promise;
+        stream.push({ type: "done", reason: "stop", message: partial });
+        stream.end();
+      })();
+      return stream;
+    },
+  });
+  let watching: Promise<void> | undefined;
+  try {
+    const pending = tool.execute("watch", { tasks: ["alpha", "beta"].map((task) => ({ role: "scout", task })) },
+      undefined, (update) => {
+        if (update.details?.results.every((r) => transcriptText(r.transcript).includes("phase one"))) first.resolve();
+        if (update.details?.results.every((r) => transcriptText(r.transcript).includes("phase two"))) second.resolve();
+      }, ctx);
+    await first.promise;
+    watching = command.handler("watch 2", ctx);
+    assert.ok(view);
+    assert.match(view.render(70).join("\n"), /beta phase one/);
+    assert.doesNotMatch(view.render(70).join("\n"), /alpha phase one/);
+    view.handleInput("1");
+    assert.match(view.render(70).join("\n"), /alpha phase one/);
+    advance.resolve();
+    await second.promise;
+    assert.match(view.render(70).join("\n"), /phase two/);
+    finish.resolve();
+    const result = await pending;
+    assert.deepEqual(result.details.results.map((r) => r.status), ["completed", "completed"]);
+    assert.match(view.render(70).join("\n"), /Final answer:/);
+    assert.equal(view.render(70).join("\n").split("alpha phase one; phase two").length - 1, 1, "show the final answer once, not alongside its streamed copy");
+    view.handleInput("\u001b");
+    await watching;
+    watching = command.handler("watch 2", ctx);
+    assert.match(view.render(40).join("\n"), /beta phase one; phase two/);
+    assert.ok(view.render(40).every((line) => visibleWidth(line) <= 40));
+    await events.get("session_shutdown")!({}, ctx);
+    await watching;
+  } finally {
+    advance.resolve();
+    finish.resolve();
+    await events.get("session_shutdown")!({}, ctx);
+    await watching;
+    modelRegistry.unregisterProvider("pi-kit-test");
+  }
+});
+
+test("the viewer keeps history visible while paused and follows only when resumed", () => {
+  const details: Details = { results: [{ role: "auditor", task: "Observe output", id: 1,
+    status: "running", activity: "bash", tools: 1, tokens: 40, cost: 0,
+    elapsedMs: 1000, answer: "", transcript: { truncated: false, entries: [
+      { id: 1, kind: "text", text: Array.from({ length: 40 }, (_, i) => `output line ${i}`).join("\n") },
+    ] } }] };
+  const theme = { fg: (_color: string, text: string) => text } as any;
+  let height = 20;
+  const view = new SubagentView(details, 0, theme, () => height, () => {}, () => {});
+  const render = () => view.render(60).join("\n");
+  assert.match(render(), /output line 39/);
+  view.handleInput("\u001b[H");
+  assert.match(render(), /Task: Observe output/);
+  assert.match(render(), /Paused/);
+  const paused = render();
+  const updated = structuredClone(details);
+  updated.results[0].transcript!.entries.push({ id: 2, kind: "text", text: "new output after scrolling away" });
+  view.update(updated);
+  assert.equal(render(), paused);
+  const rolled = structuredClone(updated);
+  rolled.results[0].transcript!.entries[0] = { id: 1, kind: "text",
+    text: Array.from({ length: 40 }, (_, i) => `output line ${i + 10}`).join("\n") };
+  view.update(rolled);
+  assert.equal(render(), paused, "field tail trimming must not move a paused transcript");
+  const evicted = structuredClone(rolled);
+  evicted.results[0].transcript!.entries.shift();
+  evicted.results[0].transcript!.truncated = true;
+  view.update(evicted);
+  assert.equal(render(), paused, "entry eviction must not move a paused transcript");
+  height = 100;
+  assert.match(render(), /Paused/);
+  view.update(evicted);
+  height = 20;
+  assert.equal(render(), paused, "resizing must not resume live updates");
+  view.handleInput("\u001b[F");
+  assert.match(render(), /new output after scrolling away/);
+  assert.match(render(), /Following/);
+  assert.match(render(), /Earlier transcript entries omitted/);
+  assert.doesNotMatch(render(), /output line 0\b/);
+  view.handleInput("\u001b[H");
+  assert.match(render(), /Paused/, "Home freezes even when all content fits");
+  const siblings = structuredClone(updated);
+  siblings.results.push({ ...details.results[0], id: 2, task: "Inspect sibling", transcript: undefined });
+  view.update(siblings);
+  view.handleInput("2");
+  assert.match(render(), /Following/);
+  assert.match(render(), /Task: Inspect sibling/);
+  view.handleInput("1");
+  assert.match(render(), /new output after scrolling away/);
+  assert.equal(view.render(40).length, 20);
+  assert.ok(view.render(40).every((line) => visibleWidth(line) <= 40));
+});
+
+test("the viewer budgets chrome for short terminals with eight children and long activity", () => {
+  const details: Details = { results: Array.from({ length: 8 }, (_, i) => ({
+    role: "implementer", task: "Observe output", id: i + 1, status: "running",
+    activity: `bash ${"long command argument ".repeat(10)}`, tools: 4, tokens: 1234, cost: 0,
+    elapsedMs: 10000, answer: "", transcript: { truncated: false, entries: [
+      { id: 1, kind: "text", text: `live child ${i + 1} output` },
+    ] },
+  })) };
+  const theme = { fg: (_color: string, text: string) => text } as any;
+  for (const [width, height] of [[38, 10], [58, 14], [100, 26]]) {
+    const view = new SubagentView(details, 0, theme, () => height, () => {}, () => {});
+    for (const selected of [1, 8]) {
+      view.handleInput(String(selected));
+      const lines = view.render(width);
+      assert.ok(lines.length <= height, `${width}×${height}: rendered ${lines.length} rows`);
+      assert.ok(lines.every((line) => visibleWidth(line) <= width));
+      assert.match(lines.join("\n"), new RegExp(`live child ${selected} output`));
+      assert.match(lines.join("\n"), /Esc close/);
+    }
+  }
 });
 
 test("shutdown cancels pending batch, clears UI and suppresses late progress writes", async () => {
@@ -497,6 +783,31 @@ test("RPC clients receive structured updates without terminal widget calls", asy
     AbortSignal.abort(), (update) => updates.push(update.details!), ctx);
   assert.deepEqual(updates.map((d) => d.results[0].status), ["queued", "cancelled"]);
   assert.equal(result.details.results[0].status, "cancelled");
-  await command.handler("clear", ctx);
-  await events.get("session_shutdown")!({}, ctx);
+  modelRegistry.registerProvider("pi-kit-test", {
+    apiKey: "non-secret-fixture", api: model.api,
+    streamSimple: () => {
+      const stream = createAssistantMessageEventStream();
+      const partial = message("RPC final answer");
+      partial.content.unshift({ type: "thinking", thinking: "RPC live thinking" });
+      stream.push({ type: "start", partial });
+      stream.push({ type: "thinking_delta", contentIndex: 0, delta: "RPC live thinking", partial });
+      void delay(150).then(() => {
+        stream.push({ type: "done", reason: "stop", message: partial });
+        stream.end();
+      });
+      return stream;
+    },
+  });
+  try {
+    const completed = await tool.execute("rpc-live", { tasks: [{ role: "scout", task: "inspect" }] },
+      undefined, (update) => updates.push(update.details!), ctx);
+    assert.equal(completed.details.results[0].status, "completed");
+    assert.ok(updates.some((d) => d.results[0].status === "running" && transcriptText(d.results[0].transcript).includes("RPC live thinking")));
+    assert.match(transcriptText(completed.details.results[0].transcript), /RPC final answer/);
+    assert.doesNotMatch(JSON.stringify(completed.content), /RPC live thinking/, "transcripts must not expand the parent's model-facing answer");
+    await command.handler("clear", ctx);
+    await events.get("session_shutdown")!({}, ctx);
+  } finally {
+    modelRegistry.unregisterProvider("pi-kit-test");
+  }
 });

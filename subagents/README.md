@@ -42,18 +42,46 @@ The panel shows queued/running/completed/failed/cancelled/timed-out states,
 elapsed time, tool calls, token usage, and current activity. When a batch
 settles, the live panel disappears and its status remains in the tool result
 and footer. Expand tool results with Pi's normal tool-expansion shortcut to
-read task briefs and answers. Token counts/cost in result details describe
-the children; they are not automatically added to the parent's provider usage.
+read task briefs, captured transcripts, and answers, including while running.
+Token counts/cost in result details describe the children; they are not
+automatically added to the parent's provider usage.
 
 | Command | Action |
 | --- | --- |
 | `/subagents` | Show the latest batch status |
+| `/subagents watch [id]` | Open the latest batch's live transcript viewer, optionally selecting child 1–8 |
 | `/subagents cancel` | Cancel active children and queued tasks |
-| `/subagents clear` | Dismiss the latest progress panel |
+| `/subagents clear` | Dismiss the latest panel and viewer; existing tool results remain |
+
+The viewer streams each child's provider-exposed thinking, assistant text,
+tool arguments as they are generated, and tool output as it becomes available.
+Tool cards distinguish preparing, running, completed, and failed calls. Use
+**1–8**, **←/→**, or **Tab/Shift+Tab** to switch children; **↑/↓**, **PgUp/PgDn**,
+and **Home** to scroll; **End** to resume following new output. **Esc** closes
+the viewer without cancelling work. Scrolling up freezes the displayed
+transcript so retention limits cannot shift the text you are reading; **End**
+or switching children loads the latest snapshot and resumes following.
+Short terminals use compact tabs and controls to leave room for the transcript.
+Commands work while the parent is waiting for children, and the latest batch
+stays inspectable after it settles.
+
+Thinking is only visible when the chosen provider/model emits it at the
+inherited thinking level; the extension cannot reveal hidden reasoning.
+Tools that emit no partial output show their result when they finish.
+Updates are throttled to roughly 100ms per child. Each transcript retains the
+latest 40 entries and the last 8,192 characters of each text/argument/output
+field, with explicit omission markers. Final answers retain their existing
+limits. Images and provider thinking signatures are not copied into transcripts.
+Captured text can contain sensitive task/tool data: it is included in tool
+result details and may be saved with the parent session. Terminal control
+sequences are stripped for display; this is not secret redaction.
 
 Parent cancellation and session shutdown/reload also abort children and
 dispose their sessions. Individual failures do not discard successful sibling
-answers. Progress is available as structured tool updates in non-TUI modes.
+answers or their captured progress. In non-TUI modes, transcripts are available
+in structured tool updates/results at `details.results[].transcript`; the
+interactive viewer is TUI-only. The parent's model-facing result still contains
+only final answers/status, not the live transcripts.
 A `completed` status means the child returned, not that its acceptance checks
 passed. Inspect the changes and evidence before accepting work; after a failure
 or cancellation, inspect partial edits before retrying.
