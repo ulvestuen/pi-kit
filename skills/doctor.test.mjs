@@ -28,10 +28,21 @@ test("doctor reports configured and missing variables without exposing values", 
 });
 
 test("doctor checks the JEV key without exposing it", () => {
-  assert.match(renderHealthCheck({}), /using-jev\s+\| TYPESAFE_API_KEY\s+\| missing TYPESAFE_API_KEY/);
+  assert.match(renderHealthCheck({}), /decisions \(jev\)\s+\| TYPESAFE_API_KEY\s+\| missing TYPESAFE_API_KEY/);
   const output = renderHealthCheck({ TYPESAFE_API_KEY: "private-jev-value" });
-  assert.match(output, /using-jev\s+\| TYPESAFE_API_KEY\s+\| ready/);
+  assert.match(output, /decisions \(jev\)\s+\| TYPESAFE_API_KEY\s+\| ready/);
+  assert.match(output, /decisions \(openai\)\s+\| OPENAI_API_KEY\s+\| missing OPENAI_API_KEY/);
   assert.doesNotMatch(output, /private-jev-value/);
+});
+
+test("doctor reports OpenAI and JEV availability independently", () => {
+  assert.match(renderHealthCheck({}), /decisions \(openai\)\s+\| OPENAI_API_KEY\s+\| missing OPENAI_API_KEY/);
+  for (const typesafeKey of ["", "fixture-typesafe-value"]) {
+    const output = renderHealthCheck({ OPENAI_API_KEY: "fixture-openai-value", TYPESAFE_API_KEY: typesafeKey });
+    assert.match(output, /decisions \(openai\)\s+\| OPENAI_API_KEY\s+\| ready/);
+    assert.match(output, new RegExp(`decisions \\(jev\\)\\s+\\| TYPESAFE_API_KEY\\s+\\| ${typesafeKey ? "ready" : "missing TYPESAFE_API_KEY"}`));
+    assert.doesNotMatch(output, /fixture-openai-value|fixture-typesafe-value/);
+  }
 });
 
 test("doctor prints its table when invoked from a path containing spaces", async () => {

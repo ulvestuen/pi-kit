@@ -4,13 +4,14 @@ import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 export const REQUIREMENTS = [
+  ["decisions (jev)", ["TYPESAFE_API_KEY"]],
+  ["decisions (openai)", ["OPENAI_API_KEY"]],
   ["exa-search", ["EXA_API_KEY"]],
   ["jira", ["JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_AUTH_TOKEN"]],
   ["kagi-search", ["KAGI_API_KEY"]],
   ["orchestrate", []],
   ["pdca", []],
   ["tldraw-offline", []],
-  ["using-jev", ["TYPESAFE_API_KEY"]],
 ];
 
 export function renderHealthCheck(env = process.env) {
