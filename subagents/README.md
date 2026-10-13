@@ -38,6 +38,23 @@ The `subagent` tool accepts `tasks: [{ role, task, cwd?, model? }]`,
 omitting it inherits the active parent's model. Relative `cwd` values are
 resolved from the parent's working directory.
 
+The tool supports direct model calls and calls from Pi's codemode (`on` or
+`only`). Inside codemode, use the same parameters:
+
+```js
+const result = await tools.subagent({
+  tasks: [{ role: "implementer", task: "Implement the scoped change and run its tests." }],
+  concurrency: 1,
+  timeout: 600,
+});
+text(result);
+```
+
+Codemode returns the final answer/status text, not the structured transcript
+details. A failed batch rejects the call; catch it explicitly if the script
+should continue after a failure. After updating the installed extension, use
+`/reload` in Pi to refresh its tool registration.
+
 The panel shows queued/running/completed/failed/cancelled/timed-out states,
 elapsed time, tool calls, token usage, and current activity. When a batch
 settles, the live panel disappears and its status remains in the tool result

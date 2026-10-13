@@ -26,7 +26,7 @@ export default async function (pi: ExtensionAPI) {
       "Use parallel tasks only for independent work. Serialize overlapping edits or use separate worktrees via cwd. A critic cannot run git or tests; provide a readable diff for change reviews and use an auditor for command-backed checks.",
       "A completed status only means the child returned. Inspect changes and verify claims before accepting the work. After failure, cancellation, or timeout, inspect partial changes before retrying.",
     ],
-    exposure: "model-only",
+    exposure: "direct",
     executionMode: "sequential",
     parameters: Type.Object({
       tasks: Type.Array(Type.Object({

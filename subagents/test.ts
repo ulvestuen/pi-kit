@@ -10,7 +10,7 @@ import {
   type StreamOptions, type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import {
-  createAgentSession, DefaultResourceLoader, ModelRegistry, ModelRuntime, SessionManager, SettingsManager,
+  createAgentSession, createCodemodeExtension, DefaultResourceLoader, ModelRegistry, ModelRuntime, SessionManager, SettingsManager,
   type AgentSessionEvent, type ExtensionAPI,
   type ExtensionToolContext, type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
@@ -553,6 +553,81 @@ test("the extension exposes role capabilities and delegation guidance to Pi with
   }
 });
 
+test("codemode can delegate, read the child's output, and catch failed batches", { timeout: 30000 }, async () => {
+  for (const mode of ["on", "only"] as const) {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "pi-kit-codemode-"));
+    const childContexts: TranscriptContext[] = [];
+    let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
+    modelRegistry.registerProvider("pi-kit-test", {
+      apiKey: "non-secret-fixture", api: model.api,
+      streamSimple: (_model, context) => {
+        const isParent = getCurrentTools(context.messages).some((tool) => tool.name === "codemode");
+        if (!isParent) childContexts.push(context);
+        const hasResult = context.messages.some((m) => m.role === "toolResult");
+        const final = message(isParent ? "Parent finished" : "Child wrote evidence", hasResult ? "stop" : "toolUse");
+        if (!hasResult) {
+          final.content = [{ type: "toolCall", id: isParent ? "codemode-1" : "write-1",
+            name: isParent ? "codemode" : "write",
+            arguments: isParent ? { code: `
+const result = await tools.subagent({tasks: [{role: "implementer", task: "Write child evidence"}], concurrency: 1, timeout: 10});
+text(result);
+text(await tools.read({path: "child.txt"}));
+text(await tools.read({path: "existing.txt"}));
+try {
+  await tools.subagent({tasks: [{role: "scout", task: "Inspect", model: "missing/no-model"}]});
+  text("UNEXPECTED success");
+} catch (error) {
+  text("Caught batch failure: " + error.message);
+}
+` } : { path: "child.txt", content: "child evidence ✓" },
+          }];
+        }
+        const stream = createAssistantMessageEventStream();
+        stream.push({ type: "start", partial: final });
+        stream.push({ type: "done", reason: final.stopReason as "stop" | "toolUse", message: final });
+        stream.end();
+        return stream;
+      },
+    });
+    try {
+      await writeFile(path.join(dir, "existing.txt"), "independent evidence Ω");
+      const settingsManager = SettingsManager.inMemory({ codemode: { mode } }, { projectTrusted: false });
+      const resourceLoader = new DefaultResourceLoader({
+        cwd: dir, agentDir: dir, settingsManager,
+        noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true,
+        extensionFactories: [createCodemodeExtension({ mode }), extension],
+      });
+      await resourceLoader.reload();
+      assert.deepEqual(resourceLoader.getExtensions().errors, []);
+      ({ session } = await createAgentSession({
+        cwd: dir, agentDir: dir, model, modelRuntime, settingsManager, resourceLoader,
+        sessionManager: SessionManager.inMemory(dir), tools: ["codemode", "subagent", "read"],
+      }));
+      const errors: unknown[] = [];
+      await session.bindExtensions({ onError: (error) => errors.push(error) });
+      await session.prompt("Delegate through codemode, then inspect the evidence.");
+      const result = session.messages.find((m) => m.role === "toolResult" && m.toolName === "codemode");
+      assert.ok(result?.role === "toolResult");
+      const output = result.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+      assert.equal(result.isError, false, output);
+      assert.match(output, /#1 implementer \(completed\)\nChild wrote evidence/);
+      assert.match(output, /child evidence ✓/);
+      assert.match(output, /independent evidence Ω/);
+      assert.match(output, /Caught batch failure:.*Unknown model: missing\/no-model/s);
+      assert.doesNotMatch(output, /UNEXPECTED success/);
+      assert.deepEqual(errors, []);
+      assert.equal(childContexts.length, 2);
+      for (const context of childContexts) {
+        assert.deepEqual(getCurrentTools(context.messages).map((tool) => tool.name), ["read", "bash", "edit", "write"]);
+      }
+    } finally {
+      session?.dispose();
+      modelRegistry.unregisterProvider("pi-kit-test");
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+});
+
 async function captureExtension() {
   let tool: ToolDefinition<any, Details>;
   let command: { handler: (args: string, ctx: any) => Promise<void> };
@@ -773,7 +848,6 @@ test("shutdown cancels pending batch, clears UI and suppresses late progress wri
 
 test("RPC clients receive structured updates without terminal widget calls", async () => {
   const { tool, command, events } = await captureExtension();
-  assert.equal(tool.exposure, "model-only");
   const ctx = { ...parent, hasUI: true, mode: "rpc", isProjectTrusted: () => false, ui: {
     setWidget: () => { throw new Error("Terminal-only widget called in RPC"); },
     setStatus: () => { throw new Error("Terminal-only status called in RPC"); },
