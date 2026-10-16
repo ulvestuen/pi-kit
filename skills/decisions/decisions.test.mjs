@@ -30,6 +30,29 @@ const openaiRequest = {
   ],
   safety_identifier: "fixture-user",
 };
+const jevImageRequest = {
+  state: { photo: "fixture-photo-reference" },
+  assets: {
+    "fixture-photo-reference": { type: "image", format: "png", data_base64: "cGhvdG8=" },
+    "fixture-example-reference": { format: "jpeg", data_base64: "ZXhhbXBsZQ==" },
+  },
+  questions: {
+    visible: { type: "noul", instructions: "Is there a mug in `photo` matching this example: fixture-example-reference?" },
+    style: { type: "choice", instructions: "Which style is the mug in `photo`?", criteria: { example: { images: ["fixture-example-reference"] }, other: "Other or no mug" } },
+    similarity: { type: "score", instructions: "How closely does the mug in `photo` match?", criteria: ["Not at all", "Exactly like fixture-example-reference"] },
+    mug: { type: "box", instructions: "the mug nearest the sink in `photo`" },
+  },
+};
+const jevImageResult = {
+  model: "jev-1.14.0",
+  answers: {
+    visible: { type: "noul", noul: 0.03 },
+    style: { type: "choice", choice: "other", probabilities: { example: 0.1, other: 0.9 }, confidence: 0.8 },
+    similarity: { type: "score", score: 0.1, legend: { 0: "Not at all", 1: "Exactly like fixture-example-reference" }, probabilities: { 0: 0.9, 1: 0.1 }, confidence: 0.8 },
+    mug: { type: "box", box: { top: 0.18, bottom: 0.74, left: 0.32, right: 0.83 }, confidence: 0.24 },
+  },
+  usage: { input_tokens: 490, output_tokens: 61 },
+};
 
 test("sends a JEV evaluation and preserves typed answers and usage", async () => {
   const result = {
@@ -57,6 +80,35 @@ test("sends a JEV evaluation and preserves typed answers and usage", async () =>
     },
   }), result);
   assert.equal(calls, 1);
+});
+
+test("sends native JEV images and boxes, preserves answers, and only defaults box requests to Jev 1.14", async () => {
+  const { mug, ...imageQuestions } = jevImageRequest.questions;
+  const imageOnly = { ...jevImageRequest, questions: imageQuestions };
+  for (const [native, model, images] of [
+    [imageOnly, "jev-latest", true],
+    [{ ...imageOnly, model: "jev-1.13.0" }, "jev-1.13.0", true],
+    [jevImageRequest, "jev-1.14.0", true],
+    [{ ...jevImageRequest, model: "jev-preview" }, "jev-preview", true],
+    [{ ...request, assets: {} }, "jev-latest", false],
+  ]) {
+    const answers = Object.fromEntries(Object.entries(jevImageResult.answers).filter(([id]) => Object.hasOwn(native.questions, id)));
+    const result = { ...jevImageResult, model, answers };
+    assert.deepEqual(await evaluate(native, {
+      provider: "jev",
+      apiKey,
+      fetchImpl: async (url, options) => {
+        assert.equal(url, "https://api.typesafe.ai/v1/systemone");
+        assert.deepEqual(options.headers, {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          ...(images ? { "TypeSafe-Danger-Zone-Images": "true" } : {}),
+        });
+        assert.deepEqual(JSON.parse(options.body), { model, ...native });
+        return Response.json(result);
+      },
+    }), result);
+  }
 });
 
 test("sends native OpenAI inputs and preserves booleans, distributions, refusals, and usage", async () => {
@@ -150,15 +202,17 @@ test("CLI reads stdin and files, selecting only the chosen provider's environmen
   try {
     for (const [provider, native, url, model, keyEnv] of [
       ["jev", request, "https://api.typesafe.ai/v1/systemone", "jev-latest", "TYPESAFE_API_KEY"],
+      ["jev", jevImageRequest, "https://api.typesafe.ai/v1/systemone", "jev-1.14.0", "TYPESAFE_API_KEY"],
       ["openai", openaiRequest, "https://api.openai.com/v1/decisions", "gpt-6-luna", "OPENAI_API_KEY"],
     ]) {
       const key = `fixture-${provider}-key`;
-      const response = { model, answers: provider === "jev" ? { urgent: { type: "noul", noul: 0.23 } } : [{ type: "predicate", name: "urgent", probability: 0.23 }] };
+      const response = native === jevImageRequest ? jevImageResult : { model, answers: provider === "jev" ? { urgent: { type: "noul", noul: 0.23 } } : [{ type: "predicate", name: "urgent", probability: 0.23 }] };
       const fetchMock = `data:text/javascript,${encodeURIComponent(`
         import assert from "node:assert/strict";
         globalThis.fetch = async (url, options) => {
           assert.equal(url, ${JSON.stringify(url)});
           assert.equal(options.headers.Authorization, ${JSON.stringify(`Bearer ${key}`)});
+          assert.equal(options.headers["TypeSafe-Danger-Zone-Images"], ${native === jevImageRequest ? '"true"' : "undefined"});
           assert.deepEqual(JSON.parse(options.body), ${JSON.stringify({ model, ...native })});
           return Response.json(${JSON.stringify(response)});
         };

@@ -59,14 +59,19 @@ export async function evaluate(request, {
     throw new Error(`${config.name} requires ${config.inputField} and a questions ${provider === "openai" ? "array" : "map"}`);
   }
 
+  const hasBox = provider === "jev" && Object.values(request.questions).some((question) => question?.type === "box");
+  const images = provider === "jev" && (hasBox || Object.keys(request.assets ?? {}).length > 0);
+  const model = hasBox ? "jev-1.14.0" : config.model;
+
   try {
     const response = await fetchImpl(config.url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${key}`,
         "Content-Type": "application/json",
+        ...(images ? { "TypeSafe-Danger-Zone-Images": "true" } : {}),
       },
-      body: JSON.stringify({ model: config.model, ...request }),
+      body: JSON.stringify({ model, ...request }),
       redirect: "error",
       signal: AbortSignal.timeout(30_000),
     });

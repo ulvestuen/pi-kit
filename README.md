@@ -96,7 +96,7 @@ useful, a zero-dependency Node script the agent runs from the shell:
 - [`skills/tldraw-offline/`](./skills/tldraw-offline/) – inspect, edit, lint, and script open tldraw Desktop canvases through the local agent API (`tq.mjs` handles per-launch discovery and authentication)
 - [`skills/orchestrate/`](./skills/orchestrate/) – outcome-first workflow with task dependencies, user checkpoints, bounded delegation, and acceptance, regression, and scope audits; load with `/skill:orchestrate`
 - [`skills/pdca/`](./skills/pdca/) – the Plan-Do-Check-Act quality loop, described by a single diagram
-- [`skills/decisions/`](./skills/decisions/) – yes/no probabilities, choices, and scores via TypeSafe JEV or OpenAI Decisions (`decisions.mjs jev|openai`, needs the selected provider's `TYPESAFE_API_KEY` or `OPENAI_API_KEY`; uses native request/response schemas)
+- [`skills/decisions/`](./skills/decisions/) – text/image probabilities, choices, and scores via TypeSafe JEV or OpenAI Decisions, plus experimental JEV bounding boxes (`decisions.mjs jev|openai`, needs the selected provider's `TYPESAFE_API_KEY` or `OPENAI_API_KEY`; uses native request/response schemas)
 
 Each Grafana skill includes its own `grafana.mjs` and test file directly in
 [`grafana-logs/`](./skills/grafana-logs/) or
