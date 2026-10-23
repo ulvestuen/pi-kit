@@ -7,8 +7,7 @@ skill, process, and piece of tooling simple and visually understandable.
 
 ```text
 Pi agent
-├─ skills/       search · issue trackers · canvas · orchestration · PDCA
-├─ subagents/    extension → fresh SDK sessions → live progress + results
+├─ skills/       search · issue trackers · canvas
 └─ threema/      extension → send + receive messages
 ```
 
@@ -80,7 +79,6 @@ node skills/doctor.mjs
 The extensions target Pi **1.1.0+** using the `@earendil-works` SDK packages.
 
 - [`threema/`](./threema/) – Threema integration for pi
-- [`subagents/`](./subagents/) – standalone Pi SDK delegation with five roles, live progress, bounded parallelism, and cancellation; no Herdr or shell launcher
 
 ### Skills
 
@@ -94,8 +92,6 @@ useful, a zero-dependency Node script the agent runs from the shell:
 - [`skills/kagi-search/`](./skills/kagi-search/) – web search via the Kagi API (`kagi-search.mjs`, needs `KAGI_API_KEY`)
 - [`skills/cloudwatch-logs/`](./skills/cloudwatch-logs/) – look up AWS CloudWatch Logs and run Logs Insights queries directly with an installed, pre-authenticated AWS CLI; no additional credentials or scripts
 - [`skills/tldraw-offline/`](./skills/tldraw-offline/) – inspect, edit, lint, and script open tldraw Desktop canvases through the local agent API (`tq.mjs` handles per-launch discovery and authentication)
-- [`skills/orchestrate/`](./skills/orchestrate/) – outcome-first workflow with task dependencies, user checkpoints, bounded delegation, and acceptance, regression, and scope audits; load with `/skill:orchestrate`
-- [`skills/pdca/`](./skills/pdca/) – the Plan-Do-Check-Act quality loop, described by a single diagram
 - [`skills/decisions/`](./skills/decisions/) – text/image probabilities, choices, and scores via TypeSafe JEV or OpenAI Decisions, plus experimental JEV bounding boxes (`decisions.mjs jev|openai`, needs the selected provider's `TYPESAFE_API_KEY` or `OPENAI_API_KEY`; uses native request/response schemas)
 
 Each Grafana skill includes its own `grafana.mjs` and test file directly in

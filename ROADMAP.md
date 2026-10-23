@@ -8,13 +8,12 @@ not more documentation.
 
 ## Where the project is today
 
-pi-kit is a small toolkit for the `pi` agent: plain skills plus Threema and
-subagents extensions, verified by `npm test` from the repository root.
+pi-kit is a small toolkit for the `pi` agent: plain skills plus the Threema
+extension, verified by `npm test` from the repository root.
 
 ```text
 Pi agent
-├─ skills/       search · issue trackers · orchestration · PDCA
-├─ subagents/    SDK sessions + live terminal progress
+├─ skills/       search · issue trackers · canvas
 └─ threema/      send + receive messages
 ```
 
@@ -25,23 +24,20 @@ What already matches the principle, and what doesn't yet:
 | Area | State | Verdict |
 | --- | --- | --- |
 | Zero-dependency skill scripts | Each skill is one `SKILL.md` + one small `.mjs` | ✅ Simple |
-| PDCA skill | Entire process carried by a single SVG diagram | ✅ The model to copy |
 | Test story | One `npm test` at the root runs everything | ✅ Simple |
 | Skill docs | Every skill has a diagram and follows the shared template | ✅ Visual |
-| Subagents | Standalone SDK extension owns delegation, progress, and tool guidance | ✅ Simple |
 | README | Architecture and configuration health are visible at a glance | ✅ Visual |
 | CI | GitHub Actions runs the root test command on pushes and pull requests | ✅ Automated |
 | Test coverage | Exa request shaping and the Threema webhook flow have focused tests | ✅ Even |
 
 ## Implementation plan
 
-The roadmap is implemented in five reviewable workstreams. Each workstream has
+The roadmap is implemented in four reviewable workstreams. Each workstream has
 one owner, a concrete acceptance check, and no build or runtime dependency.
 
 | Workstream | Implementation | Acceptance |
 | --- | --- | --- |
 | Visual foundation | Put the repo map in `README.md`; add a small flow diagram to each skill; add outbound and inbound sequences to `threema/README.md`; define `skills/TEMPLATE.md` | A visitor can identify every component and its data flow before reading commands |
-| Sub-agent simplification | Replace shell/Herdr launchers with a standalone Pi SDK extension and live progress panel | Focused tests prove fresh sessions, role tool restrictions, bounded workers, cancellation and cleanup |
 | CLI consistency | Standardize search docs and flags on `--limit` and `--json`; retain Exa's `--num` as a compatibility alias; isolate and test Exa request shaping | Learning either search skill transfers directly to the other without breaking old Exa calls |
 | Safety net | Run all focused tests from root `npm test`; add a Node 22 GitHub Actions job for pushes and pull requests; exercise the real Threema webhook boundary | Local and CI verification use exactly the same command |
 | Controlled growth | Add `skills/doctor.mjs` for a value-free environment status table; require future skills to use the template, one script, one test, and zero runtime dependencies | `node skills/doctor.mjs` gives an at-a-glance status and the template defines the admission gate |
@@ -58,8 +54,7 @@ flowchart LR
 
 ### Phase 1 — Make it visual
 
-Goal: every component explains itself with a diagram, the way PDCA already
-does.
+Goal: every component explains itself with a diagram.
 
 - [x] **Repo map in the README.** Add the architecture diagram above (or a
       refined version) to `README.md` so the first thing a visitor sees is the
@@ -80,9 +75,6 @@ does.
 Goal: remove the places where following the docs requires careful multi-step
 reading.
 
-- [x] **Remove the Herdr dependency.** The `subagents/` extension now creates
-      fresh Pi SDK sessions and renders progress directly in Pi. Its tool
-      includes delegation guidance; shell launchers are removed.
 - [x] **Add CI.** One GitHub Actions workflow that runs `npm test` on pushes
       and pull requests — a green check is the simplest possible status
       visualization.
@@ -103,10 +95,6 @@ Goal: add capability only where it keeps the one-diagram, one-page property.
 - [x] **New skills on the template.** Candidate integrations (e.g. GitHub
       issues, calendar) enter only via the Phase 1 template: diagram first,
       one script, one test, zero dependencies.
-- [x] **Sub-agent role diagram.** A single picture of how the five roles
-      (scout, planner, implementer, critic, auditor) compose into the
-      plan → implement → review pattern, replacing the prose "Patterns"
-      section.
 
 ## What we deliberately won't do
 

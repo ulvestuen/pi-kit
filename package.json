@@ -11,8 +11,7 @@
     "pi-package"
   ],
   "workspaces": [
-    "threema",
-    "subagents"
+    "threema"
   ],
   "repository": {
     "type": "git",
@@ -20,8 +19,7 @@
   },
   "pi": {
     "extensions": [
-      "./threema",
-      "./subagents/index.ts"
+      "./threema"
     ],
     "skills": [
       "./skills"
