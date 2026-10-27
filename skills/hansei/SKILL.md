@@ -30,7 +30,9 @@ node {baseDir}/hansei.mjs --since 30d --json           # metrics only, no prompt
 | Signal | What it suggests |
 | --- | --- |
 | nudge (`continue`, `go on`, `what is next`) | agent stopped early or lost its place; state not kept on disk |
-| stamp (`yes`, `yes to all`) | questions the agent could have decided, or a proposal to review |
+| stamp (`yes`/`yes to all` after ≥3 agent questions) | a batch of questions the agent could have decided |
+| batch replies with own input % | how often such batches drew real decisions; low means the batch added little |
+| approval (`yes` to a single ask) | healthy permission gates; reduce only if the ask was unnecessary |
 | correction (`no, it does not work`, `but…`, `I can't see…`) | missing understanding, verification, or a check of the real effect |
 | repeat (`send again`, same prompt twice) | flaky tool or unclear success |
 | tool error %, model errors | broken tool, bad instructions, or harness problems |

@@ -43,7 +43,11 @@ const SHIP = /\b(commit|push|rerun deploy\w*|redeploy|babysit ci|ci (is |until )
 const SKILL = /^<skill name="([^"]+)"/;
 const TEMPLATE = /^Run a \*\*([^*]+)\*\*|^Create or revise a plan for this goal/;
 
-export const KINDS = ["nudge", "stamp", "repeat", "correction", "ship", "skill", "template", "task", "noise"];
+export const KINDS = ["nudge", "stamp", "approval", "answer", "repeat", "correction", "ship", "skill", "template", "task", "noise"];
+
+// An agent message with this many questions is a batch; "yes" to it is a rubber stamp.
+export const BATCH = 3;
+export const countQuestions = (text) => (text.match(/\?(?=[\s*_)"'”`]|$)/g) ?? []).length;
 
 export function classify(text) {
   const t = text.trim().replace(/\s+/g, " ");
@@ -74,6 +78,7 @@ const textOf = (content) =>
 const normalize = (text) => text.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\b(please|again|can you|a|the|it)\b/g, "").replace(/\s+/g, " ").trim();
 
 export function parseSession(jsonl, file = "") {
+  let lastAgentText = "";
   const session = { file, cwd: "", project: "", start: null, prompts: [], assistant: 0, toolCalls: 0, toolErrors: 0, modelErrors: 0, aborted: 0, cost: 0, tokens: 0, models: {} };
   for (const line of jsonl.split("\n")) {
     if (!line.trim()) continue;
@@ -94,12 +99,19 @@ export function parseSession(jsonl, file = "") {
       const text = textOf(m.content).trim();
       if (!text) continue;
       const prompt = { at: entry.timestamp ?? null, text, ...classify(text) };
+      // Context: "yes" to one permission question is an approval; to a batch, a rubber stamp.
+      const asked = countQuestions(lastAgentText);
+      lastAgentText = "";
+      if (prompt.kind === "stamp" && asked < BATCH) prompt.kind = "approval";
+      else if (prompt.kind === "task" && asked >= BATCH) prompt.kind = "answer";
       // Asking for the same task again in one session means the first attempt did not land.
       const key = normalize(text);
       if (prompt.kind === "task" && key.length >= 12 && session.prompts.some((p) => normalize(p.text) === key)) prompt.kind = "repeat";
       session.prompts.push(prompt);
     } else if (m.role === "assistant") {
       session.assistant++;
+      const said = textOf(m.content).trim();
+      if (said) lastAgentText = said;
       session.toolCalls += Array.isArray(m.content) ? m.content.filter((c) => c?.type === "toolCall").length : 0;
       if (m.stopReason === "error" || m.stopReason === "length") session.modelErrors++;
       if (m.stopReason === "aborted") session.aborted++;
@@ -169,6 +181,9 @@ export function metrics(sessions) {
     rates: {
       nudge: per100(counts.nudge),
       stamp: per100(counts.stamp),
+      approval: per100(counts.approval),
+      // Of replies to question batches, how many carried the user's own input.
+      batchInput: counts.stamp + counts.answer ? Math.round((counts.answer / (counts.stamp + counts.answer)) * 1000) / 10 : 0,
       correction: per100(counts.correction),
       repeat: per100(counts.repeat),
       toolError: totals.toolCalls ? Math.round((totals.toolErrors / totals.toolCalls) * 1000) / 10 : 0,
@@ -208,7 +223,9 @@ const ROWS = [
   ["sessions", (m) => m.sessions],
   ["prompts", (m) => m.prompts],
   ["nudges (continue…) per 100 prompts", (m) => m.rates.nudge],
-  ["rubber stamps (yes…) per 100", (m) => m.rates.stamp],
+  [`rubber stamps (yes to ≥${BATCH} questions) per 100`, (m) => m.rates.stamp],
+  ["batch replies with own input %", (m) => m.rates.batchInput],
+  ["approvals (yes to one ask) per 100", (m) => m.rates.approval],
   ["corrections per 100", (m) => m.rates.correction],
   ["repeats per 100", (m) => m.rates.repeat],
   ["commit/push requests", (m) => m.counts.ship],
@@ -235,14 +252,14 @@ export function formatReport(sessions, { examples = 3, split } = {}) {
   const projectRows = [...byProject]
     .map(([name, list]) => [name, metrics(list)])
     .sort((a, b) => b[1].prompts - a[1].prompts)
-    .map(([name, p]) => [name, p.sessions, p.prompts, p.counts.nudge, p.counts.stamp, p.counts.correction, p.counts.ship, `${p.rates.toolError}%`, money(p.cost)]);
-  out.push("", "# By project", "", table(["project", "sessions", "prompts", "nudge", "stamp", "correct", "ship", "tool err", "cost"], projectRows));
+    .map(([name, p]) => [name, p.sessions, p.prompts, p.counts.nudge, p.counts.stamp, p.counts.approval, p.counts.correction, p.counts.ship, `${p.rates.toolError}%`, money(p.cost)]);
+  out.push("", "# By project", "", table(["project", "sessions", "prompts", "nudge", "stamp", "approve", "correct", "ship", "tool err", "cost"], projectRows));
 
   const skillRows = Object.entries(m.skills).sort((a, b) => b[1] - a[1]);
   if (skillRows.length) out.push("", "# Skills and workflow templates invoked", "", table(["skill", "times"], skillRows));
 
   if (examples > 0) {
-    for (const kind of ["correction", "nudge", "repeat"]) {
+    for (const kind of ["correction", "stamp", "nudge", "repeat"]) {
       const hits = sessions.flatMap((s) => s.prompts.filter((p) => p.kind === kind).map((p) => ({ s, p }))).slice(-examples);
       if (!hits.length) continue;
       out.push("", `# Recent ${kind}s`, "");

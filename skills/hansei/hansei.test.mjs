@@ -7,14 +7,18 @@ import { describe, it } from "node:test";
 import { classify, main, metrics, parseSession, redact } from "./hansei.mjs";
 
 const user = (text, at) => ({ type: "message", timestamp: at, message: { role: "user", content: [{ type: "text", text }] } });
-const assistant = ({ calls = 1, stop = "toolUse", cost = 0.5 } = {}) => ({
+const assistant = ({ calls = 1, stop = "toolUse", cost = 0.5, text } = {}) => ({
   type: "message",
   message: {
     role: "assistant",
     model: "m1",
     stopReason: stop,
     usage: { totalTokens: 1000, cost: { total: cost } },
-    content: [{ type: "thinking", thinking: "x" }, ...Array.from({ length: calls }, () => ({ type: "toolCall", name: "bash" }))],
+    content: [
+      { type: "thinking", thinking: "x" },
+      ...(text ? [{ type: "text", text }] : []),
+      ...Array.from({ length: calls }, () => ({ type: "toolCall", name: "bash" })),
+    ],
   },
 });
 const toolResult = (isError) => ({ type: "message", message: { role: "toolResult", toolName: "bash", isError, content: [] } });
@@ -74,6 +78,28 @@ describe("hansei sessions", () => {
   });
 });
 
+describe("hansei question context", () => {
+  it("separates rubber stamps of question batches from approvals and real answers", () => {
+    const batch = "Q1 — Battery too? ➡️ Yes.\nQ2 — Menu bar only? ➡️ Yes.\nQ3 — Skip updates? See https://x.test/?a=1 ➡️ Yes.";
+    const s = parseSession(
+      jsonl("/c/app", "2026-10-01T00:00:00Z", [
+        assistant({ text: batch }),
+        user("yes to all"),
+        assistant({ text: batch }),
+        user("Q2 no, keep the dock icon. yes to the rest"),
+        assistant({ text: "May I run `npm install`?" }),
+        user("yes"),
+        assistant({ calls: 2 }),
+        user("yes"),
+      ]),
+    );
+    assert.deepEqual(s.prompts.map((p) => p.kind), ["stamp", "answer", "approval", "approval"]);
+    const m = metrics([s]);
+    assert.equal(m.rates.stamp, 25);
+    assert.equal(m.rates.batchInput, 50);
+  });
+});
+
 describe("hansei redact", () => {
   it("masks secrets, emails, long hex, and the home directory", () => {
     const text = redact(
@@ -95,7 +121,7 @@ describe("hansei CLI", () => {
         writeFileSync(path.join(dir, folder, name), content);
       };
       write("--a--", "1.jsonl", jsonl("/c/alpha", "2026-09-01T00:00:00Z", [user("build the thing"), assistant(), user("continue"), user("continue")]));
-      write("--a--", "2.jsonl", jsonl("/c/alpha", "2026-10-20T00:00:00Z", [user("build another thing"), assistant(), user("yes to all")]));
+      write("--a--", "2.jsonl", jsonl("/c/alpha", "2026-10-20T00:00:00Z", [user("build another thing"), assistant({ text: "A? B? C?" }), user("yes to all")]));
       write("--b--", "3.jsonl", jsonl("/c/beta", "2026-10-21T00:00:00Z", [user("no, it does not work, token sk-abcdefghijklmnopqrstuvwx")]));
       write("--b--", "notes.txt", "ignored");
 
@@ -105,7 +131,7 @@ describe("hansei CLI", () => {
       assert.equal(main(["--dir", dir], { log, now }), 0);
       const report = out.join("\n");
       assert.match(report, /sessions\s+3/);
-      assert.match(report, /alpha\s+2\s+5\s+2\s+1\s+0/);
+      assert.match(report, /alpha\s+2\s+5\s+2\s+1\s+0\s+0/);
       assert.match(report, /# Recent corrections\n\n- 2026-10-21 beta: no, it does not work, token \[redacted\]/);
       assert.doesNotMatch(report, /sk-abc/);
 
