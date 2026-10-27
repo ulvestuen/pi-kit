@@ -7,7 +7,7 @@ skill, process, and piece of tooling simple and visually understandable.
 
 ```text
 Pi agent
-├─ skills/       search · issue trackers · canvas
+├─ skills/       A3 problem solving · search · issue trackers · canvas
 └─ threema/      extension → send + receive messages
 ```
 
@@ -85,6 +85,7 @@ The extensions target Pi **1.1.0+** using the `@earendil-works` SDK packages.
 Plain skills under [`skills/`](./skills/) — each is a `SKILL.md` plus, where
 useful, a zero-dependency Node script the agent runs from the shell:
 
+- [`skills/a3/`](./skills/a3/) – work problems as A3 reports (PDCA on one page): Markdown source in the target repo, `a3.mjs new|lint|status|render` for discipline checks, resumable next steps, and a printable two-column HTML sheet
 - [`skills/exa-search/`](./skills/exa-search/) – web search via the Exa API (`exa-search.mjs`, needs `EXA_API_KEY`)
 - [`skills/grafana-logs/`](./skills/grafana-logs/) – search Grafana Cloud Loki logs through the hosted MCP server; bundled Node.js proxy with OAuth browser login, PKCE, and automatic token refresh; no `gcx` required
 - [`skills/grafana-metrics/`](./skills/grafana-metrics/) – discover and query Grafana Cloud Prometheus metrics through its bundled read-only MCP proxy, sharing the OAuth login with the logs skill

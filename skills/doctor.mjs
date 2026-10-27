@@ -4,6 +4,7 @@ import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 export const REQUIREMENTS = [
+  ["a3", []],
   ["decisions (jev)", ["TYPESAFE_API_KEY"]],
   ["decisions (openai)", ["OPENAI_API_KEY"]],
   ["exa-search", ["EXA_API_KEY"]],
