@@ -7,7 +7,7 @@ skill, process, and piece of tooling simple and visually understandable.
 
 ```text
 Pi agent
-├─ skills/       A3 problem solving · search · issue trackers · canvas
+├─ skills/       A3 problem solving · ship · search · issue trackers · canvas
 └─ threema/      extension → send + receive messages
 ```
 
@@ -92,6 +92,7 @@ useful, a zero-dependency Node script the agent runs from the shell:
 - [`skills/jira/`](./skills/jira/) – Jira Cloud issue management with scoped or unscoped API tokens via a zero-dependency CLI (`jira.mjs`, needs `JIRA_BASE_URL`, `JIRA_EMAIL`, and `JIRA_AUTH_TOKEN`)
 - [`skills/kagi-search/`](./skills/kagi-search/) – web search via the Kagi API (`kagi-search.mjs`, needs `KAGI_API_KEY`)
 - [`skills/cloudwatch-logs/`](./skills/cloudwatch-logs/) – look up AWS CloudWatch Logs and run Logs Insights queries directly with an installed, pre-authenticated AWS CLI; no additional credentials or scripts
+- [`skills/ship/`](./skills/ship/) – push, wait for every GitHub Actions run on the commit, diagnose failures from the lines before `##[error]`, and verify the deployed effect at the live URL (`ship.mjs ci|verify`, needs an authenticated `gh` CLI)
 - [`skills/tldraw-offline/`](./skills/tldraw-offline/) – inspect, edit, lint, and script open tldraw Desktop canvases through the local agent API (`tq.mjs` handles per-launch discovery and authentication)
 - [`skills/decisions/`](./skills/decisions/) – text/image probabilities, choices, and scores via TypeSafe JEV or OpenAI Decisions, plus experimental JEV bounding boxes (`decisions.mjs jev|openai`, needs the selected provider's `TYPESAFE_API_KEY` or `OPENAI_API_KEY`; uses native request/response schemas)
 

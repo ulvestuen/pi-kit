@@ -13,7 +13,7 @@ extension, verified by `npm test` from the repository root.
 
 ```text
 Pi agent
-├─ skills/       A3 problem solving · search · issue trackers · canvas
+├─ skills/       A3 problem solving · ship · search · issue trackers · canvas
 └─ threema/      send + receive messages
 ```
 
