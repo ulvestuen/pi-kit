@@ -7,7 +7,7 @@ skill, process, and piece of tooling simple and visually understandable.
 
 ```text
 Pi agent
-├─ skills/       A3 problem solving · ship · search · issue trackers · canvas
+├─ skills/       A3 problem solving · ship · hansei · search · issue trackers · canvas
 └─ threema/      extension → send + receive messages
 ```
 
@@ -89,6 +89,7 @@ useful, a zero-dependency Node script the agent runs from the shell:
 - [`skills/exa-search/`](./skills/exa-search/) – web search via the Exa API (`exa-search.mjs`, needs `EXA_API_KEY`)
 - [`skills/grafana-logs/`](./skills/grafana-logs/) – search Grafana Cloud Loki logs through the hosted MCP server; bundled Node.js proxy with OAuth browser login, PKCE, and automatic token refresh; no `gcx` required
 - [`skills/grafana-metrics/`](./skills/grafana-metrics/) – discover and query Grafana Cloud Prometheus metrics through its bundled read-only MCP proxy, sharing the OAuth login with the logs skill
+- [`skills/hansei/`](./skills/hansei/) – reflect on your own agent sessions: counts nudges, rubber-stamp approvals, corrections, repeats, tool errors, and cost per project from local Pi session logs, and compares before vs after a workflow change (`hansei.mjs`, read-only, redacted output)
 - [`skills/jira/`](./skills/jira/) – Jira Cloud issue management with scoped or unscoped API tokens via a zero-dependency CLI (`jira.mjs`, needs `JIRA_BASE_URL`, `JIRA_EMAIL`, and `JIRA_AUTH_TOKEN`)
 - [`skills/kagi-search/`](./skills/kagi-search/) – web search via the Kagi API (`kagi-search.mjs`, needs `KAGI_API_KEY`)
 - [`skills/cloudwatch-logs/`](./skills/cloudwatch-logs/) – look up AWS CloudWatch Logs and run Logs Insights queries directly with an installed, pre-authenticated AWS CLI; no additional credentials or scripts
