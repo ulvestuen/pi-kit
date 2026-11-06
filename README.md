@@ -8,6 +8,7 @@ skill, process, and piece of tooling simple and visually understandable.
 ```text
 Pi agent
 ├─ skills/       A3 problem solving · ship · hansei · search · issue trackers · canvas
+├─ prompts/      /a3 · /hansei · /ship
 └─ threema/      extension → send + receive messages
 ```
 
@@ -79,6 +80,13 @@ node skills/doctor.mjs
 The extensions target Pi **1.1.0+** using the `@earendil-works` SDK packages.
 
 - [`threema/`](./threema/) – Threema integration for pi
+
+### Prompt aliases
+
+Thin aliases under [`prompts/`](./prompts/) provide `/a3`, `/hansei`, and
+`/ship`. Pass a task or request after the command. The aliases load their
+respective skills; the skills own the workflow and safety rules.
+Run `/reload` after updating templates in an active session.
 
 ### Skills
 

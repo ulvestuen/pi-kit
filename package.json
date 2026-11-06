@@ -23,6 +23,9 @@
     ],
     "skills": [
       "./skills"
+    ],
+    "prompts": [
+      "./prompts"
     ]
   }
 }
