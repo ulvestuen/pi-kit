@@ -11,6 +11,7 @@ export const REQUIREMENTS = [
   ["hansei", []],
   ["jira", ["JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_AUTH_TOKEN"]],
   ["kagi-search", ["KAGI_API_KEY"]],
+  ["pair", []],
   ["ship", []],
   ["tldraw-offline", []],
 ];
