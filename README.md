@@ -84,7 +84,14 @@ The extensions target Pi **1.1.0+** using the `@earendil-works` SDK packages.
 ### Prompt aliases
 
 Thin aliases under [`prompts/`](./prompts/) provide `/a3`, `/hansei`, and
-`/ship`. Pass a task or request after the command. The aliases load their
+`/ship`. Pass a task or request after the command. Bare `/ship` ships the
+agent's complete current change, including relevant new files, excludes and
+cleans up agent-created temporary files, and verifies a clean working tree.
+Dotenv files (`.env` and variants), credential files, private keys, and other
+secrets must never be committed or pushed, even if already tracked or staged.
+Unrelated user work and local sensitive files are preserved; if they prevent
+a clean tree, the agent asks how to proceed. An optional request narrows the
+shipping scope or selects a CI/verification-only task. The aliases load their
 respective skills; the skills own the workflow and safety rules.
 Run `/reload` after updating templates in an active session.
 
