@@ -24,14 +24,17 @@ workers, not subagents.
 
 | Detected by | Multiplexer | Panes |
 | --- | --- | --- |
-| `HERDR_ENV=1` and `HERDR_PANE_ID` | Herdr (desktop or TUI) | `herdr pane split` right of yours, auditor below it, `--no-focus` |
+| `HC_TERMINAL_ID` | Herdr app (`herdr-app` + herdr-core `hc`) | `herdr-app do pane.split` right of yours, auditor below it, focus handed back; turns via `hc send` |
 | `REX_SESSION` and `REX_BLOCK` | Rex | `rex split` right of your block, auditor below it, `--focus=false` |
 
 Run `node {baseDir}/pair.mjs detect` first. If it prints `none`, tell the user
 that `/pair` needs Herdr or Rex and stop, unless the user explicitly asked for
 another approach in the prompt, such as subagents or doing it yourself. If both
-are detected, ask which one to use and pass `--mux`. `rex` is found on `PATH` or
-inside `/Applications/Rex*.app`; set `REX_BIN` to override it.
+are detected, ask which one to use and pass `--mux`. `herdr-app` and `hc` are
+found on `PATH` or in `~/.local/bin` (`HC_INSTALL_DIR`); set `HERDR_APP_BIN` /
+`HC_BIN` to override them. Herdr workers are identified by terminal address
+(`t7`), not pane ID. The old `herdr` TUI CLI is not supported. `rex` is found on
+`PATH` or inside `/Applications/Rex*.app`; set `REX_BIN` to override it.
 
 ## Run
 
@@ -71,8 +74,8 @@ Read the final implementer report and the last audit, then check the work
 yourself with `git status`, `git diff`, and the repository's checks. A worker's
 claim is not proof. Summarize what changed, what verification passed, any
 unresolved audit findings, and the verdict. Leave both panes open for the user.
-Close them only when asked. On timeout or a missing pane, read the panes (`herdr
-pane read` / `rex capture`) and the report directory, then report what happened.
+Close them only when asked. On timeout or a missing pane, read the panes (`hc read <t>
+--lines 100` / `rex capture`) and the report directory, then report what happened.
 Do not restart the loop automatically.
 
 ## Safety

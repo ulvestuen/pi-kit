@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 // Pair programming between two visible Pi workers: an implementer and an auditor.
-// Detects Herdr or Rex, opens one pane per worker, and relays turns through files.
+// Detects the Herdr app (herdr-app + herdr-core `hc`) or Rex, opens one pane per worker,
+// and relays turns through files.
 // Zero dependencies; Node.js 22+.
 
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -34,7 +35,7 @@ Options:
 export function run(cmd, args, { cwd } = {}) {
   return new Promise((resolvePromise, reject) => {
     execFile(cmd, args, { cwd, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
-      if (error) reject(new Error(`${cmd} ${args.join(" ")}: ${(stderr || error.message).trim()}`));
+      if (error) reject(Object.assign(new Error(`${cmd} ${args.join(" ")}: ${(stderr || error.message).trim()}`), { stdout }));
       else resolvePromise(stdout);
     });
   });
@@ -50,47 +51,31 @@ export function parseDuration(value) {
 
 // ---------- environment ----------
 
-/** Decide which multiplexer hosts this process, from the variables each one injects. */
+/**
+ * Decide which multiplexer hosts this process, from the variables each one injects.
+ * Herdr app terminals are herdr-core terminals and carry HC_TERMINAL_ID (an address like t7, not a pane id).
+ */
 export function detect(env = process.env) {
-  const herdr = env.HERDR_ENV === "1" && Boolean(env.HERDR_PANE_ID);
+  const herdr = Boolean(env.HC_TERMINAL_ID);
   const rex = Boolean(env.REX_SESSION && env.REX_BLOCK);
-  if (herdr && rex) return { mux: null, reason: "both Herdr and Rex variables are set; pass --mux herdr|rex" };
-  if (herdr) return { mux: "herdr", pane: env.HERDR_PANE_ID };
+  if (herdr && rex) return { mux: null, reason: "both Herdr (HC_TERMINAL_ID) and Rex variables are set; pass --mux herdr|rex" };
+  if (herdr) return { mux: "herdr", terminal: env.HC_TERMINAL_ID };
   if (rex) return { mux: "rex", session: env.REX_SESSION, pane: env.REX_BLOCK };
-  return { mux: null, reason: "not running inside Herdr (HERDR_ENV=1) or Rex (REX_SESSION/REX_BLOCK)" };
+  return { mux: null, reason: "not running inside Herdr (HC_TERMINAL_ID) or Rex (REX_SESSION/REX_BLOCK)" };
 }
 
-export const shellQuote = (s) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${String(s).replaceAll("'", `'\\''`)}'`);
-
-/** Pane operations behind one interface: split(anchor, direction, label, argv) → id, send, read. */
+/**
+ * Pane operations behind one interface: anchor() → id, split(anchor, direction, label, argv) → id, send, read,
+ * and optionally alive (throws when the worker is gone) and idle (true once the agent stopped working).
+ */
 export function adapter(mux, { exec = run, env = process.env, cwd }) {
-  if (mux === "herdr") {
-    const herdr = async (args) => exec("herdr", args);
-    return {
-      anchor: env.HERDR_PANE_ID,
-      async split(anchor, direction, label, argv) {
-        const out = JSON.parse(await herdr(["pane", "split", anchor, "--direction", direction === "below" ? "down" : "right", "--cwd", cwd, "--no-focus"]));
-        const id = out.result?.pane?.pane_id;
-        if (!id) throw new Error("herdr pane split returned no pane id");
-        await herdr(["pane", "rename", id, label]).catch(() => {});
-        await herdr(["pane", "run", id, argv.map(shellQuote).join(" ")]);
-        return id;
-      },
-      async send(id, text) {
-        await herdr(["pane", "send-text", id, text]);
-        await herdr(["pane", "send-keys", id, "enter"]);
-      },
-      read: (id) => herdr(["pane", "read", id, "--source", "recent", "--lines", "40"]),
-      // Herdr recognizes Pi (with its integration installed) and reports idle/done.
-      idle: (id) => herdr(["agent", "wait", id, "--timeout", "120000"]).then(() => true, () => false),
-    };
-  }
+  if (mux === "herdr") return herdrAdapter({ exec, env, cwd });
   if (mux === "rex") {
     const bin = env.REX_BIN || onPath("rex", env.PATH) || REX_APP_BINS.find((p) => existsSync(p)) || "rex";
     const session = env.REX_SESSION;
     const rex = async (args) => exec(bin, args);
     return {
-      anchor: env.REX_BLOCK,
+      anchor: async () => env.REX_BLOCK,
       async split(anchor, direction, label, argv) {
         const out = JSON.parse(await rex(["split", "-s", session, "-b", anchor, `--split=${direction}`, "-c", cwd, "--label", label, "--focus=false", "--json", "--", ...argv]));
         const id = out.block_ids?.[0];
@@ -105,6 +90,64 @@ export function adapter(mux, { exec = run, env = process.env, cwd }) {
     };
   }
   throw new Error(`unsupported multiplexer ${mux}`);
+}
+
+/** A CLI found via an override variable, PATH, or Herdr's install folder (~/.local/bin by default). */
+function findBin(name, override, env) {
+  if (override) return override;
+  const installDir = env.HC_INSTALL_DIR || join(env.HOME || homedir(), ".local", "bin");
+  return onPath(name, env.PATH) || [join(installDir, name)].find((p) => existsSync(p)) || name;
+}
+
+/**
+ * Herdr app: `herdr-app` arranges panes in the window, herdr-core `hc` talks to the terminals in them.
+ * Workers are identified by their terminal address (t7); the adapter remembers each one's pane for splitting.
+ */
+function herdrAdapter({ exec, env, cwd }) {
+  const app = findBin("herdr-app", env.HERDR_APP_BIN, env);
+  const hcBin = findBin("hc", env.HC_BIN, env);
+  const herdrApp = async (command, args) => {
+    // On failure herdr-app prints {"error": "..."} on stdout and exits 1.
+    const stdout = await exec(app, ["do", command, JSON.stringify(args)]).catch((error) => error.stdout || Promise.reject(error));
+    const out = JSON.parse(stdout);
+    if (out?.error) throw new Error(`herdr-app ${command}: ${out.error}`);
+    return out;
+  };
+  const hc = (args) => exec(hcBin, args);
+  const paneOf = new Map();
+  let home = null;
+  return {
+    // The caller's pane: the window's pane showing our own terminal ($HC_TERMINAL_ID).
+    async anchor() {
+      const self = env.HC_TERMINAL_ID;
+      const { spaces = [] } = JSON.parse(await exec(app, ["ls"]));
+      const found = spaces.flatMap((s) => s.tabs ?? []).flatMap((t) => t.terminals ?? []).find((t) => t.terminal === self);
+      if (!found?.pane) throw new Error(`terminal ${self} is not shown in a Herdr app pane (herdr-app ls)`);
+      paneOf.set(self, found.pane);
+      home = found.pane;
+      return self;
+    },
+    async split(anchor, direction, label, argv) {
+      // pane.split has no folder argument, so start the worker through a tiny cd wrapper.
+      const inCwd = ["/bin/sh", "-c", 'cd -- "$1" && shift && exec "$@"', "pair", cwd, ...argv];
+      const out = await herdrApp("pane.split", { direction: direction === "below" ? "down" : "right", pane: paneOf.get(anchor) ?? anchor, argv: inCwd });
+      if (!out.terminal || !out.pane) throw new Error("herdr-app pane.split returned no terminal");
+      paneOf.set(out.terminal, out.pane);
+      // pane.split focuses the new pane; give the keyboard back to the user's pane.
+      if (home) await herdrApp("pane.focus", { pane: home }).catch(() => {});
+      await hc(["label", out.terminal, `pair.role=${label.replace(/^pair:\s*/, "")}`]).catch(() => {});
+      return out.terminal;
+    },
+    send: (id, text) => hc(["send", id, text]),
+    read: (id) => hc(["read", id, "--lines", "40"]),
+    // `hc read` still works after a terminal finished, so ask the core whether it is live.
+    async alive(id) {
+      const t = JSON.parse(await hc(["get", id, "--json"]));
+      if (t.state !== "live") throw new Error(`terminal ${id} is ${t.state}${t.exit_code == null ? "" : ` (exit ${t.exit_code})`}`);
+    },
+    // Pi reports its status to herdr-core (OSC 7501); `hc wait` returns once it stops working.
+    idle: (id) => hc(["wait", id, "--timeout", "120", "--json"]).then((out) => JSON.parse(out).reason !== "timeout", () => false),
+  };
 }
 
 /** Absolute path of an executable, so non-interactive pane shells need not share our PATH. */
@@ -191,7 +234,7 @@ export async function runPair({ task, mux, cwd, dir, rounds, implementerModel, a
   const timeout = parseDuration(turnTimeout);
   const finish = async (role, id, { report }) => {
     progress(`waiting for ${role}: ${report}`);
-    const isAlive = () => panes.read(id).then(() => {}, (error) => {
+    const isAlive = () => (panes.alive ?? panes.read)(id).then(() => {}, (error) => {
       throw new Error(`${role} pane ${id} is gone (${error.message}); reports so far are in ${dir}`);
     });
     const text = await waitForReport(report, { sleep, now, timeout, isAlive });
@@ -203,7 +246,7 @@ export async function runPair({ task, mux, cwd, dir, rounds, implementerModel, a
   const pi = env.PAIR_PI_BIN || onPath("pi", env.PATH) || "pi";
   const piArgs = (model) => [pi, "--model", model];
   const first = prepare("implementer", "implement");
-  const implementer = await panes.split(panes.anchor, "right", "pair: implementer", [...piArgs(implementerModel), first.prompt]);
+  const implementer = await panes.split(await panes.anchor(), "right", "pair: implementer", [...piArgs(implementerModel), first.prompt]);
   const orient = prepare("auditor", "orient");
   const auditor = await panes.split(implementer, "below", "pair: auditor", [...piArgs(auditorModel), orient.prompt]);
   progress(`${mux}: implementer ${implementer} (${implementerModel}), auditor ${auditor} (${auditorModel}); files in ${dir}`);
@@ -257,7 +300,7 @@ export async function main(argv, { env = process.env, exec = run, log = console.
 
   const mux = flags.mux ?? found.mux;
   if (!["herdr", "rex"].includes(mux)) throw new Error(found.reason ?? `--mux must be herdr or rex`);
-  if (mux === "herdr" && !env.HERDR_PANE_ID) throw new Error("--mux herdr needs HERDR_PANE_ID (run inside a Herdr pane)");
+  if (mux === "herdr" && !env.HC_TERMINAL_ID) throw new Error("--mux herdr needs HC_TERMINAL_ID (run inside a Herdr app pane)");
   if (mux === "rex" && !(env.REX_SESSION && env.REX_BLOCK)) throw new Error("--mux rex needs REX_SESSION and REX_BLOCK (run inside a Rex pane)");
   if (!flags["task-file"]) throw new Error("run needs --task-file");
   const task = readFileSync(flags["task-file"], "utf8").trim();
