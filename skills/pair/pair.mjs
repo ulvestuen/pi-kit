@@ -225,7 +225,11 @@ export async function settle(read, { sleep = sleepMs, interval = 1500, maxPolls 
   }
 }
 
-export async function runPair({ task, mux, cwd, dir, rounds, implementerModel, auditorModel, turnTimeout, exec = run, env = process.env, sleep = sleepMs, now = Date.now, progress = () => {} }) {
+/**
+ * Shared worker plumbing for pair sessions (also used by the pair-review skill): numbered turn/report files in `dir`,
+ * Pi workers started in new panes, and waiting for a worker's finished report.
+ */
+export async function workers({ task, mux, cwd, dir, turnTimeout, label = "Pair session", render, exec = run, env = process.env, sleep = sleepMs, now = Date.now, progress = () => {} }) {
   const panes = adapter(mux, { exec, env, cwd });
   mkdirSync(dir, { recursive: true });
   const baseline = await exec("git", ["status", "--short", "--branch"], { cwd }).then((s) => `\`git status --short --branch\`:\n\n\`\`\`\n${s.trim()}\n\`\`\``, () => "");
@@ -233,32 +237,39 @@ export async function runPair({ task, mux, cwd, dir, rounds, implementerModel, a
 
   let step = 0;
   const reports = [];
-  const file = (role, kind) => join(dir, `${String(++step).padStart(2, "0")}-${role}-${kind}`);
-  const prepare = (role, kind, extra = {}) => {
-    const base = file(role, kind);
-    const turn = `${base}.turn.md`;
-    const report = `${base}.report.md`;
-    writeFileSync(turn, turnText({ role, kind, task, report, rounds, baseline, ...extra }));
-    return { turn, report, prompt: `Pair session (${role}, ${kind}): read ${turn} and follow it exactly.` };
-  };
   const timeout = parseDuration(turnTimeout);
-  const finish = async (role, id, { report }) => {
-    progress(`waiting for ${role}: ${report}`);
-    const isAlive = () => (panes.alive ?? panes.read)(id).then(() => {}, (error) => {
-      throw new Error(`${role} pane ${id} is gone (${error.message}); reports so far are in ${dir}`);
-    });
-    const text = await waitForReport(report, { sleep, now, timeout, isAlive });
-    reports.push({ role, path: report });
-    if (!(await panes.idle?.(id))) await settle(() => panes.read(id), { sleep });
-    return text;
-  };
-
   const pi = env.PAIR_PI_BIN || onPath("pi", env.PATH) || "pi";
-  const piArgs = (model) => [pi, "--model", model];
+  return {
+    panes,
+    reports,
+    /** Write the next turn file; `render` gets the role, kind, report path, task, and baseline plus `extra`. */
+    prepare(role, kind, extra = {}) {
+      const base = join(dir, `${String(++step).padStart(2, "0")}-${role}-${kind}`);
+      const turn = `${base}.turn.md`;
+      const report = `${base}.report.md`;
+      writeFileSync(turn, render({ role, kind, task, report, baseline, ...extra }));
+      return { turn, report, prompt: `${label} (${role}, ${kind}): read ${turn} and follow it exactly.` };
+    },
+    spawn: (anchor, direction, name, model, prompt) => panes.split(anchor, direction, name, [pi, "--model", model, prompt]),
+    async finish(role, id, { report }) {
+      progress(`waiting for ${role}: ${report}`);
+      const isAlive = () => (panes.alive ?? panes.read)(id).then(() => {}, (error) => {
+        throw new Error(`${role} pane ${id} is gone (${error.message}); reports so far are in ${dir}`);
+      });
+      const text = await waitForReport(report, { sleep, now, timeout, isAlive });
+      reports.push({ role, path: report });
+      if (!(await panes.idle?.(id))) await settle(() => panes.read(id), { sleep });
+      return text;
+    },
+  };
+}
+
+export async function runPair({ task, mux, cwd, dir, rounds, implementerModel, auditorModel, turnTimeout, exec = run, env = process.env, sleep = sleepMs, now = Date.now, progress = () => {} }) {
+  const { panes, reports, prepare, spawn, finish } = await workers({ task, mux, cwd, dir, turnTimeout, render: (o) => turnText({ rounds, ...o }), exec, env, sleep, now, progress });
   const first = prepare("implementer", "implement");
-  const implementer = await panes.split(await panes.anchor(), "right", "pair: implementer", [...piArgs(implementerModel), first.prompt]);
+  const implementer = await spawn(await panes.anchor(), "right", "pair: implementer", implementerModel, first.prompt);
   const orient = prepare("auditor", "orient");
-  const auditor = await panes.split(implementer, "below", "pair: auditor", [...piArgs(auditorModel), orient.prompt]);
+  const auditor = await spawn(implementer, "below", "pair: auditor", auditorModel, orient.prompt);
   progress(`${mux}: implementer ${implementer} (${implementerModel}), auditor ${auditor} (${auditorModel}); files in ${dir}`);
 
   await finish("auditor", auditor, orient);
@@ -278,7 +289,9 @@ export async function runPair({ task, mux, cwd, dir, rounds, implementerModel, a
 
 // ---------- CLI ----------
 
-function parseArgs(argv) {
+const PAIR_FLAGS = ["task-file", "rounds", "implementer-model", "auditor-model", "mux", "turn-timeout", "cwd"];
+
+export function parseArgs(argv, valueFlags = PAIR_FLAGS) {
   const flags = {};
   const positional = [];
   for (let i = 0; i < argv.length; i++) {
@@ -289,7 +302,7 @@ function parseArgs(argv) {
       flags[arg.slice(2)] = argv[++i];
     } else positional.push(arg);
   }
-  const known = new Set(["json", "help", "h", "task-file", "rounds", "implementer-model", "auditor-model", "mux", "turn-timeout", "cwd"]);
+  const known = new Set(["json", "help", "h", ...valueFlags]);
   for (const name of Object.keys(flags)) if (!known.has(name)) throw new Error(`unknown option --${name}`);
   return { positional, flags };
 }
@@ -309,23 +322,11 @@ export async function main(argv, { env = process.env, exec = run, log = console.
   if (command === "close") return closeWorkers(positional.slice(1), { mux: flags.mux ?? found.mux, reason: found.reason, env, exec, log });
   if (command !== "run") throw new Error(`unknown command ${command}\n\n${USAGE}`);
 
-  const mux = flags.mux ?? found.mux;
-  if (!["herdr", "rex"].includes(mux)) throw new Error(found.reason ?? `--mux must be herdr or rex`);
-  if (mux === "herdr" && !env.HC_TERMINAL_ID) throw new Error("--mux herdr needs HC_TERMINAL_ID (run inside a Herdr app pane)");
-  if (mux === "rex" && !(env.REX_SESSION && env.REX_BLOCK)) throw new Error("--mux rex needs REX_SESSION and REX_BLOCK (run inside a Rex pane)");
-  if (!flags["task-file"]) throw new Error("run needs --task-file");
-  const task = readFileSync(flags["task-file"], "utf8").trim();
-  if (!task) throw new Error("task file is empty");
-  const rounds = Number(flags.rounds ?? DEFAULTS.rounds);
-  if (!Number.isInteger(rounds) || rounds < 1) throw new Error("--rounds must be a positive integer");
-  const turnTimeout = flags["turn-timeout"] ?? DEFAULTS.turnTimeout;
-  parseDuration(turnTimeout);
-
-  const dir = join(tmpdir(), "pi-pair", new Date(now ? now() : Date.now()).toISOString().replace(/[:.]/g, "-"));
+  const { mux, task, rounds, turnTimeout, cwd, dir } = runOptions(flags, { found, env, now, defaults: DEFAULTS, dirName: "pi-pair" });
   const result = await runPair({
     task,
     mux,
-    cwd: resolve(flags.cwd ?? process.cwd()),
+    cwd,
     dir,
     rounds,
     implementerModel: flags["implementer-model"] ?? DEFAULTS.implementerModel,
@@ -339,6 +340,23 @@ export async function main(argv, { env = process.env, exec = run, log = console.
   });
   log(flags.json ? JSON.stringify(result, null, 2) : formatResult(result));
   return 0;
+}
+
+/** Validate the shared `run` flags: multiplexer, task file, rounds, timeout; pick the worker folder and report folder. */
+export function runOptions(flags, { found, env, now, defaults, dirName }) {
+  const mux = flags.mux ?? found.mux;
+  if (!["herdr", "rex"].includes(mux)) throw new Error(found.reason ?? `--mux must be herdr or rex`);
+  if (mux === "herdr" && !env.HC_TERMINAL_ID) throw new Error("--mux herdr needs HC_TERMINAL_ID (run inside a Herdr app pane)");
+  if (mux === "rex" && !(env.REX_SESSION && env.REX_BLOCK)) throw new Error("--mux rex needs REX_SESSION and REX_BLOCK (run inside a Rex pane)");
+  if (!flags["task-file"]) throw new Error("run needs --task-file");
+  const task = readFileSync(flags["task-file"], "utf8").trim();
+  if (!task) throw new Error("task file is empty");
+  const rounds = Number(flags.rounds ?? defaults.rounds);
+  if (!Number.isInteger(rounds) || rounds < 1) throw new Error("--rounds must be a positive integer");
+  const turnTimeout = flags["turn-timeout"] ?? defaults.turnTimeout;
+  parseDuration(turnTimeout);
+  const dir = join(tmpdir(), dirName, new Date(now ? now() : Date.now()).toISOString().replace(/[:.]/g, "-"));
+  return { mux, task, rounds, turnTimeout, cwd: resolve(flags.cwd ?? process.cwd()), dir };
 }
 
 /** Close worker panes from a finished run. Never closes the caller's own pane. */
