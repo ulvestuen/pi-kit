@@ -12,6 +12,7 @@ flowchart LR
     impl -- "report" --> audit["Auditor pane<br/>openai-codex/gpt-6.1-sol"]
     audit -- "findings (×3 rounds)" --> impl
     impl -- "final report" --> you
+    you --> close["pair.mjs close<br/>worker panes"]
 ```
 
 You orchestrate; you do not implement. `{baseDir}/pair.mjs` (Node.js 22+, no
@@ -73,10 +74,27 @@ implementer report, the last audit verdict, and the paths of all reports
 Read the final implementer report and the last audit, then check the work
 yourself with `git status`, `git diff`, and the repository's checks. A worker's
 claim is not proof. Summarize what changed, what verification passed, any
-unresolved audit findings, and the verdict. Leave both panes open for the user.
-Close them only when asked. On timeout or a missing pane, read the panes (`hc read <t>
---lines 100` / `rex capture`) and the report directory, then report what happened.
-Do not restart the loop automatically.
+unresolved audit findings, and the verdict. On timeout or a missing pane, read
+the panes (`hc read <t> --lines 100` / `rex capture`) and the report directory,
+then report what happened. Do not restart the loop automatically.
+
+## Clean up
+
+You own the worker pair you started; close it when the session is complete.
+Once `run` has returned, you have read the reports, and you have checked
+the work, close both worker panes with the ids that `run` printed:
+
+```sh
+node {baseDir}/pair.mjs close <implementer> <auditor> --mux herdr|rex
+```
+
+This closes the Herdr pane and removes the terminal, or closes the Rex block.
+It refuses to close your own pane. The reports under `$TMPDIR/pi-pair/` stay,
+so cite their paths in your summary. Close only the panes this run created,
+never other panes. Keep the pair open only if the user asked to keep it, a
+worker is waiting on a `/login`, or a failed run still needs a person to look at
+the panes. In those cases, say which panes are still open and why. Close
+completed pairs before you start another `/pair` run.
 
 ## Safety
 

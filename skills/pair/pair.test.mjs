@@ -144,6 +144,29 @@ describe("pair turns and CLI", () => {
     await assert.rejects(runPair({ ...opts, exec: failing }), /herdr-app pane\.split: no pane "p0"/);
   });
 
+  it("closes finished worker panes in Herdr and Rex, never the caller's own", async () => {
+    const quiet = { progress: () => {} };
+    const calls = [];
+    const exec = async (cmd, args) => {
+      calls.push([cmd, ...args]);
+      if (args[0] === "ls") return JSON.stringify({ spaces: [{ tabs: [{ terminals: [{ terminal: "t0", pane: "p0" }, { terminal: "t1", pane: "p1" }, { terminal: "t2", pane: "p2" }] }] }] });
+      return cmd === "herdr-app" ? "{}" : "";
+    };
+    const herdr = { HC_TERMINAL_ID: "t0", HERDR_APP_BIN: "herdr-app", HC_BIN: "hc" };
+    const logs = [];
+    assert.equal(await main(["close", "t1", "t2"], { env: herdr, exec, log: (s) => logs.push(s), ...quiet }), 0);
+    assert.deepEqual(calls.filter((c) => c[2] === "pane.close").map((c) => JSON.parse(c[3]).pane), ["p1", "p2"]);
+    assert.deepEqual(calls.filter((c) => c[0] === "hc" && c[1] === "rm").map((c) => c[2]), ["t1", "t2"]);
+    assert.deepEqual(logs, ["closed t1", "closed t2"]);
+    await assert.rejects(main(["close", "t0"], { env: herdr, exec, log: () => {}, ...quiet }), /your own pane/);
+    await assert.rejects(main(["close"], { env: herdr, exec, log: () => {}, ...quiet }), /close needs the worker ids/);
+
+    calls.length = 0;
+    const rex = { REX_SESSION: "sess", REX_BLOCK: "blk0", REX_BIN: "rex" };
+    assert.equal(await main(["close", "blk1", "blk2", "--mux", "rex"], { env: rex, exec, log: () => {}, ...quiet }), 0);
+    assert.deepEqual(calls, [["rex", "block", "close", "-s", "sess", "blk1"], ["rex", "block", "close", "-s", "sess", "blk2"]]);
+  });
+
   it("refuses to run outside a multiplexer and validates input", async () => {
     const quiet = { log: () => {}, progress: () => {} };
     await assert.rejects(main(["run", "--task-file", "/nope"], { env: {}, ...quiet }), /not running inside Herdr/);

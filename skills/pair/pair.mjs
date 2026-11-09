@@ -22,6 +22,7 @@ const REX_APP_BINS = ["/Applications/Rex.app", "/Applications/Rex Beta.app"].map
 const USAGE = `Usage:
   pair.mjs detect [--json]
   pair.mjs run --task-file <path> [options]
+  pair.mjs close <worker>... [--mux herdr|rex]   close finished worker panes (ids from run)
 
 Options:
   --rounds <n>               audit → address cycles (default ${DEFAULTS.rounds})
@@ -87,6 +88,7 @@ export function adapter(mux, { exec = run, env = process.env, cwd }) {
         await rex(["send-key", "-s", session, "-b", id, "enter"]);
       },
       read: (id) => rex(["capture", "-s", session, "-b", id, "--trim"]),
+      close: (id) => rex(["block", "close", "-s", session, id]),
     };
   }
   throw new Error(`unsupported multiplexer ${mux}`);
@@ -144,6 +146,14 @@ function herdrAdapter({ exec, env, cwd }) {
     async alive(id) {
       const t = JSON.parse(await hc(["get", id, "--json"]));
       if (t.state !== "live") throw new Error(`terminal ${id} is ${t.state}${t.exit_code == null ? "" : ` (exit ${t.exit_code})`}`);
+    },
+    // Close the worker's pane (ending its terminal), then drop the finished terminal from herdr-core.
+    async close(id) {
+      const { spaces = [] } = JSON.parse(await exec(app, ["ls"]));
+      const pane = spaces.flatMap((s) => s.tabs ?? []).flatMap((t) => t.terminals ?? []).find((t) => t.terminal === id)?.pane;
+      if (pane) await herdrApp("pane.close", { pane });
+      else await hc(["kill", id]).catch(() => {});
+      await hc(["rm", id]).catch(() => {});
     },
     // Pi reports its status to herdr-core (OSC 7501); `hc wait` returns once it stops working.
     idle: (id) => hc(["wait", id, "--timeout", "120", "--json"]).then((out) => JSON.parse(out).reason !== "timeout", () => false),
@@ -296,6 +306,7 @@ export async function main(argv, { env = process.env, exec = run, log = console.
     log(flags.json ? JSON.stringify(found) : found.mux ?? `none: ${found.reason}`);
     return found.mux ? 0 : 1;
   }
+  if (command === "close") return closeWorkers(positional.slice(1), { mux: flags.mux ?? found.mux, reason: found.reason, env, exec, log });
   if (command !== "run") throw new Error(`unknown command ${command}\n\n${USAGE}`);
 
   const mux = flags.mux ?? found.mux;
@@ -330,9 +341,30 @@ export async function main(argv, { env = process.env, exec = run, log = console.
   return 0;
 }
 
+/** Close worker panes from a finished run. Never closes the caller's own pane. */
+export async function closeWorkers(ids, { mux, reason, env = process.env, exec = run, log = console.log }) {
+  if (!["herdr", "rex"].includes(mux)) throw new Error(reason ?? "--mux must be herdr or rex");
+  if (!ids.length) throw new Error("close needs the worker ids printed by run, e.g. close t1 t2");
+  const self = mux === "herdr" ? env.HC_TERMINAL_ID : env.REX_BLOCK;
+  if (ids.includes(self)) throw new Error(`refusing to close ${self}: that is your own pane`);
+  const panes = adapter(mux, { exec, env, cwd: process.cwd() });
+  const failed = [];
+  for (const id of ids) {
+    try {
+      await panes.close(id);
+      log(`closed ${id}`);
+    } catch (error) {
+      failed.push(`${id}: ${error.message}`);
+    }
+  }
+  if (failed.length) throw new Error(`could not close ${failed.join("; ")}`);
+  return 0;
+}
+
 export function formatResult(r) {
   return [
-    `Pair session complete (${r.mux}, ${r.rounds} rounds). Panes left open: implementer ${r.panes.implementer}, auditor ${r.panes.auditor}.`,
+    `Pair session complete (${r.mux}, ${r.rounds} rounds). Worker panes still open: implementer ${r.panes.implementer}, auditor ${r.panes.auditor}.`,
+    `After reviewing the result, close them: node ${fileURLToPath(import.meta.url)} close ${r.panes.implementer} ${r.panes.auditor} --mux ${r.mux}`,
     `Last audit verdict: ${r.lastAuditVerdict || "(none given)"}`,
     `Reports:`,
     ...r.reports.map((x) => `  ${x.role.padEnd(11)} ${x.path}`),
