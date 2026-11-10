@@ -1,6 +1,6 @@
 ---
 name: pair
-description: Runs a pair-programming loop between two separate, visible Pi workers — an implementer (Claude Opus 5.5 via the Claude Code subscription) and an auditor (GPT-6.1 Sol via the ChatGPT/Codex subscription) — in new Herdr or Rex panes, for three audit-and-address rounds, then reports back. Use when the user invokes /pair or asks for pair programming, an implementer/auditor loop, or worker panes rather than subagents to build or change code. For a read-only review of existing work, use the pair-review skill (/pair-review) instead.
+description: Runs a pair-programming loop between two separate, visible Pi workers — an implementer (Claude Opus 5.5 via the Claude Code subscription) and an auditor (GPT-6.1 Sol via the ChatGPT/Codex subscription) — in new Herdr or Rex panes, for three audit-and-address rounds, then reports back. Use when the user invokes /pair or asks for pair programming, an implementer/auditor loop, or worker panes rather than subagents to build or change code. For a read-only review of existing work, use the pair-review skill (/pair-review) instead; for non-coding work with a doer and a verifier, use pair-work (/pair-work).
 ---
 
 # Pair
@@ -17,7 +17,9 @@ flowchart LR
 
 This skill is for pair programming: building or changing code. To review
 existing work without changing it, use the sibling `pair-review` skill
-(`/pair-review`), which shares this script's pane plumbing.
+(`/pair-review`), which shares this script's pane plumbing. For broader,
+non-coding work (research, writing, analysis) with a doer and a verifier, use
+`pair-work` (`/pair-work`).
 
 You orchestrate; you do not implement. `{baseDir}/pair.mjs` (Node.js 22+, no
 dependencies) opens two interactive `pi` workers in new panes next to yours so

@@ -1,6 +1,6 @@
 ---
 name: pair-review
-description: Runs a read-only pair review between two separate, visible Pi workers — a lead reviewer (Claude Opus 5.5 via the Claude Code subscription) and a peer reviewer (GPT-6.1 Sol via the ChatGPT/Codex subscription) — in new Herdr or Rex panes. They review independently, cross-check each other's findings, and the lead writes one consolidated review. Use when the user invokes /pair-review or asks for a pair review or second-opinion review of a diff, branch, commit, or PR. For writing or changing code with an implementer and an auditor, use the pair skill (/pair) instead.
+description: Runs a read-only pair review between two separate, visible Pi workers — a lead reviewer (Claude Opus 5.5 via the Claude Code subscription) and a peer reviewer (GPT-6.1 Sol via the ChatGPT/Codex subscription) — in new Herdr or Rex panes. They review independently, cross-check each other's findings, and the lead writes one consolidated review. Use when the user invokes /pair-review or asks for a pair review or second-opinion review of a diff, branch, commit, or PR. For writing or changing code with an implementer and an auditor, use the pair skill (/pair) instead; for non-coding work with a doer and a verifier, use pair-work (/pair-work).
 ---
 
 # Pair review

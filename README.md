@@ -7,8 +7,8 @@ skill, process, and piece of tooling simple and visually understandable.
 
 ```text
 Pi agent
-├─ skills/       A3 problem solving · pair · pair review · ship · hansei · search · issue trackers · canvas
-├─ prompts/      /a3 · /hansei · /pair · /pair-review · /ship
+├─ skills/       A3 problem solving · pair · pair review · pair work · ship · hansei · search · issue trackers · canvas
+├─ prompts/      /a3 · /hansei · /pair · /pair-review · /pair-work · /ship
 └─ threema/      extension → send + receive messages
 ```
 
@@ -110,6 +110,7 @@ useful, a zero-dependency Node script the agent runs from the shell:
 - [`skills/cloudwatch-logs/`](./skills/cloudwatch-logs/) – look up AWS CloudWatch Logs and run Logs Insights queries directly with an installed, pre-authenticated AWS CLI; no additional credentials or scripts
 - [`skills/pair/`](./skills/pair/) – `/pair <task>`: an implementer (Claude Opus 5.5 via Claude Code) and an auditor (GPT-6.1 Sol via ChatGPT/Codex) run as separate Pi workers in new Herdr or Rex panes for three audit-and-address rounds, then report back (`pair.mjs detect|run|close`; the `/pair` command is in [`prompts/pair.md`](./prompts/pair.md))
 - [`skills/pair-review/`](./skills/pair-review/) – `/pair-review [target]`: a read-only review of a diff, branch, commit, or PR by a lead (Claude Opus 5.5) and a peer reviewer (GPT-6.1 Sol) in Herdr or Rex panes; they review independently, cross-check each other, and the lead consolidates one review and verdict (`pair-review.mjs detect|run|close`, reuses `pair/pair.mjs`; the command is in [`prompts/pair-review.md`](./prompts/pair-review.md))
+- [`skills/pair-work/`](./skills/pair-work/) – `/pair-work <task>`: a doer (Claude Opus 5.5) and a verifier (GPT-6.1 Sol) in Herdr or Rex panes for broader, non-coding work such as research, writing, analysis, or planning; the verifier writes a verification plan before seeing the work, then independently checks each round until it accepts or three rounds are done (`pair-work.mjs detect|run|close`, reuses `pair/pair.mjs`; the command is in [`prompts/pair-work.md`](./prompts/pair-work.md))
 - [`skills/ship/`](./skills/ship/) – push, wait for every GitHub Actions run on the commit, diagnose failures from the lines before `##[error]`, and verify the deployed effect at the live URL (`ship.mjs ci|verify`, needs an authenticated `gh` CLI)
 - [`skills/tldraw-offline/`](./skills/tldraw-offline/) – inspect, edit, lint, and script open tldraw Desktop canvases through the local agent API (`tq.mjs` handles per-launch discovery and authentication)
 - [`skills/decisions/`](./skills/decisions/) – text/image probabilities, choices, and scores via TypeSafe JEV or OpenAI Decisions, plus experimental JEV bounding boxes (`decisions.mjs jev|openai`, needs the selected provider's `TYPESAFE_API_KEY` or `OPENAI_API_KEY`; uses native request/response schemas)
