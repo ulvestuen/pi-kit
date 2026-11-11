@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 export const DEFAULTS = {
   rounds: 3,
   implementerModel: "claude-code/claude-opus-5-5",
-  auditorModel: "openai-codex/gpt-6.1-sol",
+  auditorModel: "openai/gpt-6.1-sol:xhigh",
   turnTimeout: "60m",
 };
 export const DONE = "<!-- pair:done -->";

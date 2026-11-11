@@ -13,7 +13,7 @@ import { DONE, closeWorkers, detect, parseArgs, run, runOptions, workers } from 
 export const DEFAULTS = {
   rounds: 3,
   doerModel: "claude-code/claude-opus-5-5",
-  verifierModel: "openai-codex/gpt-6.1-sol",
+  verifierModel: "openai/gpt-6.1-sol:xhigh",
   turnTimeout: "60m",
 };
 

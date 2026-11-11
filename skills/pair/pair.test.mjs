@@ -66,7 +66,7 @@ describe("pair run", () => {
     assert.deepEqual(splits.map((s) => [s.pane, s.direction]), [["p0", "right"], ["p1", "down"]], "implementer beside caller, auditor below implementer");
     assert.deepEqual(splits[0].argv.slice(0, 5), ["/bin/sh", "-c", 'cd -- "$1" && shift && exec "$@"', "pair", "/repo"]);
     assert.deepEqual(splits[0].argv.slice(5, 8), ["pi", "--model", "claude-code/claude-opus-5-5"]);
-    assert.deepEqual(splits[1].argv.slice(5, 8), ["pi", "--model", "openai-codex/gpt-6.1-sol"]);
+    assert.deepEqual(splits[1].argv.slice(5, 8), ["pi", "--model", "openai/gpt-6.1-sol:xhigh"]);
     const focus = calls.filter((c) => c[2] === "pane.focus").map((c) => JSON.parse(c[3]).pane);
     assert.deepEqual(focus, ["p0", "p0"], "focus returns to the caller's pane after each split");
     const sends = calls.filter((c) => c[0] === "hc" && c[1] === "send");
@@ -98,7 +98,7 @@ describe("pair run", () => {
     assert.deepEqual(splits[0].slice(1, 7), ["split", "-s", "sess", "-b", "blk0", "--split=right"]);
     assert.ok(splits[1].includes("--split=below") && splits[1].includes("blk1"));
     assert.ok(splits.every((c) => c.includes("--focus=false")));
-    assert.deepEqual(splits[1].slice(splits[1].indexOf("--") + 1, -1), ["pi", "--model", "openai-codex/gpt-6.1-sol"]);
+    assert.deepEqual(splits[1].slice(splits[1].indexOf("--") + 1, -1), ["pi", "--model", "openai/gpt-6.1-sol:xhigh"]);
     assert.equal(calls.filter((c) => c[1] === "send").length, 6);
     assert.equal(result.reports.length, 8);
   });

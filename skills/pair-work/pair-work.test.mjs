@@ -58,7 +58,7 @@ describe("pair-work run", () => {
     const splits = calls.filter((c) => c[2] === "pane.split").map((c) => JSON.parse(c[3]));
     assert.deepEqual(splits.map((s) => [s.pane, s.direction]), [["p0", "right"], ["p1", "down"]]);
     assert.deepEqual(splits[0].argv.slice(5, 8), ["pi", "--model", "claude-code/claude-opus-5-5"]);
-    assert.deepEqual(splits[1].argv.slice(5, 8), ["pi", "--model", "openai-codex/gpt-6.1-sol"]);
+    assert.deepEqual(splits[1].argv.slice(5, 8), ["pi", "--model", "openai/gpt-6.1-sol:xhigh"]);
     assert.deepEqual(result.panes, { doer: "t1", verifier: "t2" });
     assert.deepEqual(kinds(result), [
       "verifier-plan", "doer-do",

@@ -1,6 +1,6 @@
 ---
 name: pair
-description: Runs a pair-programming loop between two separate, visible Pi workers — an implementer (Claude Opus 5.5 via the Claude Code subscription) and an auditor (GPT-6.1 Sol via the ChatGPT/Codex subscription) — in new Herdr or Rex panes, for three audit-and-address rounds, then reports back. Use when the user invokes /pair or asks for pair programming, an implementer/auditor loop, or worker panes rather than subagents to build or change code. For a read-only review of existing work, use the pair-review skill (/pair-review) instead; for non-coding work with a doer and a verifier, use pair-work (/pair-work).
+description: Runs a pair-programming loop between two separate, visible Pi workers — an implementer (Claude Opus 5.5 via the Claude Code subscription) and an auditor (GPT-6.1 Sol at xhigh thinking via the OpenAI provider) — in new Herdr or Rex panes, for three audit-and-address rounds, then reports back. Use when the user invokes /pair or asks for pair programming, an implementer/auditor loop, or worker panes rather than subagents to build or change code. For a read-only review of existing work, use the pair-review skill (/pair-review) instead; for non-coding work with a doer and a verifier, use pair-work (/pair-work).
 ---
 
 # Pair
@@ -9,7 +9,7 @@ description: Runs a pair-programming loop between two separate, visible Pi worke
 flowchart LR
     you["/pair task or plan"] --> detect["pair.mjs detects<br/>Herdr or Rex"]
     detect --> impl["Implementer pane<br/>claude-code/claude-opus-5-5"]
-    impl -- "report" --> audit["Auditor pane<br/>openai-codex/gpt-6.1-sol"]
+    impl -- "report" --> audit["Auditor pane<br/>openai/gpt-6.1-sol:xhigh"]
     audit -- "findings (×3 rounds)" --> impl
     impl -- "final report" --> you
     you --> close["pair.mjs close<br/>worker panes"]
@@ -49,16 +49,16 @@ found on `PATH` or in `~/.local/bin` (`HC_INSTALL_DIR`); set `HERDR_APP_BIN` /
    any plan, constraints, and acceptance criteria. Add only facts the workers
    cannot discover, such as which files you already know matter.
 2. Apply overrides from the `/pair` prompt: rounds, models, or another
-   multiplexer. Otherwise use the defaults. Keep the subscription providers
-   (`claude-code/…`, `openai-codex/…`). Do not substitute `opencode/…` or
-   another API-key provider for the same model.
+   multiplexer. Otherwise use the defaults. Keep the default providers
+   (`claude-code/…`, `openai/…`). Do not substitute `openai-codex/…`,
+   `opencode/…`, or another provider for the same model.
 3. Start the loop and let it block. A turn can take many minutes, so run it with
    a long tool timeout or in the background:
 
    ```sh
    node {baseDir}/pair.mjs run --task-file /tmp/pair-task.md
    node {baseDir}/pair.mjs run --task-file /tmp/pair-task.md --rounds 2 \
-     --implementer-model claude-code/claude-opus-5-5:high --auditor-model openai-codex/gpt-6.1-sol
+     --implementer-model claude-code/claude-opus-5-5:high --auditor-model openai/gpt-6.1-sol:xhigh
    ```
 
 | Flag | Meaning |

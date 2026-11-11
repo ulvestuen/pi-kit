@@ -1,6 +1,6 @@
 ---
 name: pair-work
-description: Runs a do-and-verify loop between two separate, visible Pi workers — a doer (Claude Opus 5.5 via the Claude Code subscription) and a verifier (GPT-6.1 Sol via the ChatGPT/Codex subscription) — in new Herdr or Rex panes, for broader work than coding, such as research, writing, analysis, planning, data work, or runbooks. The verifier plans its checks before seeing the work, then verifies each round until it accepts or three rounds are done. Use when the user invokes /pair-work or asks for a doer/verifier pair on a non-coding task. For building or changing code, use pair (/pair); for reviewing existing code changes, use pair-review (/pair-review).
+description: Runs a do-and-verify loop between two separate, visible Pi workers — a doer (Claude Opus 5.5 via the Claude Code subscription) and a verifier (GPT-6.1 Sol at xhigh thinking via the OpenAI provider) — in new Herdr or Rex panes, for broader work than coding, such as research, writing, analysis, planning, data work, or runbooks. The verifier plans its checks before seeing the work, then verifies each round until it accepts or three rounds are done. Use when the user invokes /pair-work or asks for a doer/verifier pair on a non-coding task. For building or changing code, use pair (/pair); for reviewing existing code changes, use pair-review (/pair-review).
 ---
 
 # Pair work
@@ -9,7 +9,7 @@ description: Runs a do-and-verify loop between two separate, visible Pi workers 
 flowchart LR
     you["/pair-work task"] --> detect["pair-work.mjs detects<br/>Herdr or Rex"]
     detect --> doer["Doer pane<br/>claude-code/claude-opus-5-5"]
-    detect --> plan["Verifier pane<br/>openai-codex/gpt-6.1-sol<br/>writes a verification plan"]
+    detect --> plan["Verifier pane<br/>openai/gpt-6.1-sol:xhigh<br/>writes a verification plan"]
     doer -- "deliverables + report" --> verify["Verifier checks<br/>against plan and task"]
     plan --> verify
     verify -- "findings (until accept, ≤3 rounds)" --> doer
@@ -43,15 +43,15 @@ page explains the overrides (`HERDR_APP_BIN`, `HC_BIN`, `REX_BIN`).
    no acceptance criteria, do not invent them: the verifier derives them in its
    plan, and you report them back.
 2. Apply overrides from the prompt: rounds, models, working directory, or
-   another multiplexer. Keep the subscription providers (`claude-code/…`,
-   `openai-codex/…`).
+   another multiplexer. Keep the default providers (`claude-code/…`,
+   `openai/…`); do not substitute `openai-codex/…` or `opencode/…`.
 3. Start the loop and let it block. Use a long tool timeout or run it in the
    background:
 
    ```sh
    node {baseDir}/pair-work.mjs run --task-file /tmp/pair-work-task.md
    node {baseDir}/pair-work.mjs run --task-file /tmp/pair-work-task.md --rounds 2 \
-     --doer-model claude-code/claude-opus-5-5:high --verifier-model openai-codex/gpt-6.1-sol
+     --doer-model claude-code/claude-opus-5-5:high --verifier-model openai/gpt-6.1-sol:xhigh
    ```
 
 | Flag | Meaning |

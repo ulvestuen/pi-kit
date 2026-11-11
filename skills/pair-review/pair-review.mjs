@@ -11,7 +11,7 @@ import { DONE, closeWorkers, detect, parseArgs, run, runOptions, workers } from 
 export const DEFAULTS = {
   rounds: 1,
   leadModel: "claude-code/claude-opus-5-5",
-  peerModel: "openai-codex/gpt-6.1-sol",
+  peerModel: "openai/gpt-6.1-sol:xhigh",
   turnTimeout: "60m",
 };
 

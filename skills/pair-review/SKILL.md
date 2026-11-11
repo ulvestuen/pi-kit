@@ -1,6 +1,6 @@
 ---
 name: pair-review
-description: Runs a read-only pair review between two separate, visible Pi workers — a lead reviewer (Claude Opus 5.5 via the Claude Code subscription) and a peer reviewer (GPT-6.1 Sol via the ChatGPT/Codex subscription) — in new Herdr or Rex panes. They review independently, cross-check each other's findings, and the lead writes one consolidated review. Use when the user invokes /pair-review or asks for a pair review or second-opinion review of a diff, branch, commit, or PR. For writing or changing code with an implementer and an auditor, use the pair skill (/pair) instead; for non-coding work with a doer and a verifier, use pair-work (/pair-work).
+description: Runs a read-only pair review between two separate, visible Pi workers — a lead reviewer (Claude Opus 5.5 via the Claude Code subscription) and a peer reviewer (GPT-6.1 Sol at xhigh thinking via the OpenAI provider) — in new Herdr or Rex panes. They review independently, cross-check each other's findings, and the lead writes one consolidated review. Use when the user invokes /pair-review or asks for a pair review or second-opinion review of a diff, branch, commit, or PR. For writing or changing code with an implementer and an auditor, use the pair skill (/pair) instead; for non-coding work with a doer and a verifier, use pair-work (/pair-work).
 ---
 
 # Pair review
@@ -9,7 +9,7 @@ description: Runs a read-only pair review between two separate, visible Pi worke
 flowchart LR
     you["/pair-review target"] --> detect["pair-review.mjs detects<br/>Herdr or Rex"]
     detect --> lead["Lead reviewer pane<br/>claude-code/claude-opus-5-5"]
-    detect --> peer["Peer reviewer pane<br/>openai-codex/gpt-6.1-sol"]
+    detect --> peer["Peer reviewer pane<br/>openai/gpt-6.1-sol:xhigh"]
     lead -- "independent review" --> cross["Cross-check<br/>each other's findings"]
     peer -- "independent review" --> cross
     cross --> final["Lead consolidates<br/>one review + verdict"] --> you
@@ -42,14 +42,15 @@ are identified by terminal address (`t7`) and Rex reviewers by block ID. The
    changes. If there are none, review the current branch against its upstream
    or default branch.
 2. Apply overrides from the prompt: rounds, models, or another multiplexer.
-   Keep the subscription providers (`claude-code/…`, `openai-codex/…`).
+   Keep the default providers (`claude-code/…`, `openai/…`); do not
+   substitute `openai-codex/…` or `opencode/…`.
 3. Start the review and let it block. Use a long tool timeout or run it in the
    background:
 
    ```sh
    node {baseDir}/pair-review.mjs run --task-file /tmp/pair-review-task.md
    node {baseDir}/pair-review.mjs run --task-file /tmp/pair-review-task.md --rounds 2 \
-     --lead-model claude-code/claude-opus-5-5:high --peer-model openai-codex/gpt-6.1-sol
+     --lead-model claude-code/claude-opus-5-5:high --peer-model openai/gpt-6.1-sol:xhigh
    ```
 
 | Flag | Meaning |
