@@ -2,6 +2,9 @@
 
 Read [CODING.md](./CODING.md) for the shared coding baseline. This file adds
 repository facts; it is not installed as global policy by the Pi package.
+`context/AGENTS.global.md` is an opt-in global rules file for long-running
+work; users link or merge it themselves (see README), and the package never
+installs it.
 
 ## Layout and constraints
 
