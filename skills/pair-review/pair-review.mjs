@@ -6,7 +6,7 @@
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { DONE, closeWorkers, detect, detectCommand, parseArgs, run, runOptions, workerLines, workers } from "../pair/pair.mjs";
+import { DONE, closeWorkers, detect, detectCommand, newRunId, parseArgs, run, runOptions, tracked, waitCommand, workerLines, workers } from "../pair/pair.mjs";
 
 export const DEFAULTS = {
   rounds: 1,
@@ -15,10 +15,11 @@ export const DEFAULTS = {
   turnTimeout: "60m",
 };
 
-const FLAGS = ["task-file", "rounds", "lead-model", "peer-model", "mux", "turn-timeout", "cwd", "run"];
+const FLAGS = ["task-file", "rounds", "lead-model", "peer-model", "mux", "turn-timeout", "cwd", "run", "timeout"];
 const USAGE = `Usage:
   pair-review.mjs detect [--json]
   pair-review.mjs run --task-file <path> [options]
+  pair-review.mjs wait <run-id|run-dir> [--timeout 15m] [--json]  block until the run ends or the timeout passes
   pair-review.mjs close <worker>... [--mux herdr|rex] [--run <id>]   close finished reviewers (ids from run)
 
 Options:
@@ -55,9 +56,9 @@ export function reviewTurnText({ role, kind, task, report, previous, round, roun
   ].join("\n");
 }
 
-export async function runReview({ task, mux, cwd, dir, rounds, leadModel, peerModel, turnTimeout, exec = run, env = process.env, sleep, now, progress = () => {} }) {
+export async function runReview({ task, mux, cwd, dir, rounds, leadModel, peerModel, turnTimeout, exec = run, env = process.env, sleep, now, progress = () => {}, runId }) {
   const render = (o) => reviewTurnText({ rounds, ...o });
-  const { panes, reports, meta, prepare, spawn, finish } = await workers({ task, mux, cwd, dir, turnTimeout, label: "Pair review", render, exec, env, sleep, now, progress });
+  const { panes, reports, meta, prepare, spawn, finish } = await workers({ task, mux, cwd, dir, turnTimeout, label: "Pair review", render, exec, env, sleep, now, progress, runId });
   const firstLead = prepare("lead", "review");
   const lead = await spawn(await panes.anchor(), "right", "pair-review: lead", leadModel, firstLead.prompt);
   const firstPeer = prepare("peer", "review");
@@ -107,10 +108,12 @@ export async function main(argv, { env = process.env, exec = run, log = console.
   const found = detect(env);
   if (command === "detect") return detectCommand(flags, { env, exec, log });
   if (command === "close") return closeWorkers(positional.slice(1), { mux: flags.mux ?? found.mux, reason: found.reason, runId: flags.run, env, exec, log });
+  if (command === "wait") return waitCommand(positional[1], flags, { log, sleep, now });
   if (command !== "run") throw new Error(`unknown command ${command}\n\n${USAGE}`);
 
   const options = runOptions(flags, { found, env, now, defaults: DEFAULTS, dirName: "pi-pair-review" });
-  const result = await runReview({
+  const runId = newRunId();
+  const result = await tracked({ dir: options.dir, runId, workflow: "pair-review", script: fileURLToPath(import.meta.url), progress }, (note) => runReview({
     ...options,
     leadModel: flags["lead-model"] ?? DEFAULTS.leadModel,
     peerModel: flags["peer-model"] ?? DEFAULTS.peerModel,
@@ -118,8 +121,9 @@ export async function main(argv, { env = process.env, exec = run, log = console.
     env,
     sleep,
     now,
-    progress,
-  });
+    progress: note,
+    runId,
+  }), formatResult);
   log(flags.json ? JSON.stringify(result, null, 2) : formatResult(result));
   return 0;
 }

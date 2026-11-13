@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
-import { DEFAULTS, DONE, detect, main, runPair, turnText } from "./pair.mjs";
+import { DEFAULTS, DONE, detect, findRun, main, readStatus, runPair, tracked, turnText, updateStatus, usageLimit, waitCommand, waitForRun } from "./pair.mjs";
 
 /** Fake herdr-app + hc and rex: each prompt makes the "worker" write the report its turn file names. */
 function fakeMux() {
@@ -179,5 +179,86 @@ describe("pair turns and CLI", () => {
     let out = "";
     assert.equal(await main(["detect"], { env: {}, log: (s) => (out = s) }), 1);
     assert.match(out, /^none/);
+  });
+});
+
+describe("pair wait and provider limits", () => {
+  const quiet = { progress: () => {} };
+
+  it("tracks a run in status.json: running with workers, then done with the summary", async () => {
+    const { exec } = fakeMux();
+    const dir = tmp();
+    const env = { HC_TERMINAL_ID: "t0", HERDR_APP_BIN: "herdr-app", HC_BIN: "hc", PAIR_PI_BIN: "pi" };
+    let seen;
+    await tracked({ dir, runId: "abcd1234", workflow: "pair", script: "pair.mjs", ...quiet }, (note) => {
+      seen = readStatus(dir);
+      return runPair({ task: "T", mux: "herdr", cwd: "/repo", dir, rounds: 1, implementerModel: "a", auditorModel: "b", turnTimeout: "1m", env, exec, progress: note, runId: "abcd1234", ...fast });
+    }, (r) => `summary ${r.lastAuditVerdict}`);
+    assert.equal(seen.state, "running");
+    const done = readStatus(dir);
+    assert.equal(done.state, "done");
+    assert.equal(done.summary, "summary changes requested");
+    assert.deepEqual(done.workers, { implementer: "t1", auditor: "t2" });
+    assert.equal(done.result.runId, "abcd1234");
+    assert.equal(findRun("abcd1234", { roots: [join(dir, "..")] }), dir);
+  });
+
+  it("marks a provider limit as stopped and any other error as failed", async () => {
+    const stopped = tmp();
+    const err = Object.assign(new Error("limit"), { stopReason: "usage-limit" });
+    await assert.rejects(tracked({ dir: stopped, runId: "r1", workflow: "pair", script: "s", ...quiet }, async () => { throw err; }, String), /limit/);
+    assert.equal(readStatus(stopped).state, "stopped");
+    const failed = tmp();
+    await assert.rejects(tracked({ dir: failed, runId: "r2", workflow: "pair", script: "s", ...quiet }, async () => { throw new Error("boom"); }, String), /boom/);
+    assert.equal(readStatus(failed).state, "failed");
+  });
+
+  it("wait returns running after its timeout, the summary once done, and exit 1 when stopped", async () => {
+    const dir = tmp();
+    updateStatus(dir, { state: "running", runId: "r3", dir, pid: process.pid, last: "waiting for auditor" });
+    let t = 0;
+    const clock = { sleep: async () => {}, now: () => (t += 60_000) };
+    let out = "";
+    assert.equal(await waitCommand(dir, { timeout: "5m" }, { log: (s) => (out = s), ...clock }), 0);
+    assert.match(out, /^running: .*last: waiting for auditor.*do not end your turn/);
+
+    let polls = 0;
+    const finishing = { sleep: async () => { if (++polls === 2) updateStatus(dir, { state: "done", summary: "Pair session complete" }); }, now: () => 0 };
+    assert.equal(await waitCommand(dir, {}, { log: (s) => (out = s), ...finishing }), 0);
+    assert.equal(out, "Pair session complete");
+
+    updateStatus(dir, { state: "stopped", reason: "auditor t2 stopped on a provider limit" });
+    assert.equal(await waitCommand(dir, {}, { log: (s) => (out = s), ...fast }), 1);
+    assert.match(out, /^stopped: .*\n.*\nAsk the user/s);
+  });
+
+  it("wait marks a run failed when its process died, and rejects unknown runs", async () => {
+    const dir = tmp();
+    updateStatus(dir, { state: "running", runId: "r4", dir, pid: 999999 });
+    const status = await waitForRun(dir, { ...fast, alive: () => false });
+    assert.equal(status.state, "failed");
+    assert.match(status.reason, /exited without a result/);
+    assert.throws(() => findRun("nope", { roots: [tmp()] }), /no pair run nope/);
+    await assert.rejects(waitCommand(undefined, {}, { log: () => {} }), /wait needs the run id/);
+  });
+
+  it("recognizes provider limit errors on a worker's screen, not ordinary output", () => {
+    assert.match(usageLimit("...\nError: Codex error: The usage limit has been reached\n> "), /usage limit has been reached/);
+    assert.ok(usageLimit("Claude Code billing: this request was charged to Claude usage credits instead of your plan limits"));
+    assert.ok(usageLimit('429 {"type":"error","error":{"type":"GoUsageLimitError"}}'));
+    assert.equal(usageLimit("I added a check for when the usage limit has been reached"), null);
+    assert.equal(usageLimit(""), null);
+  });
+
+  it("stops the run when an idle worker shows a provider limit instead of waiting out the turn timeout", async () => {
+    const exec = async (cmd, args) => {
+      if (args[0] === "ls") return JSON.stringify({ spaces: [{ tabs: [{ terminals: [{ terminal: "t0", pane: "p0" }] }] }] });
+      if (args[1] === "pane.split") return JSON.stringify({ pane: "p9", terminal: "t9" });
+      if (args[0] === "get") return JSON.stringify({ state: "live", status: { state: "idle" } });
+      if (args[0] === "read") return "Error: Codex error: The usage limit has been reached\n";
+      return cmd.endsWith("herdr-app") ? "{}" : "";
+    };
+    const opts = { task: "T", mux: "herdr", cwd: "/repo", dir: tmp(), rounds: 1, implementerModel: "a", auditorModel: "b", turnTimeout: "1h", env: { HC_TERMINAL_ID: "t0" }, exec, ...fast };
+    await assert.rejects(runPair(opts), (error) => error.stopReason === "usage-limit" && /auditor t9 stopped on a provider limit/.test(error.message));
   });
 });

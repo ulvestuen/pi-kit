@@ -6,7 +6,7 @@
 
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +23,7 @@ const REX_APP_BINS = ["/Applications/Rex.app", "/Applications/Rex Beta.app"].map
 const USAGE = `Usage:
   pair.mjs detect [--json]
   pair.mjs run --task-file <path> [options]
+  pair.mjs wait <run-id|run-dir> [--timeout 15m] [--json]  block until the run ends or the timeout passes
   pair.mjs close <worker>... [--mux herdr|rex] [--run <id>]   close finished workers (ids from run)
 
 Options:
@@ -162,6 +163,8 @@ function hcControls({ hc, sleep = sleepMs, now = Date.now, timeout = 3_600_000, 
     noted.add(id);
     progress(`worker ${id} is blocked and needs a person: hc attach ${id} (or open it in Herdr), answer it, then the run continues`);
   };
+  /** True while the worker's agent reports that it is working on a turn. */
+  const working = async (id) => (await get(id)).status?.state === "working";
   /** True once the worker reported a status other than working; false when it never reports status. */
   async function ready(id) {
     const start = now();
@@ -181,6 +184,7 @@ function hcControls({ hc, sleep = sleepMs, now = Date.now, timeout = 3_600_000, 
     }
   }
   return {
+    working,
     // After a finished report: true once the turn ended. Errors (e.g. the worker exited) fall back to settling its screen.
     idle: (id) => ready(id).catch(() => false),
     // Before a send: wait while it works; throws if it is gone or stays blocked past the turn timeout.
@@ -336,6 +340,137 @@ export async function waitForReport(path, { sleep = sleepMs, now = Date.now, tim
   }
 }
 
+/**
+ * Provider errors that end a worker's turn without a report: plan usage limits and requests charged to paid usage
+ * credits. These stop the run so the user decides; the script never switches models or enables credits itself.
+ */
+export const LIMIT_PATTERNS = [
+  /usage limit (?:has been reached|exceeded|reached)/i,
+  /charged to (?:\w+ )?usage credits/i,
+  /UsageLimitError/,
+  /out of (?:plan )?(?:usage|quota)/i,
+];
+
+/**
+ * The provider-limit error line in the last lines of a worker's screen, or null. Only lines that read as an error or
+ * billing notice count, so a worker that merely discusses rate limits in its output is not mistaken for a stop.
+ */
+export function usageLimit(screen, lines = 12) {
+  for (const line of String(screen).split("\n").slice(-lines)) {
+    if (/error|billing|\b4\d\d\b/i.test(line) && LIMIT_PATTERNS.some((p) => p.test(line))) return line.trim().slice(0, 200);
+  }
+  return null;
+}
+
+/** Thrown when a worker stopped on a provider limit; the run ends as `stopped` rather than `failed`. */
+export class StoppedError extends Error {
+  constructor(message) {
+    super(message);
+    this.stopReason = "usage-limit";
+  }
+}
+
+// ---------- run status (for `wait`) ----------
+
+export const STATUS_FILE = "status.json";
+const RUN_DIRS = ["pi-pair", "pi-pair-review", "pi-pair-work"];
+
+export function readStatus(dir) {
+  try {
+    return JSON.parse(readFileSync(join(dir, STATUS_FILE), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+export function updateStatus(dir, patch) {
+  mkdirSync(dir, { recursive: true });
+  const next = { ...readStatus(dir), ...patch, updated: new Date().toISOString() };
+  writeFileSync(join(dir, STATUS_FILE), `${JSON.stringify(next, null, 2)}\n`);
+  return next;
+}
+
+/**
+ * Run a workflow while keeping `<dir>/status.json` current, so `wait` in another process can follow it:
+ * `running` (with the last progress line), then `done` with the result and its summary, `stopped` on a provider
+ * limit, or `failed` on any other error.
+ */
+export async function tracked({ dir, runId, workflow, script, progress = () => {} }, body, format) {
+  updateStatus(dir, { state: "running", workflow, runId, dir, pid: process.pid, started: new Date().toISOString() });
+  progress(`${workflow} run ${runId}: follow it with \`node ${script} wait ${runId}\` (status in ${join(dir, STATUS_FILE)})`);
+  const note = (message) => {
+    progress(message);
+    updateStatus(dir, { last: message });
+  };
+  try {
+    const result = await body(note);
+    updateStatus(dir, { state: "done", result, summary: format(result) });
+    return result;
+  } catch (error) {
+    updateStatus(dir, { state: error.stopReason ? "stopped" : "failed", stopReason: error.stopReason, reason: error.message });
+    throw error;
+  }
+}
+
+/** The run folder for a run id (searched under the temp folder) or a run folder path. */
+export function findRun(target, { roots = RUN_DIRS.map((name) => join(tmpdir(), name)) } = {}) {
+  if (readStatus(target)) return target;
+  for (const root of roots) {
+    let entries = [];
+    try {
+      entries = readdirSync(root);
+    } catch {
+      continue;
+    }
+    for (const entry of entries.sort().reverse()) if (readStatus(join(root, entry))?.runId === target) return join(root, entry);
+  }
+  throw new Error(`no pair run ${target} found (pass the run id printed by run, or its report folder)`);
+}
+
+const pidAlive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
+};
+
+/**
+ * Block until the run is no longer `running` or `timeout` passes, then return its status. A run whose orchestrating
+ * process died without writing a result is marked `failed`.
+ */
+export async function waitForRun(dir, { timeout = 900_000, interval = 5_000, sleep = sleepMs, now = Date.now, alive = pidAlive } = {}) {
+  const start = now();
+  for (;;) {
+    let status = readStatus(dir);
+    if (!status) throw new Error(`no ${STATUS_FILE} in ${dir}`);
+    if (status.state === "running" && status.pid && !alive(status.pid)) {
+      status = updateStatus(dir, { state: "failed", reason: `the run process (pid ${status.pid}) exited without a result; read the workers and reports in ${dir}` });
+    }
+    if (status.state !== "running" || now() - start >= timeout) return status;
+    await sleep(interval);
+  }
+}
+
+export function formatWait(status) {
+  const workers = Object.entries(status.workers ?? {}).map(([role, id]) => `${role} ${id}`).join(", ");
+  const where = `Reports: ${status.dir}${workers ? `. Workers: ${workers}` : ""}`;
+  if (status.state === "done") return status.summary ?? `done: ${where}`;
+  if (status.state === "running") return `running: ${status.workflow ?? "pair"} run ${status.runId} is still working${status.last ? ` (last: ${status.last})` : ""}. Call wait again; do not end your turn.`;
+  if (status.state === "stopped") return `stopped: ${status.reason}\n${where}\nAsk the user how to continue. Do not switch models or enable paid credits.`;
+  return `failed: ${status.reason}\n${where}`;
+}
+
+/** `wait <run-id|dir> [--timeout 15m] [--json]`: exit 0 while running or done, 1 when stopped or failed. */
+export async function waitCommand(target, flags, { log = console.log, sleep, now, roots } = {}) {
+  if (!target) throw new Error("wait needs the run id printed by run (or the run's report folder)");
+  const status = await waitForRun(findRun(target, roots ? { roots } : undefined), { timeout: parseDuration(flags.timeout ?? "15m"), sleep, now });
+  const { result, ...brief } = status;
+  log(flags.json ? JSON.stringify(status.state === "done" ? status : brief, null, 2) : formatWait(status));
+  return status.state === "running" || status.state === "done" ? 0 : 1;
+}
+
 /** Wait until a pane's output stops changing, so the next prompt is not sent mid-response. */
 export async function settle(read, { sleep = sleepMs, interval = 1500, maxPolls = 20 } = {}) {
   let previous = null;
@@ -384,12 +519,23 @@ export async function workers({ task, mux, cwd, dir, turnTimeout, label = "Pair 
       return { turn, report, prompt: `${label} (${role}, ${kind}): read ${turn} and follow it exactly.` };
     },
     // The first task is Pi's launch argument, so it cannot be dropped by a send to a booting agent.
-    spawn: (anchor, direction, name, model, prompt) => panes.split(anchor, direction, name, [pi, "--model", model, prompt]),
+    async spawn(anchor, direction, name, model, prompt) {
+      const id = await panes.split(anchor, direction, name, [pi, "--model", model, prompt]);
+      const status = readStatus(dir);
+      if (status) updateStatus(dir, { mux, layout: panes.layout, workers: { ...status.workers, [parseLabel(name).role]: id } });
+      return id;
+    },
     async finish(role, id, { report }) {
       progress(`waiting for ${role}: ${report}`);
-      const isAlive = () => (panes.alive ?? panes.read)(id).then(() => {}, (error) => {
-        throw new Error(`${role} ${panes.layout === "terminals" ? "terminal" : "pane"} ${id} is gone (${error.message}); reports so far are in ${dir}`);
-      });
+      const isAlive = async () => {
+        await (panes.alive ?? panes.read)(id).then(() => {}, (error) => {
+          throw new Error(`${role} ${panes.layout === "terminals" ? "terminal" : "pane"} ${id} is gone (${error.message}); reports so far are in ${dir}`);
+        });
+        // A worker that stopped on a provider limit never writes its report; do not wait out the turn timeout.
+        if (await panes.working?.(id).catch(() => false)) return;
+        const hit = usageLimit(await panes.read(id).catch(() => ""));
+        if (hit) throw new StoppedError(`${role} ${id} stopped on a provider limit: "${hit}". Reports so far are in ${dir}`);
+      };
       const text = await waitForReport(report, { sleep, now, timeout, isAlive });
       reports.push({ role, path: report });
       if (!(await panes.idle?.(id))) await settle(() => panes.read(id), { sleep });
@@ -398,8 +544,8 @@ export async function workers({ task, mux, cwd, dir, turnTimeout, label = "Pair 
   };
 }
 
-export async function runPair({ task, mux, cwd, dir, rounds, implementerModel, auditorModel, turnTimeout, exec = run, env = process.env, sleep = sleepMs, now = Date.now, progress = () => {} }) {
-  const { panes, reports, meta, prepare, spawn, finish } = await workers({ task, mux, cwd, dir, turnTimeout, render: (o) => turnText({ rounds, ...o }), exec, env, sleep, now, progress });
+export async function runPair({ task, mux, cwd, dir, rounds, implementerModel, auditorModel, turnTimeout, exec = run, env = process.env, sleep = sleepMs, now = Date.now, progress = () => {}, runId }) {
+  const { panes, reports, meta, prepare, spawn, finish } = await workers({ task, mux, cwd, dir, turnTimeout, render: (o) => turnText({ rounds, ...o }), exec, env, sleep, now, progress, runId });
   const first = prepare("implementer", "implement");
   const implementer = await spawn(await panes.anchor(), "right", "pair: implementer", implementerModel, first.prompt);
   const orient = prepare("auditor", "orient");
@@ -423,7 +569,7 @@ export async function runPair({ task, mux, cwd, dir, rounds, implementerModel, a
 
 // ---------- CLI ----------
 
-const PAIR_FLAGS = ["task-file", "rounds", "implementer-model", "auditor-model", "mux", "turn-timeout", "cwd", "run"];
+const PAIR_FLAGS = ["task-file", "rounds", "implementer-model", "auditor-model", "mux", "turn-timeout", "cwd", "run", "timeout"];
 
 export function parseArgs(argv, valueFlags = PAIR_FLAGS) {
   const flags = {};
@@ -451,10 +597,13 @@ export async function main(argv, { env = process.env, exec = run, log = console.
   const found = detect(env);
   if (command === "detect") return detectCommand(flags, { env, exec, log });
   if (command === "close") return closeWorkers(positional.slice(1), { mux: flags.mux ?? found.mux, reason: found.reason, runId: flags.run, env, exec, log });
+  if (command === "wait") return waitCommand(positional[1], flags, { log, sleep, now });
   if (command !== "run") throw new Error(`unknown command ${command}\n\n${USAGE}`);
 
   const { mux, task, rounds, turnTimeout, cwd, dir } = runOptions(flags, { found, env, now, defaults: DEFAULTS, dirName: "pi-pair" });
-  const result = await runPair({
+  const runId = newRunId();
+  const script = fileURLToPath(import.meta.url);
+  const result = await tracked({ dir, runId, workflow: "pair", script, progress }, (note) => runPair({
     task,
     mux,
     cwd,
@@ -467,8 +616,9 @@ export async function main(argv, { env = process.env, exec = run, log = console.
     env,
     sleep,
     now,
-    progress,
-  });
+    progress: note,
+    runId,
+  }), formatResult);
   log(flags.json ? JSON.stringify(result, null, 2) : formatResult(result));
   return 0;
 }
@@ -507,6 +657,7 @@ export function runOptions(flags, { found, env, now, defaults, dirName }) {
   if (mux === "herdr" && !env.HC_TERMINAL_ID) throw new Error("--mux herdr needs HC_TERMINAL_ID (run inside a Herdr app pane)");
   if (mux === "rex" && !(env.REX_SESSION && env.REX_BLOCK)) throw new Error("--mux rex needs REX_SESSION and REX_BLOCK (run inside a Rex pane)");
   if (flags.run) throw new Error("--run belongs to close; run creates its own run id");
+  if (flags.timeout) throw new Error("--timeout belongs to wait; use --turn-timeout for run");
   if (!flags["task-file"]) throw new Error("run needs --task-file");
   const task = readFileSync(flags["task-file"], "utf8").trim();
   if (!task) throw new Error("task file is empty");

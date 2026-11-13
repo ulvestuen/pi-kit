@@ -8,7 +8,7 @@ import { mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { DONE, closeWorkers, detect, detectCommand, parseArgs, run, runOptions, workerLines, workers } from "../pair/pair.mjs";
+import { DONE, closeWorkers, detect, detectCommand, newRunId, parseArgs, run, runOptions, tracked, waitCommand, workerLines, workers } from "../pair/pair.mjs";
 
 export const DEFAULTS = {
   rounds: 3,
@@ -17,10 +17,11 @@ export const DEFAULTS = {
   turnTimeout: "60m",
 };
 
-const FLAGS = ["task-file", "rounds", "doer-model", "verifier-model", "mux", "turn-timeout", "cwd", "run"];
+const FLAGS = ["task-file", "rounds", "doer-model", "verifier-model", "mux", "turn-timeout", "cwd", "run", "timeout"];
 const USAGE = `Usage:
   pair-work.mjs detect [--json]
   pair-work.mjs run --task-file <path> [options]
+  pair-work.mjs wait <run-id|run-dir> [--timeout 15m] [--json]  block until the run ends or the timeout passes
   pair-work.mjs close <worker>... [--mux herdr|rex] [--run <id>]   close finished workers (ids from run)
 
 Options:
@@ -70,11 +71,11 @@ export function workTurnText({ role, kind, task, report, previous, plan, round, 
 
 const accepted = (verdict) => /^accept/i.test(verdict);
 
-export async function runWork({ task, mux, cwd, dir, rounds, doerModel, verifierModel, turnTimeout, exec = run, env = process.env, sleep, now, progress = () => {} }) {
+export async function runWork({ task, mux, cwd, dir, rounds, doerModel, verifierModel, turnTimeout, exec = run, env = process.env, sleep, now, progress = () => {}, runId }) {
   const workDir = join(dir, "work");
   mkdirSync(workDir, { recursive: true });
   const render = (o) => workTurnText({ rounds, workDir, ...o });
-  const { panes, reports, meta, prepare, spawn, finish } = await workers({ task, mux, cwd, dir, turnTimeout, label: "Pair work", render, exec, env, sleep, now, progress });
+  const { panes, reports, meta, prepare, spawn, finish } = await workers({ task, mux, cwd, dir, turnTimeout, label: "Pair work", render, exec, env, sleep, now, progress, runId });
   const first = prepare("doer", "do");
   const doer = await spawn(await panes.anchor(), "right", "pair-work: doer", doerModel, first.prompt);
   const planTurn = prepare("verifier", "plan");
@@ -141,10 +142,12 @@ export async function main(argv, { env = process.env, exec = run, log = console.
   const found = detect(env);
   if (command === "detect") return detectCommand(flags, { env, exec, log });
   if (command === "close") return closeWorkers(positional.slice(1), { mux: flags.mux ?? found.mux, reason: found.reason, runId: flags.run, env, exec, log });
+  if (command === "wait") return waitCommand(positional[1], flags, { log, sleep, now });
   if (command !== "run") throw new Error(`unknown command ${command}\n\n${USAGE}`);
 
   const options = runOptions(flags, { found, env, now, defaults: DEFAULTS, dirName: "pi-pair-work" });
-  const result = await runWork({
+  const runId = newRunId();
+  const result = await tracked({ dir: options.dir, runId, workflow: "pair-work", script: fileURLToPath(import.meta.url), progress }, (note) => runWork({
     ...options,
     doerModel: flags["doer-model"] ?? DEFAULTS.doerModel,
     verifierModel: flags["verifier-model"] ?? DEFAULTS.verifierModel,
@@ -152,8 +155,9 @@ export async function main(argv, { env = process.env, exec = run, log = console.
     env,
     sleep,
     now,
-    progress,
-  });
+    progress: note,
+    runId,
+  }), formatResult);
   log(flags.json ? JSON.stringify(result, null, 2) : formatResult(result));
   return 0;
 }
