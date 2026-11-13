@@ -109,7 +109,7 @@ notice it.
 - [x] C3: detect usage-limit and paid-credit lines on an idle worker's screen and stop the run as `stopped`
 - [x] C2: "Waiting and stops" section and background `run` + `wait` in all three SKILL.md files
 - [x] C4: `context/AGENTS.global.md`, README and AGENTS.md notes, symlink `~/.pi/agent/AGENTS.md`
-- [ ] Ship and confirm CI on the pushed commit
+- [x] Ship and confirm CI on the pushed commit: 84440dd, 1eb7fb5, ce4eb0c; [CI green on ce4eb0c](https://github.com/ulvestuen/pi-kit/actions/runs/43500037268); `~/.pi/agent/AGENTS.md` linked to the installed package copy
 - [ ] After about 3 weeks: `node skills/hansei/hansei.mjs --split 2026-11-13` and record results
 
 ## Follow-up
