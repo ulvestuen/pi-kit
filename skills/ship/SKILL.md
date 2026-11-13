@@ -79,7 +79,7 @@ and prints the failing jobs, steps, and the log lines leading to `##[error]`.
    approval. Never rerun a failed deploy just to see if it passes.
 4. **Verify the effect:** check the specific change, not just that the site is
    up. Use `verify` with text that only the new version contains. Check logs
-   after the deploy time (`cloudwatch-logs`, `grafana-logs`), and the UI in a
+   after the deploy time (`cloudwatch-logs`), and the UI in a
    browser when the change is visual. If it fails but CI was green, check the
    cache headers in the output and the deployed version before concluding.
 5. **Record:** with an active A3, put the run URL, SHA, verify output, and log

@@ -9,7 +9,6 @@ export const REQUIREMENTS = [
   ["decisions (openai)", ["OPENAI_API_KEY"]],
   ["exa-search", ["EXA_API_KEY"]],
   ["hansei", []],
-  ["jira", ["JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_AUTH_TOKEN"]],
   ["kagi-search", ["KAGI_API_KEY"]],
   ["pair", []],
   ["pair-review", []],

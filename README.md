@@ -102,10 +102,7 @@ useful, a zero-dependency Node script the agent runs from the shell:
 
 - [`skills/a3/`](./skills/a3/) – work problems as A3 reports (PDCA on one page): Markdown source in the target repo, `a3.mjs new|lint|status|render` for discipline checks, resumable next steps, and a printable two-column HTML sheet
 - [`skills/exa-search/`](./skills/exa-search/) – web search via the Exa API (`exa-search.mjs`, needs `EXA_API_KEY`)
-- [`skills/grafana-logs/`](./skills/grafana-logs/) – search Grafana Cloud Loki logs through the hosted MCP server; bundled Node.js proxy with OAuth browser login, PKCE, and automatic token refresh; no `gcx` required
-- [`skills/grafana-metrics/`](./skills/grafana-metrics/) – discover and query Grafana Cloud Prometheus metrics through its bundled read-only MCP proxy, sharing the OAuth login with the logs skill
 - [`skills/hansei/`](./skills/hansei/) – reflect on your own agent sessions: counts nudges, rubber-stamp approvals, corrections, repeats, tool errors, and cost per project from local Pi session logs, and compares before vs after a workflow change (`hansei.mjs`, read-only, redacted output)
-- [`skills/jira/`](./skills/jira/) – Jira Cloud issue management with scoped or unscoped API tokens via a zero-dependency CLI (`jira.mjs`, needs `JIRA_BASE_URL`, `JIRA_EMAIL`, and `JIRA_AUTH_TOKEN`)
 - [`skills/kagi-search/`](./skills/kagi-search/) – web search via the Kagi API (`kagi-search.mjs`, needs `KAGI_API_KEY`)
 - [`skills/cloudwatch-logs/`](./skills/cloudwatch-logs/) – look up AWS CloudWatch Logs and run Logs Insights queries directly with an installed, pre-authenticated AWS CLI; no additional credentials or scripts
 - [`skills/pair/`](./skills/pair/) – `/pair <task>`: an implementer (Claude Opus 5.5 via Claude Code) and an auditor (GPT-6.1 Sol at xhigh thinking via the OpenAI provider) run as separate Pi workers in new Herdr or Rex panes for three audit-and-address rounds, then report back (`pair.mjs detect|run|close`; the `/pair` command is in [`prompts/pair.md`](./prompts/pair.md))
@@ -114,23 +111,6 @@ useful, a zero-dependency Node script the agent runs from the shell:
 - [`skills/ship/`](./skills/ship/) – push, wait for every GitHub Actions run on the commit, diagnose failures from the lines before `##[error]`, and verify the deployed effect at the live URL (`ship.mjs ci|verify`, needs an authenticated `gh` CLI)
 - [`skills/tldraw-offline/`](./skills/tldraw-offline/) – inspect, edit, lint, and script open tldraw Desktop canvases through the local agent API (`tq.mjs` handles per-launch discovery and authentication)
 - [`skills/decisions/`](./skills/decisions/) – text/image probabilities, choices, and scores via TypeSafe JEV or OpenAI Decisions, plus experimental JEV bounding boxes (`decisions.mjs jev|openai`, needs the selected provider's `TYPESAFE_API_KEY` or `OPENAI_API_KEY`; uses native request/response schemas)
-
-Each Grafana skill includes its own `grafana.mjs` and test file directly in
-[`grafana-logs/`](./skills/grafana-logs/) or
-[`grafana-metrics/`](./skills/grafana-metrics/) (Node.js 22+, no dependencies).
-Either directory can be copied and used independently. The duplicated scripts
-use the same credential cache, so one login serves both. From the repository root:
-
-```sh
-node skills/grafana-logs/grafana.mjs login
-node skills/grafana-logs/grafana.mjs tools query_loki_logs
-node skills/grafana-metrics/grafana.mjs tools query_prometheus
-```
-
-Set `GRAFANA_URL` to your HTTPS stack origin if desired. For remote-shell login,
-follow the [manual OAuth flow](./skills/grafana-logs/SKILL.md#configuration-and-login).
-Credentials stay outside the repository; `node skills/grafana-logs/grafana.mjs status`
-checks their local status. The environment doctor does not check OAuth logins.
 
 New skills start from [`skills/TEMPLATE.md`](./skills/TEMPLATE.md): diagram
 first, one page of prose, one script and focused test when code is needed, and
