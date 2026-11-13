@@ -61,8 +61,19 @@ block ID. The `pair` skill page explains the overrides (`HERDR_APP_BIN`,
 2. Apply overrides from the prompt: rounds, models, or another multiplexer.
    Keep the default providers (`claude-code/…`, `openai/…`); do not
    substitute `openai-codex/…` or `opencode/…`.
-3. Start the review and let it block. Use a long tool timeout or run it in the
-   background:
+3. Start the review in the background, then follow it with `wait` until it
+   ends. `run` prints its run id (`pair-review.mjs run …: follow it with … wait <id>`),
+   and its report folder holds `status.json`:
+
+   ```sh
+   node {baseDir}/pair-review.mjs run --task-file /tmp/pair-review-task.md > /tmp/pair-review.out 2>&1 &
+   node {baseDir}/pair-review.mjs wait <run-id>          # blocks up to 15m; repeat while it prints "running"
+   ```
+
+   Run each `wait` with a tool timeout longer than `--timeout` (default 15m).
+   `wait` prints `running` (call it again), the full result when `done`,
+   `stopped` on a provider limit, or `failed`; see *Waiting and stops*.
+   For example, with overrides:
 
    ```sh
    node {baseDir}/pair-review.mjs run --task-file /tmp/pair-review-task.md
@@ -84,6 +95,32 @@ with evidence and adds anything both missed. The lead then merges all reports
 into one review ordered by severity. Each finding is marked agreed or disputed,
 and the review ends with a verdict. Reports go under
 `$TMPDIR/pi-pair-review/<timestamp>/`.
+
+## Waiting and stops
+
+A run takes many minutes per turn. While it is running, **do not end your
+turn** to post progress: keep calling `wait` until it prints `done`,
+`stopped`, or `failed`. Ending the turn while workers run leaves the user to
+type "continue". Between `wait` calls you may read reports or worker screens,
+but do not send input to the workers.
+
+**Tasks with several items** (a roadmap, an A3 plan, a list of issues): after one
+item is finished, checked, and shipped where the user asked for shipping, close
+its workers and start the next item without asking. Keep progress in the A3 or
+plan file so a later session can resume. Stop and hand back only when every
+item is done, on a blocker you cannot resolve, or on a decision only the user
+can make.
+
+**Provider limits stop the run.** When `wait` prints `stopped` (a worker hit a
+plan usage limit, or a request was charged to paid usage credits), stop and
+ask the user how to continue. Do not switch the worker to another model or
+provider, enable paid credits, or restart the run on your own.
+
+**Threema, when available.** If a `threema_send` tool is available, send a
+short message after each shipped item ("<item> shipped, CI green; starting
+<next>") and keep working without waiting for a reply. Also send one when you
+stop for a limit, blocker, or decision. Without that tool, send nothing; the
+A3 or plan file is the record.
 
 ## Report back
 

@@ -45,6 +45,23 @@ added, preserve your other instructions, and reload or start a fresh session.
 See Pi's [configuration](https://pi.dev/docs/latest/configuration) and
 [terminal usage](https://pi.dev/docs/latest/usage) documentation.
 
+### Opt into the long-running work rules
+
+[`context/AGENTS.global.md`](./context/AGENTS.global.md) holds short global
+rules for long-running work: keep going through multi-item work without
+waiting for "continue", stop and ask on usage limits or paid credits, and send
+Threema updates only when the `threema_send` tool is available. Like
+`CODING.md`, it is opt-in and never installed by `pi install`. To use it with
+no other global instructions, link it as the active context file:
+
+```sh
+ln -s "$PWD/context/AGENTS.global.md" ~/.pi/agent/AGENTS.md
+```
+
+If you already have a global `AGENTS.md`, merge the text instead. Pi reads
+through the symlink at startup, so edits in this repository take effect in new
+sessions or after `/reload`.
+
 ### Check whether it helps
 
 Compare a reproducible bug fix, a small feature following an existing pattern,
@@ -105,9 +122,9 @@ useful, a zero-dependency Node script the agent runs from the shell:
 - [`skills/hansei/`](./skills/hansei/) – reflect on your own agent sessions: counts nudges, rubber-stamp approvals, corrections, repeats, tool errors, and cost per project from local Pi session logs, and compares before vs after a workflow change (`hansei.mjs`, read-only, redacted output)
 - [`skills/kagi-search/`](./skills/kagi-search/) – web search via the Kagi API (`kagi-search.mjs`, needs `KAGI_API_KEY`)
 - [`skills/cloudwatch-logs/`](./skills/cloudwatch-logs/) – look up AWS CloudWatch Logs and run Logs Insights queries directly with an installed, pre-authenticated AWS CLI; no additional credentials or scripts
-- [`skills/pair/`](./skills/pair/) – `/pair <task>`: an implementer (Claude Opus 5.5 via Claude Code) and an auditor (GPT-6.1 Sol at xhigh thinking via the OpenAI provider) run as separate Pi workers in new Herdr or Rex panes (or attachable Herdr core terminals over SSH, without `herdr-app`) for three audit-and-address rounds, then report back (`pair.mjs detect|run|close`; the `/pair` command is in [`prompts/pair.md`](./prompts/pair.md))
-- [`skills/pair-review/`](./skills/pair-review/) – `/pair-review [target]`: a read-only review of a diff, branch, commit, or PR by a lead (Claude Opus 5.5) and a peer reviewer (GPT-6.1 Sol) in Herdr or Rex panes or Herdr core terminals; they review independently, cross-check each other, and the lead consolidates one review and verdict (`pair-review.mjs detect|run|close`, reuses `pair/pair.mjs`; the command is in [`prompts/pair-review.md`](./prompts/pair-review.md))
-- [`skills/pair-work/`](./skills/pair-work/) – `/pair-work <task>`: a doer (Claude Opus 5.5) and a verifier (GPT-6.1 Sol) in Herdr or Rex panes or Herdr core terminals for broader, non-coding work such as research, writing, analysis, or planning; the verifier writes a verification plan before seeing the work, then independently checks each round until it accepts or three rounds are done (`pair-work.mjs detect|run|close`, reuses `pair/pair.mjs`; the command is in [`prompts/pair-work.md`](./prompts/pair-work.md))
+- [`skills/pair/`](./skills/pair/) – `/pair <task>`: an implementer (Claude Opus 5.5 via Claude Code) and an auditor (GPT-6.1 Sol at xhigh thinking via the OpenAI provider) run as separate Pi workers in new Herdr or Rex panes (or attachable Herdr core terminals over SSH, without `herdr-app`) for three audit-and-address rounds, then report back (`pair.mjs detect|run|wait|close`; the `/pair` command is in [`prompts/pair.md`](./prompts/pair.md))
+- [`skills/pair-review/`](./skills/pair-review/) – `/pair-review [target]`: a read-only review of a diff, branch, commit, or PR by a lead (Claude Opus 5.5) and a peer reviewer (GPT-6.1 Sol) in Herdr or Rex panes or Herdr core terminals; they review independently, cross-check each other, and the lead consolidates one review and verdict (`pair-review.mjs detect|run|wait|close`, reuses `pair/pair.mjs`; the command is in [`prompts/pair-review.md`](./prompts/pair-review.md))
+- [`skills/pair-work/`](./skills/pair-work/) – `/pair-work <task>`: a doer (Claude Opus 5.5) and a verifier (GPT-6.1 Sol) in Herdr or Rex panes or Herdr core terminals for broader, non-coding work such as research, writing, analysis, or planning; the verifier writes a verification plan before seeing the work, then independently checks each round until it accepts or three rounds are done (`pair-work.mjs detect|run|wait|close`, reuses `pair/pair.mjs`; the command is in [`prompts/pair-work.md`](./prompts/pair-work.md))
 - [`skills/ship/`](./skills/ship/) – push, wait for every GitHub Actions run on the commit, diagnose failures from the lines before `##[error]`, and verify the deployed effect at the live URL (`ship.mjs ci|verify`, needs an authenticated `gh` CLI)
 - [`skills/tldraw-offline/`](./skills/tldraw-offline/) – inspect, edit, lint, and script open tldraw Desktop canvases through the local agent API (`tq.mjs` handles per-launch discovery and authentication)
 - [`skills/decisions/`](./skills/decisions/) – text/image probabilities, choices, and scores via TypeSafe JEV or OpenAI Decisions, plus experimental JEV bounding boxes (`decisions.mjs jev|openai`, needs the selected provider's `TYPESAFE_API_KEY` or `OPENAI_API_KEY`; uses native request/response schemas)
