@@ -1,6 +1,6 @@
 ---
 name: pair-work
-description: Runs a do-and-verify loop between two separate, visible Pi workers — a doer (Claude Opus 5.5 via the Claude Code subscription) and a verifier (GPT-6.1 Sol at xhigh thinking via the OpenAI provider) — in new Herdr or Rex panes, for broader work than coding, such as research, writing, analysis, planning, data work, or runbooks. The verifier plans its checks before seeing the work, then verifies each round until it accepts or three rounds are done. Use when the user invokes /pair-work or asks for a doer/verifier pair on a non-coding task. For building or changing code, use pair (/pair); for reviewing existing code changes, use pair-review (/pair-review).
+description: Runs a do-and-verify loop between two separate, visible Pi workers — a doer (Claude Opus 5.5 via the Claude Code subscription) and a verifier (GPT-6.1 Sol at xhigh thinking via the OpenAI provider) — in new Herdr or Rex panes, or attachable Herdr core terminals over SSH, for broader work than coding, such as research, writing, analysis, planning, data work, or runbooks. The verifier plans its checks before seeing the work, then verifies each round until it accepts or three rounds are done. Use when the user invokes /pair-work or asks for a doer/verifier pair on a non-coding task. For building or changing code, use pair (/pair); for reviewing existing code changes, use pair-review (/pair-review).
 ---
 
 # Pair work
@@ -8,13 +8,13 @@ description: Runs a do-and-verify loop between two separate, visible Pi workers 
 ```mermaid
 flowchart LR
     you["/pair-work task"] --> detect["pair-work.mjs detects<br/>Herdr or Rex"]
-    detect --> doer["Doer pane<br/>claude-code/claude-opus-5-5"]
-    detect --> plan["Verifier pane<br/>openai/gpt-6.1-sol:xhigh<br/>writes a verification plan"]
+    detect --> doer["Doer<br/>claude-code/claude-opus-5-5"]
+    detect --> plan["Verifier<br/>openai/gpt-6.1-sol:xhigh<br/>writes a verification plan"]
     doer -- "deliverables + report" --> verify["Verifier checks<br/>against plan and task"]
     plan --> verify
     verify -- "findings (until accept, ≤3 rounds)" --> doer
     verify -- "Verdict: accept" --> you
-    you --> close["pair-work.mjs close<br/>worker panes"]
+    you --> close["pair-work.mjs close<br/>this run's workers"]
 ```
 
 You orchestrate; you do not do the work. This is the general-purpose sibling of
@@ -22,17 +22,36 @@ You orchestrate; you do not do the work. This is the general-purpose sibling of
 Use `/pair-work` when the deliverable is something else: a research brief, a
 memo or document, an analysis, a plan, a data set, a configuration audit, or a
 runbook. `{baseDir}/pair-work.mjs` (Node.js 22+, no dependencies) reuses the
-pane plumbing in `../pair/pair.mjs`, so keep both skill folders installed
-together. It opens two interactive `pi` workers in new panes next to yours and
-relays turns through Markdown files. These are separate workers, not subagents.
+worker transport in `../pair/pair.mjs`, so keep both skill folders installed
+together. It starts two interactive `pi` workers, in new panes next to yours or
+as Herdr core terminals (see Environment), and relays turns through Markdown
+files. These are separate workers, not subagents or one-shot `pi -p` runs. The
+working directory need not be a Git repository.
 
 ## Environment
 
-The same as `pair`. `node {baseDir}/pair-work.mjs detect` prints `herdr`,
-`rex`, or `none`. If it prints `none`, tell the user that `/pair-work` needs
-Herdr or Rex and stop, unless the prompt explicitly asks for another approach.
-If both are detected, ask which one to use and pass `--mux`. The `pair` skill
-page explains the overrides (`HERDR_APP_BIN`, `HC_BIN`, `REX_BIN`).
+The same as `pair`; read its Environment section. `node {baseDir}/pair-work.mjs
+detect` prints `herdr` (app panes), `herdr (core-only: …)`, `rex`, or
+`none: <reason>`.
+
+- `HC_TERMINAL_ID` names a Herdr Core terminal; it does not mean the desktop
+  app CLI (`herdr-app`) is on this machine. Herdr over SSH is supported: when
+  `herdr-app` is missing or cannot see your terminal but `hc` can, the
+  workers run as `hc run --bg` terminals (core-only). Read `hc --skill` when
+  choosing or debugging the transport.
+- Missing `herdr-app` alone is not a reason to stop; never tell the user to
+  install the desktop CLI on a remote machine.
+- Core-only workers are **not** placed in desktop panes. Do not claim they
+  appeared. Give the user the terminal ids that `run` prints, with
+  `hc attach <t>` (Ctrl+\ detaches) or Herdr's terminal list to open them.
+- If it prints `none`, tell the user that `/pair-work` needs Herdr (a working
+  `hc` that sees `$HC_TERMINAL_ID`) or Rex, quote the reason, and stop, unless
+  the prompt explicitly asks for another approach. If both are detected, ask
+  which one to use and pass `--mux`.
+
+Herdr workers are identified by terminal address (`t7`) and Rex workers by
+block ID. The `pair` skill page explains the overrides (`HERDR_APP_BIN`,
+`HC_BIN`, `REX_BIN`).
 
 ## Run
 
@@ -58,7 +77,7 @@ page explains the overrides (`HERDR_APP_BIN`, `HC_BIN`, `REX_BIN`).
 | --- | --- |
 | `--rounds <n>` | at most this many verify → address cycles; stops on `Verdict: accept` (default 3) |
 | `--doer-model`, `--verifier-model` | Pi `provider/id[:thinking]` |
-| `--mux herdr\|rex` | override detection |
+| `--mux herdr\|rex` | override detection (Herdr still picks panes or core-only itself) |
 | `--turn-timeout <dur>` | limit per turn (default `60m`) |
 | `--cwd <dir>`, `--json` | worker directory; machine-readable result |
 
@@ -79,25 +98,30 @@ worker's claim is not proof. Summarize what was produced (with paths), how it
 was verified, the acceptance criteria used, unresolved findings or open
 questions, and the verdict. If the loop ran out of rounds without accept, say
 so plainly. Any external action the doer prepared but did not take (sending,
-publishing, committing) needs the user's explicit approval. On timeout or a
-missing pane, read the panes (`hc read <t> --lines 100` / `rex capture`) and
-the report directory, then report what happened. Do not restart automatically.
+publishing, committing) needs the user's explicit approval. Say where the
+workers are: in panes, or the core-only terminal ids and how to attach. On
+timeout or a missing worker, read it (`hc read <t> --lines 100` /
+`rex capture`) and the report directory, then report what happened. Do not
+restart or start replacement workers automatically.
 
 ## Clean up
 
 You own the worker pair you started; close it when the session is complete.
-After reading the reports and checking the result, close both panes with the
-ids that `run` printed:
+After reading the reports and checking the result, close both workers with the
+command that `run` printed:
 
 ```sh
-node {baseDir}/pair-work.mjs close <doer> <verifier> --mux herdr|rex
+node {baseDir}/pair-work.mjs close <doer> <verifier> --mux herdr --run <run-id>
+node {baseDir}/pair-work.mjs close <doer> <verifier> --mux rex
 ```
 
-It refuses to close your own pane. Reports and the work folder stay, so cite
-their paths; copy deliverables out of `$TMPDIR` if the user wants to keep them.
-Close only the panes this run created. Keep them open only if the user asked
-to, a worker is waiting on `/login`, or a failed run still needs a person to
-look at the panes. In those cases, say which panes are open and why. Close
+It refuses your own terminal or pane; in Herdr it also refuses terminals
+without a `pair.run` label and, with `--run`, another run's workers. Reports
+and the work folder stay, so cite their paths; copy deliverables out of
+`$TMPDIR` if the user wants to keep them. Close only the workers this run
+created. Keep them open only if the user asked to, a worker is waiting on
+`/login`, or a failed run still needs a person to look at them. In those
+cases, say which workers are open and why. Close
 completed pairs before you start another pair run.
 
 ## Safety
@@ -106,6 +130,6 @@ completed pairs before you start another pair run.
   doer prepares such actions and leaves them for the user.
 - The verifier does not modify the doer's deliverables or existing files.
 - Both workers share your working directory, so do not edit it during the run.
-- Do not send input to a worker pane while a turn is running.
+- Do not send input to a worker while a turn is running.
 - If a worker shows a login or provider error, ask the user to log in with
-  `/login` in that pane. Never handle credentials yourself.
+  `/login` in that worker (core-only: `hc attach <t>`). Never handle credentials yourself.

@@ -8,7 +8,7 @@ import { mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { DONE, closeWorkers, detect, parseArgs, run, runOptions, workers } from "../pair/pair.mjs";
+import { DONE, closeWorkers, detect, detectCommand, parseArgs, run, runOptions, workerLines, workers } from "../pair/pair.mjs";
 
 export const DEFAULTS = {
   rounds: 3,
@@ -17,11 +17,11 @@ export const DEFAULTS = {
   turnTimeout: "60m",
 };
 
-const FLAGS = ["task-file", "rounds", "doer-model", "verifier-model", "mux", "turn-timeout", "cwd"];
+const FLAGS = ["task-file", "rounds", "doer-model", "verifier-model", "mux", "turn-timeout", "cwd", "run"];
 const USAGE = `Usage:
   pair-work.mjs detect [--json]
   pair-work.mjs run --task-file <path> [options]
-  pair-work.mjs close <worker>... [--mux herdr|rex]   close finished worker panes (ids from run)
+  pair-work.mjs close <worker>... [--mux herdr|rex] [--run <id>]   close finished workers (ids from run)
 
 Options:
   --rounds <n>               at most this many verify → address cycles; stops early on "Verdict: accept" (default ${DEFAULTS.rounds})
@@ -74,7 +74,7 @@ export async function runWork({ task, mux, cwd, dir, rounds, doerModel, verifier
   const workDir = join(dir, "work");
   mkdirSync(workDir, { recursive: true });
   const render = (o) => workTurnText({ rounds, workDir, ...o });
-  const { panes, reports, prepare, spawn, finish } = await workers({ task, mux, cwd, dir, turnTimeout, label: "Pair work", render, exec, env, sleep, now, progress });
+  const { panes, reports, meta, prepare, spawn, finish } = await workers({ task, mux, cwd, dir, turnTimeout, label: "Pair work", render, exec, env, sleep, now, progress });
   const first = prepare("doer", "do");
   const doer = await spawn(await panes.anchor(), "right", "pair-work: doer", doerModel, first.prompt);
   const planTurn = prepare("verifier", "plan");
@@ -101,6 +101,7 @@ export async function runWork({ task, mux, cwd, dir, rounds, doerModel, verifier
   }
   return {
     mux,
+    ...meta,
     dir,
     workDir,
     panes: { doer, verifier },
@@ -115,9 +116,10 @@ export async function runWork({ task, mux, cwd, dir, rounds, doerModel, verifier
 }
 
 export function formatResult(r) {
+  const [where, ...how] = workerLines(r, fileURLToPath(import.meta.url), ["doer", "verifier"]);
   return [
-    `Pair work complete (${r.mux}, ${r.rounds} of at most ${r.maxRounds} verification round${r.maxRounds === 1 ? "" : "s"}). Worker panes still open: doer ${r.panes.doer}, verifier ${r.panes.verifier}.`,
-    `After checking the result, close them: node ${fileURLToPath(import.meta.url)} close ${r.panes.doer} ${r.panes.verifier} --mux ${r.mux}`,
+    `Pair work complete (${r.mux}, ${r.rounds} of at most ${r.maxRounds} verification round${r.maxRounds === 1 ? "" : "s"}). ${where}`,
+    ...how.map((line) => line.replace("After reviewing the result", "After checking the result")),
     `Last verdict: ${r.lastVerdict || "(none given)"}`,
     `Default work folder: ${r.workDir}`,
     `Reports:`,
@@ -137,11 +139,8 @@ export async function main(argv, { env = process.env, exec = run, log = console.
     return command || flags.help || flags.h ? 0 : 2;
   }
   const found = detect(env);
-  if (command === "detect") {
-    log(flags.json ? JSON.stringify(found) : found.mux ?? `none: ${found.reason}`);
-    return found.mux ? 0 : 1;
-  }
-  if (command === "close") return closeWorkers(positional.slice(1), { mux: flags.mux ?? found.mux, reason: found.reason, env, exec, log });
+  if (command === "detect") return detectCommand(flags, { env, exec, log });
+  if (command === "close") return closeWorkers(positional.slice(1), { mux: flags.mux ?? found.mux, reason: found.reason, runId: flags.run, env, exec, log });
   if (command !== "run") throw new Error(`unknown command ${command}\n\n${USAGE}`);
 
   const options = runOptions(flags, { found, env, now, defaults: DEFAULTS, dirName: "pi-pair-work" });

@@ -150,6 +150,8 @@ describe("pair turns and CLI", () => {
     const exec = async (cmd, args) => {
       calls.push([cmd, ...args]);
       if (args[0] === "ls") return JSON.stringify({ spaces: [{ tabs: [{ terminals: [{ terminal: "t0", pane: "p0" }, { terminal: "t1", pane: "p1" }, { terminal: "t2", pane: "p2" }] }] }] });
+      // Close checks ownership first: both workers carry the labels their run gave them.
+      if (cmd === "hc" && args[0] === "get") return JSON.stringify({ state: "live", labels: { "pair.run": "abcd1234", "pair.role": "implementer" } });
       return cmd === "herdr-app" ? "{}" : "";
     };
     const herdr = { HC_TERMINAL_ID: "t0", HERDR_APP_BIN: "herdr-app", HC_BIN: "hc" };
@@ -158,7 +160,7 @@ describe("pair turns and CLI", () => {
     assert.deepEqual(calls.filter((c) => c[2] === "pane.close").map((c) => JSON.parse(c[3]).pane), ["p1", "p2"]);
     assert.deepEqual(calls.filter((c) => c[0] === "hc" && c[1] === "rm").map((c) => c[2]), ["t1", "t2"]);
     assert.deepEqual(logs, ["closed t1", "closed t2"]);
-    await assert.rejects(main(["close", "t0"], { env: herdr, exec, log: () => {}, ...quiet }), /your own pane/);
+    await assert.rejects(main(["close", "t0"], { env: herdr, exec, log: () => {}, ...quiet }), /your own terminal/);
     await assert.rejects(main(["close"], { env: herdr, exec, log: () => {}, ...quiet }), /close needs the worker ids/);
 
     calls.length = 0;

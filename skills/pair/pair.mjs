@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // Pair programming between two visible Pi workers: an implementer and an auditor.
-// Detects the Herdr app (herdr-app + herdr-core `hc`) or Rex, opens one pane per worker,
-// and relays turns through files.
+// Detects Herdr (herdr-core `hc`, with herdr-app panes when that CLI can see the caller) or Rex,
+// starts one interactive worker per role, and relays turns through files.
 // Zero dependencies; Node.js 22+.
 
 import { execFile } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -22,7 +23,7 @@ const REX_APP_BINS = ["/Applications/Rex.app", "/Applications/Rex Beta.app"].map
 const USAGE = `Usage:
   pair.mjs detect [--json]
   pair.mjs run --task-file <path> [options]
-  pair.mjs close <worker>... [--mux herdr|rex]   close finished worker panes (ids from run)
+  pair.mjs close <worker>... [--mux herdr|rex] [--run <id>]   close finished workers (ids from run)
 
 Options:
   --rounds <n>               audit → address cycles (default ${DEFAULTS.rounds})
@@ -66,16 +67,19 @@ export function detect(env = process.env) {
 }
 
 /**
- * Pane operations behind one interface: anchor() → id, split(anchor, direction, label, argv) → id, send, read,
- * and optionally alive (throws when the worker is gone) and idle (true once the agent stopped working).
+ * Worker operations behind one interface: anchor() → id, split(anchor, direction, label, argv) → id, send, read,
+ * close, and optionally alive (throws when the worker is gone) and idle (true once the agent stopped working).
+ * `layout` says whether workers get desktop panes ("panes") or only attachable Herdr core terminals ("terminals").
+ * Herdr picks its layout at runtime; see `herdrTransport`.
  */
-export function adapter(mux, { exec = run, env = process.env, cwd }) {
-  if (mux === "herdr") return herdrAdapter({ exec, env, cwd });
+export function adapter(mux, { exec = run, env = process.env, cwd, ...rest }) {
+  if (mux === "herdr") return herdrAdapter({ exec, env, cwd, ...rest });
   if (mux === "rex") {
     const bin = env.REX_BIN || onPath("rex", env.PATH) || REX_APP_BINS.find((p) => existsSync(p)) || "rex";
     const session = env.REX_SESSION;
     const rex = async (args) => exec(bin, args);
     return {
+      layout: "panes",
       anchor: async () => env.REX_BLOCK,
       async split(anchor, direction, label, argv) {
         const out = JSON.parse(await rex(["split", "-s", session, "-b", anchor, `--split=${direction}`, "-c", cwd, "--label", label, "--focus=false", "--json", "--", ...argv]));
@@ -101,13 +105,139 @@ function findBin(name, override, env) {
   return onPath(name, env.PATH) || [join(installDir, name)].find((p) => existsSync(p)) || name;
 }
 
+const herdrBins = (env) => ({ app: findBin("herdr-app", env.HERDR_APP_BIN, env), hc: findBin("hc", env.HC_BIN, env) });
+const errorText = (error) => String(error?.message ?? error).split("\n")[0];
+
+/** The Herdr app pane showing terminal `id`, from `herdr-app ls`; throws when the app CLI is missing or has no window. */
+async function appPaneOf(exec, app, id) {
+  const { spaces = [] } = JSON.parse(await exec(app, ["ls"]));
+  return spaces.flatMap((s) => s.tabs ?? []).flatMap((t) => t.terminals ?? []).find((t) => t.terminal === id)?.pane ?? null;
+}
+
+/**
+ * Which Herdr controls work from here. `HC_TERMINAL_ID` names a Herdr core terminal; it does not mean the desktop
+ * app CLI runs on this machine (over SSH it usually does not). Prefer app panes when `herdr-app ls` shows the caller;
+ * otherwise fall back to core-only terminals if `hc` can see the caller. Never needs SSH variables.
+ */
+export async function probeHerdr({ exec = run, env = process.env } = {}) {
+  const self = env.HC_TERMINAL_ID;
+  const bins = herdrBins(env);
+  let appReason;
+  try {
+    if (await appPaneOf(exec, bins.app, self)) return { layout: "panes", terminal: self };
+    appReason = `terminal ${self} is not shown in a Herdr app pane (herdr-app ls)`;
+  } catch (error) {
+    appReason = `herdr-app unavailable here: ${errorText(error)}`;
+  }
+  let state;
+  try {
+    state = JSON.parse(await exec(bins.hc, ["get", self, "--json"])).state;
+  } catch (error) {
+    throw new Error(`Herdr app panes unusable (${appReason}) and Herdr core cannot see ${self} (hc get ${self}: ${errorText(error)})`);
+  }
+  if (state !== "live") throw new Error(`Herdr app panes unusable (${appReason}) and hc get ${self} reports state ${state ?? "unknown"}`);
+  return { layout: "terminals", terminal: self, appReason };
+}
+
+/** "pair-review: lead" → { workflow: "pair-review", role: "lead" } */
+const parseLabel = (label) => {
+  const m = /^([\w-]+):\s*([\w-]+)$/.exec(label);
+  return m ? { workflow: m[1], role: m[2] } : { workflow: "pair", role: label.replace(/\W+/g, "-") };
+};
+const ownerLabels = (label, runId) => {
+  const { workflow, role } = parseLabel(label);
+  return [`pair.workflow=${workflow}`, `pair.role=${role}`, ...(runId ? [`pair.run=${runId}`] : [])];
+};
+
+/**
+ * Talking to Herdr core terminals, shared by both Herdr layouts. Pi reports its status to the core (OSC 7501);
+ * `ready` waits with `hc wait` while a worker is working, never types into a blocked worker, and gives up at `timeout`.
+ */
+function hcControls({ hc, sleep = sleepMs, now = Date.now, timeout = 3_600_000, progress = () => {} }) {
+  const noted = new Set();
+  const get = async (id) => JSON.parse(await hc(["get", id, "--json"]));
+  const gone = (id, t) => new Error(`terminal ${id} is ${t.state}${t.exit_code == null ? "" : ` (exit ${t.exit_code})`}`);
+  const noteBlocked = (id) => {
+    if (noted.has(id)) return;
+    noted.add(id);
+    progress(`worker ${id} is blocked and needs a person: hc attach ${id} (or open it in Herdr), answer it, then the run continues`);
+  };
+  /** True once the worker reported a status other than working; false when it never reports status. */
+  async function ready(id) {
+    const start = now();
+    for (;;) {
+      const t = await get(id);
+      if (t.state !== "live") throw gone(id, t);
+      const status = t.status?.state;
+      if (!status) return false;
+      if (status !== "working" && status !== "blocked") return true;
+      if (now() - start > timeout) throw new Error(`worker ${id} is still ${status} after ${Math.round(timeout / 60_000)}m; inspect it with hc read ${id} --lines 100`);
+      // hc wait returns when the turn ends (or checks in after 120s); if hc itself fails, back off instead of spinning.
+      if (status === "working") await hc(["wait", id, "--timeout", "120", "--json"]).catch(() => sleep(5_000));
+      else {
+        noteBlocked(id);
+        await sleep(15_000);
+      }
+    }
+  }
+  return {
+    // After a finished report: true once the turn ended. Errors (e.g. the worker exited) fall back to settling its screen.
+    idle: (id) => ready(id).catch(() => false),
+    // Before a send: wait while it works; throws if it is gone or stays blocked past the turn timeout.
+    async send(id, text) {
+      await ready(id);
+      await hc(["send", id, text]);
+    },
+    read: (id) => hc(["read", id, "--lines", "40"]),
+    // `hc read` still works after a terminal finished, so ask the core whether it is live.
+    async alive(id) {
+      const t = await get(id);
+      if (t.state !== "live") throw gone(id, t);
+      if (t.status?.state === "blocked") noteBlocked(id);
+    },
+  };
+}
+
+/**
+ * Herdr core only (e.g. over SSH, where `herdr-app` is absent): workers are background `hc` terminals started in
+ * the worker folder with their first task as Pi's argument. They are attachable but not placed in desktop panes.
+ */
+function herdrCoreAdapter({ exec, env, cwd, runId, ...controls }) {
+  const hcBin = herdrBins(env).hc;
+  const hc = (args) => exec(hcBin, args);
+  return {
+    layout: "terminals",
+    ...hcControls({ hc, ...controls }),
+    anchor: async () => env.HC_TERMINAL_ID,
+    async split(_anchor, _direction, label, argv) {
+      const { workflow, role } = parseLabel(label);
+      const name = `${workflow}-${role}-${runId}`.slice(0, 32);
+      const labels = ownerLabels(label, runId).flatMap((l) => ["--label", l]);
+      // --no-notify: hc must not type notes into the caller while it runs this orchestration.
+      const out = JSON.parse(await hc(["run", "--bg", "--json", "--no-notify", "--name", name, "--cwd", cwd, ...labels, "--", ...argv]));
+      if (!out.address) throw new Error("hc run returned no terminal address");
+      return out.address;
+    },
+    async close(id) {
+      await hc(["kill", id]).catch(() => {});
+      await hc(["rm", id]).catch(() => {});
+    },
+  };
+}
+
+/** Herdr with a usable app CLI or core-only, chosen by `probeHerdr`. */
+export async function herdrTransport(options) {
+  const probe = await probeHerdr(options);
+  if (probe.layout === "terminals") (options.progress ?? (() => {}))(`herdr: no automatic panes (${probe.appReason}); using Herdr core terminals`);
+  return probe.layout === "panes" ? herdrAdapter(options) : herdrCoreAdapter(options);
+}
+
 /**
  * Herdr app: `herdr-app` arranges panes in the window, herdr-core `hc` talks to the terminals in them.
  * Workers are identified by their terminal address (t7); the adapter remembers each one's pane for splitting.
  */
-function herdrAdapter({ exec, env, cwd }) {
-  const app = findBin("herdr-app", env.HERDR_APP_BIN, env);
-  const hcBin = findBin("hc", env.HC_BIN, env);
+function herdrAdapter({ exec, env, cwd, runId, ...controls }) {
+  const { app, hc: hcBin } = herdrBins(env);
   const herdrApp = async (command, args) => {
     // On failure herdr-app prints {"error": "..."} on stdout and exits 1.
     const stdout = await exec(app, ["do", command, JSON.stringify(args)]).catch((error) => error.stdout || Promise.reject(error));
@@ -119,14 +249,15 @@ function herdrAdapter({ exec, env, cwd }) {
   const paneOf = new Map();
   let home = null;
   return {
+    layout: "panes",
+    ...hcControls({ hc, ...controls }),
     // The caller's pane: the window's pane showing our own terminal ($HC_TERMINAL_ID).
     async anchor() {
       const self = env.HC_TERMINAL_ID;
-      const { spaces = [] } = JSON.parse(await exec(app, ["ls"]));
-      const found = spaces.flatMap((s) => s.tabs ?? []).flatMap((t) => t.terminals ?? []).find((t) => t.terminal === self);
-      if (!found?.pane) throw new Error(`terminal ${self} is not shown in a Herdr app pane (herdr-app ls)`);
-      paneOf.set(self, found.pane);
-      home = found.pane;
+      const pane = await appPaneOf(exec, app, self);
+      if (!pane) throw new Error(`terminal ${self} is not shown in a Herdr app pane (herdr-app ls)`);
+      paneOf.set(self, pane);
+      home = pane;
       return self;
     },
     async split(anchor, direction, label, argv) {
@@ -137,26 +268,17 @@ function herdrAdapter({ exec, env, cwd }) {
       paneOf.set(out.terminal, out.pane);
       // pane.split focuses the new pane; give the keyboard back to the user's pane.
       if (home) await herdrApp("pane.focus", { pane: home }).catch(() => {});
-      await hc(["label", out.terminal, `pair.role=${label.replace(/^pair:\s*/, "")}`]).catch(() => {});
+      // Ownership labels let `close` refuse terminals that this run did not start.
+      await hc(["label", out.terminal, ...ownerLabels(label, runId)]).catch(() => {});
       return out.terminal;
-    },
-    send: (id, text) => hc(["send", id, text]),
-    read: (id) => hc(["read", id, "--lines", "40"]),
-    // `hc read` still works after a terminal finished, so ask the core whether it is live.
-    async alive(id) {
-      const t = JSON.parse(await hc(["get", id, "--json"]));
-      if (t.state !== "live") throw new Error(`terminal ${id} is ${t.state}${t.exit_code == null ? "" : ` (exit ${t.exit_code})`}`);
     },
     // Close the worker's pane (ending its terminal), then drop the finished terminal from herdr-core.
     async close(id) {
-      const { spaces = [] } = JSON.parse(await exec(app, ["ls"]));
-      const pane = spaces.flatMap((s) => s.tabs ?? []).flatMap((t) => t.terminals ?? []).find((t) => t.terminal === id)?.pane;
+      const pane = await appPaneOf(exec, app, id).catch(() => null);
       if (pane) await herdrApp("pane.close", { pane });
       else await hc(["kill", id]).catch(() => {});
       await hc(["rm", id]).catch(() => {});
     },
-    // Pi reports its status to herdr-core (OSC 7501); `hc wait` returns once it stops working.
-    idle: (id) => hc(["wait", id, "--timeout", "120", "--json"]).then((out) => JSON.parse(out).reason !== "timeout", () => false),
   };
 }
 
@@ -225,23 +347,34 @@ export async function settle(read, { sleep = sleepMs, interval = 1500, maxPolls 
   }
 }
 
+/** The worker transport for `mux`: Rex panes, Herdr app panes, or Herdr core terminals (see `probeHerdr`). */
+export async function transport(mux, options) {
+  return mux === "herdr" ? herdrTransport(options) : adapter(mux, options);
+}
+
+/** Eight hex characters that tag this run's workers so concurrent runs and `close` cannot confuse them. */
+export const newRunId = () => randomBytes(4).toString("hex");
+
 /**
- * Shared worker plumbing for pair sessions (also used by the pair-review skill): numbered turn/report files in `dir`,
- * Pi workers started in new panes, and waiting for a worker's finished report.
+ * Shared worker plumbing for pair, pair-review, and pair-work: numbered turn/report files in `dir`, two Pi workers
+ * started through the chosen transport, and waiting for a worker's finished report. Reports stay on this machine.
  */
-export async function workers({ task, mux, cwd, dir, turnTimeout, label = "Pair session", render, exec = run, env = process.env, sleep = sleepMs, now = Date.now, progress = () => {} }) {
-  const panes = adapter(mux, { exec, env, cwd });
+export async function workers({ task, mux, cwd, dir, turnTimeout, label = "Pair session", render, exec = run, env = process.env, sleep = sleepMs, now = Date.now, progress = () => {}, runId = newRunId() }) {
+  const timeout = parseDuration(turnTimeout);
+  const panes = await transport(mux, { exec, env, cwd, runId, sleep, now, timeout, progress });
   mkdirSync(dir, { recursive: true });
   const baseline = await exec("git", ["status", "--short", "--branch"], { cwd }).then((s) => `\`git status --short --branch\`:\n\n\`\`\`\n${s.trim()}\n\`\`\``, () => "");
   writeFileSync(join(dir, "task.md"), task);
 
   let step = 0;
   const reports = [];
-  const timeout = parseDuration(turnTimeout);
   const pi = env.PAIR_PI_BIN || onPath("pi", env.PATH) || "pi";
   return {
     panes,
     reports,
+    runId,
+    /** Fields every workflow's result carries: transport layout, run id, and the caller's own pane or terminal. */
+    meta: { layout: panes.layout, runId, caller: mux === "herdr" ? env.HC_TERMINAL_ID : env.REX_BLOCK },
     /** Write the next turn file; `render` gets the role, kind, report path, task, and baseline plus `extra`. */
     prepare(role, kind, extra = {}) {
       const base = join(dir, `${String(++step).padStart(2, "0")}-${role}-${kind}`);
@@ -250,11 +383,12 @@ export async function workers({ task, mux, cwd, dir, turnTimeout, label = "Pair 
       writeFileSync(turn, render({ role, kind, task, report, baseline, ...extra }));
       return { turn, report, prompt: `${label} (${role}, ${kind}): read ${turn} and follow it exactly.` };
     },
+    // The first task is Pi's launch argument, so it cannot be dropped by a send to a booting agent.
     spawn: (anchor, direction, name, model, prompt) => panes.split(anchor, direction, name, [pi, "--model", model, prompt]),
     async finish(role, id, { report }) {
       progress(`waiting for ${role}: ${report}`);
       const isAlive = () => (panes.alive ?? panes.read)(id).then(() => {}, (error) => {
-        throw new Error(`${role} pane ${id} is gone (${error.message}); reports so far are in ${dir}`);
+        throw new Error(`${role} ${panes.layout === "terminals" ? "terminal" : "pane"} ${id} is gone (${error.message}); reports so far are in ${dir}`);
       });
       const text = await waitForReport(report, { sleep, now, timeout, isAlive });
       reports.push({ role, path: report });
@@ -265,7 +399,7 @@ export async function workers({ task, mux, cwd, dir, turnTimeout, label = "Pair 
 }
 
 export async function runPair({ task, mux, cwd, dir, rounds, implementerModel, auditorModel, turnTimeout, exec = run, env = process.env, sleep = sleepMs, now = Date.now, progress = () => {} }) {
-  const { panes, reports, prepare, spawn, finish } = await workers({ task, mux, cwd, dir, turnTimeout, render: (o) => turnText({ rounds, ...o }), exec, env, sleep, now, progress });
+  const { panes, reports, meta, prepare, spawn, finish } = await workers({ task, mux, cwd, dir, turnTimeout, render: (o) => turnText({ rounds, ...o }), exec, env, sleep, now, progress });
   const first = prepare("implementer", "implement");
   const implementer = await spawn(await panes.anchor(), "right", "pair: implementer", implementerModel, first.prompt);
   const orient = prepare("auditor", "orient");
@@ -284,12 +418,12 @@ export async function runPair({ task, mux, cwd, dir, rounds, implementerModel, a
     await panes.send(implementer, address.prompt);
     last = await finish("implementer", implementer, address);
   }
-  return { mux, dir, panes: { implementer, auditor }, models: { implementer: implementerModel, auditor: auditorModel }, rounds, lastAuditVerdict: verdict, reports, finalReport: last.replace(DONE, "").trim() };
+  return { mux, ...meta, dir, panes: { implementer, auditor }, models: { implementer: implementerModel, auditor: auditorModel }, rounds, lastAuditVerdict: verdict, reports, finalReport: last.replace(DONE, "").trim() };
 }
 
 // ---------- CLI ----------
 
-const PAIR_FLAGS = ["task-file", "rounds", "implementer-model", "auditor-model", "mux", "turn-timeout", "cwd"];
+const PAIR_FLAGS = ["task-file", "rounds", "implementer-model", "auditor-model", "mux", "turn-timeout", "cwd", "run"];
 
 export function parseArgs(argv, valueFlags = PAIR_FLAGS) {
   const flags = {};
@@ -315,11 +449,8 @@ export async function main(argv, { env = process.env, exec = run, log = console.
     return command || flags.help || flags.h ? 0 : 2;
   }
   const found = detect(env);
-  if (command === "detect") {
-    log(flags.json ? JSON.stringify(found) : found.mux ?? `none: ${found.reason}`);
-    return found.mux ? 0 : 1;
-  }
-  if (command === "close") return closeWorkers(positional.slice(1), { mux: flags.mux ?? found.mux, reason: found.reason, env, exec, log });
+  if (command === "detect") return detectCommand(flags, { env, exec, log });
+  if (command === "close") return closeWorkers(positional.slice(1), { mux: flags.mux ?? found.mux, reason: found.reason, runId: flags.run, env, exec, log });
   if (command !== "run") throw new Error(`unknown command ${command}\n\n${USAGE}`);
 
   const { mux, task, rounds, turnTimeout, cwd, dir } = runOptions(flags, { found, env, now, defaults: DEFAULTS, dirName: "pi-pair" });
@@ -342,12 +473,40 @@ export async function main(argv, { env = process.env, exec = run, log = console.
   return 0;
 }
 
+/**
+ * Detection with Herdr's usable controls checked: `herdr` (app panes), `herdr (core-only: ...)` when only `hc` works,
+ * or `none: <reason>`. Missing `herdr-app` alone never makes Herdr unavailable. Exit code 0 when a transport is usable.
+ */
+export async function environment({ env = process.env, exec = run } = {}) {
+  const found = detect(env);
+  if (found.mux !== "herdr") return found;
+  try {
+    const probe = await probeHerdr({ exec, env });
+    return { ...found, layout: probe.layout, ...(probe.appReason ? { appReason: probe.appReason } : {}) };
+  } catch (error) {
+    return { mux: null, reason: error.message };
+  }
+}
+
+export function formatDetect(found) {
+  if (!found.mux) return `none: ${found.reason}`;
+  if (found.layout === "terminals") return `herdr (core-only: hc terminals, no automatic panes; ${found.appReason})`;
+  return found.mux;
+}
+
+export async function detectCommand(flags, { env, exec, log }) {
+  const found = await environment({ env, exec });
+  log(flags.json ? JSON.stringify(found) : formatDetect(found));
+  return found.mux ? 0 : 1;
+}
+
 /** Validate the shared `run` flags: multiplexer, task file, rounds, timeout; pick the worker folder and report folder. */
 export function runOptions(flags, { found, env, now, defaults, dirName }) {
   const mux = flags.mux ?? found.mux;
   if (!["herdr", "rex"].includes(mux)) throw new Error(found.reason ?? `--mux must be herdr or rex`);
   if (mux === "herdr" && !env.HC_TERMINAL_ID) throw new Error("--mux herdr needs HC_TERMINAL_ID (run inside a Herdr app pane)");
   if (mux === "rex" && !(env.REX_SESSION && env.REX_BLOCK)) throw new Error("--mux rex needs REX_SESSION and REX_BLOCK (run inside a Rex pane)");
+  if (flags.run) throw new Error("--run belongs to close; run creates its own run id");
   if (!flags["task-file"]) throw new Error("run needs --task-file");
   const task = readFileSync(flags["task-file"], "utf8").trim();
   if (!task) throw new Error("task file is empty");
@@ -359,12 +518,37 @@ export function runOptions(flags, { found, env, now, defaults, dirName }) {
   return { mux, task, rounds, turnTimeout, cwd: resolve(flags.cwd ?? process.cwd()), dir };
 }
 
-/** Close worker panes from a finished run. Never closes the caller's own pane. */
-export async function closeWorkers(ids, { mux, reason, env = process.env, exec = run, log = console.log }) {
+/**
+ * Refuse Herdr terminals that no pair run started (no `pair.run`/`pair.role` label), or that belong to another run
+ * when `runId` is given. Checks every id before anything is closed.
+ */
+async function checkOwnership(ids, { env, exec, runId }) {
+  const hcBin = herdrBins(env).hc;
+  for (const id of ids) {
+    let t;
+    try {
+      t = JSON.parse(await exec(hcBin, ["get", id, "--json"]));
+    } catch (error) {
+      throw new Error(`refusing to close ${id}: hc get ${id} failed (${errorText(error)})`);
+    }
+    const labels = t.labels ?? {};
+    const owner = labels["pair.run"];
+    if (!owner && !labels["pair.role"]) throw new Error(`refusing to close ${id}: ${id} was not started by a pair run (no pair.run label)`);
+    if (runId && owner !== runId) throw new Error(`refusing to close ${id}: ${id} belongs to pair run ${owner ?? "(unlabelled)"}, not ${runId}`);
+  }
+}
+
+/**
+ * Close workers from a finished run. Never closes the caller's own pane or terminal. In Herdr, closes only terminals
+ * labelled by a pair run (and by `runId` when given): the app pane when one shows it, else `hc kill` then `hc rm`.
+ */
+export async function closeWorkers(ids, { mux, reason, runId, env = process.env, exec = run, log = console.log }) {
   if (!["herdr", "rex"].includes(mux)) throw new Error(reason ?? "--mux must be herdr or rex");
   if (!ids.length) throw new Error("close needs the worker ids printed by run, e.g. close t1 t2");
   const self = mux === "herdr" ? env.HC_TERMINAL_ID : env.REX_BLOCK;
-  if (ids.includes(self)) throw new Error(`refusing to close ${self}: that is your own pane`);
+  if (ids.includes(self)) throw new Error(`refusing to close ${self}: that is your own ${mux === "herdr" ? "terminal" : "pane"}`);
+  if (mux === "herdr") await checkOwnership(ids, { env, exec, runId });
+  // The pane adapter closes the app pane when one shows the worker and falls back to hc kill + rm otherwise.
   const panes = adapter(mux, { exec, env, cwd: process.cwd() });
   const failed = [];
   for (const id of ids) {
@@ -379,10 +563,27 @@ export async function closeWorkers(ids, { mux, reason, env = process.env, exec =
   return 0;
 }
 
-export function formatResult(r) {
+/**
+ * The "where are the workers" lines shared by every workflow's result: still-open panes, or, in core-only Herdr,
+ * the terminal ids and how to open them, because nothing was placed in a desktop pane.
+ */
+export function workerLines(r, script, roles) {
+  const ids = roles.map((role) => r.panes[role]);
+  const list = roles.map((role) => `${role} ${r.panes[role]}`).join(", ");
+  const close = `node ${script} close ${ids.join(" ")} --mux ${r.mux}${r.mux === "herdr" && r.runId ? ` --run ${r.runId}` : ""}`;
+  if (r.layout !== "terminals") return [`Worker panes still open: ${list}.`, `After reviewing the result, close them: ${close}`];
   return [
-    `Pair session complete (${r.mux}, ${r.rounds} rounds). Worker panes still open: implementer ${r.panes.implementer}, auditor ${r.panes.auditor}.`,
-    `After reviewing the result, close them: node ${fileURLToPath(import.meta.url)} close ${r.panes.implementer} ${r.panes.auditor} --mux ${r.mux}`,
+    `Worker terminals still running (Herdr core, not placed in desktop panes): ${list}; labels pair.run=${r.runId}.`,
+    `To watch one, attach from any terminal on this machine: ${ids.map((id) => `hc attach ${id}`).join(" or ")} (Ctrl+\\ detaches), or open it from Herdr's terminal list.`,
+    `After reviewing the result, close them: ${close}`,
+  ];
+}
+
+export function formatResult(r) {
+  const [where, ...how] = workerLines(r, fileURLToPath(import.meta.url), ["implementer", "auditor"]);
+  return [
+    `Pair session complete (${r.mux}, ${r.rounds} rounds). ${where}`,
+    ...how,
     `Last audit verdict: ${r.lastAuditVerdict || "(none given)"}`,
     `Reports:`,
     ...r.reports.map((x) => `  ${x.role.padEnd(11)} ${x.path}`),

@@ -6,7 +6,7 @@
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { DONE, closeWorkers, detect, parseArgs, run, runOptions, workers } from "../pair/pair.mjs";
+import { DONE, closeWorkers, detect, detectCommand, parseArgs, run, runOptions, workerLines, workers } from "../pair/pair.mjs";
 
 export const DEFAULTS = {
   rounds: 1,
@@ -15,11 +15,11 @@ export const DEFAULTS = {
   turnTimeout: "60m",
 };
 
-const FLAGS = ["task-file", "rounds", "lead-model", "peer-model", "mux", "turn-timeout", "cwd"];
+const FLAGS = ["task-file", "rounds", "lead-model", "peer-model", "mux", "turn-timeout", "cwd", "run"];
 const USAGE = `Usage:
   pair-review.mjs detect [--json]
   pair-review.mjs run --task-file <path> [options]
-  pair-review.mjs close <worker>... [--mux herdr|rex]   close finished reviewer panes (ids from run)
+  pair-review.mjs close <worker>... [--mux herdr|rex] [--run <id>]   close finished reviewers (ids from run)
 
 Options:
   --rounds <n>               cross-check rounds after the independent reviews (default ${DEFAULTS.rounds})
@@ -57,7 +57,7 @@ export function reviewTurnText({ role, kind, task, report, previous, round, roun
 
 export async function runReview({ task, mux, cwd, dir, rounds, leadModel, peerModel, turnTimeout, exec = run, env = process.env, sleep, now, progress = () => {} }) {
   const render = (o) => reviewTurnText({ rounds, ...o });
-  const { panes, reports, prepare, spawn, finish } = await workers({ task, mux, cwd, dir, turnTimeout, label: "Pair review", render, exec, env, sleep, now, progress });
+  const { panes, reports, meta, prepare, spawn, finish } = await workers({ task, mux, cwd, dir, turnTimeout, label: "Pair review", render, exec, env, sleep, now, progress });
   const firstLead = prepare("lead", "review");
   const lead = await spawn(await panes.anchor(), "right", "pair-review: lead", leadModel, firstLead.prompt);
   const firstPeer = prepare("peer", "review");
@@ -79,13 +79,14 @@ export async function runReview({ task, mux, cwd, dir, rounds, leadModel, peerMo
   await panes.send(lead, consolidate.prompt);
   const final = await finish("lead", lead, consolidate);
   const verdict = /verdict:\s*([^\n]*)/i.exec(final)?.[1].trim() ?? "";
-  return { mux, dir, panes: { lead, peer }, models: { lead: leadModel, peer: peerModel }, rounds, verdict, reports, finalReview: final.replace(DONE, "").trim() };
+  return { mux, ...meta, dir, panes: { lead, peer }, models: { lead: leadModel, peer: peerModel }, rounds, verdict, reports, finalReview: final.replace(DONE, "").trim() };
 }
 
 export function formatResult(r) {
+  const [where, ...how] = workerLines(r, fileURLToPath(import.meta.url), ["lead", "peer"]);
   return [
-    `Pair review complete (${r.mux}, ${r.rounds} cross-check round${r.rounds === 1 ? "" : "s"}). Reviewer panes still open: lead ${r.panes.lead}, peer ${r.panes.peer}.`,
-    `After reading the review, close them: node ${fileURLToPath(import.meta.url)} close ${r.panes.lead} ${r.panes.peer} --mux ${r.mux}`,
+    `Pair review complete (${r.mux}, ${r.rounds} cross-check round${r.rounds === 1 ? "" : "s"}). ${where.replace(/^Worker panes/, "Reviewer panes").replace(/^Worker terminals/, "Reviewer terminals")}`,
+    ...how.map((line) => line.replace("After reviewing the result", "After reading the review")),
     `Verdict: ${r.verdict || "(none given)"}`,
     `Reports:`,
     ...r.reports.map((x) => `  ${x.role.padEnd(4)} ${x.path}`),
@@ -104,11 +105,8 @@ export async function main(argv, { env = process.env, exec = run, log = console.
     return command || flags.help || flags.h ? 0 : 2;
   }
   const found = detect(env);
-  if (command === "detect") {
-    log(flags.json ? JSON.stringify(found) : found.mux ?? `none: ${found.reason}`);
-    return found.mux ? 0 : 1;
-  }
-  if (command === "close") return closeWorkers(positional.slice(1), { mux: flags.mux ?? found.mux, reason: found.reason, env, exec, log });
+  if (command === "detect") return detectCommand(flags, { env, exec, log });
+  if (command === "close") return closeWorkers(positional.slice(1), { mux: flags.mux ?? found.mux, reason: found.reason, runId: flags.run, env, exec, log });
   if (command !== "run") throw new Error(`unknown command ${command}\n\n${USAGE}`);
 
   const options = runOptions(flags, { found, env, now, defaults: DEFAULTS, dirName: "pi-pair-review" });
