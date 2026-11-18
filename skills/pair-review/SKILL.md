@@ -73,7 +73,15 @@ block ID. The `pair` skill page explains the overrides (`HERDR_APP_BIN`,
 
 ## Models
 
-The same as `pair`, with the reviewers' roles: `node {baseDir}/pair-review.mjs
+**With the pi-kit pair extension** (the `pair_setup` tool is available): call
+`pair_setup` with `workflow: "pair-review"` before writing the task file, passing only
+the models and rounds the user named. The user picks each role's model,
+thinking level, and the rounds in a pop-up; pass the returned flags to `run`
+unchanged and skip the rest of this section. If the user cancelled, do not
+start the run. Without a terminal UI it uses the last picks (or the defaults
+below) and says so; report that.
+
+**Without the extension**, the same as `pair`, with the reviewers' roles: `node {baseDir}/pair-review.mjs
 models` (which `doctor` also runs) prints the model each reviewer would use,
 why, and the ready alternatives. Defaults are ordered preferences, the first
 ready one wins (lead `claude-code/claude-opus-5-5` →
@@ -94,9 +102,10 @@ models.
    the base branch. If no target is given, review the uncommitted working-tree
    changes. If there are none, review the current branch against its upstream
    or default branch.
-2. Apply overrides from the prompt: rounds, models, or another multiplexer.
-   Otherwise use the detected preferences (see Models); do not substitute
-   another provider for the same model on your own.
+2. Use the flags `pair_setup` returned (see Models). Without the extension,
+   apply overrides from the request: rounds, models, or another multiplexer;
+   otherwise use the detected preferences, and do not substitute another
+   provider for the same model on your own.
 3. Start the review in the background, then follow it with `wait` until it
    ends. `run` prints its run id (`pair-review.mjs run …: follow it with … wait <id>`),
    and its report folder holds `status.json`:

@@ -76,7 +76,15 @@ block ID. The `pair` skill page explains the overrides (`HERDR_APP_BIN`,
 
 ## Models
 
-The same as `pair`, with the workers' roles: `node {baseDir}/pair-work.mjs
+**With the pi-kit pair extension** (the `pair_setup` tool is available): call
+`pair_setup` with `workflow: "pair-work"` before writing the task file, passing only
+the models and rounds the user named. The user picks each role's model,
+thinking level, and the rounds in a pop-up; pass the returned flags to `run`
+unchanged and skip the rest of this section. If the user cancelled, do not
+start the run. Without a terminal UI it uses the last picks (or the defaults
+below) and says so; report that.
+
+**Without the extension**, the same as `pair`, with the workers' roles: `node {baseDir}/pair-work.mjs
 models` (which `doctor` also runs) prints the model each worker would use, why,
 and the ready alternatives. Defaults are ordered preferences, the first ready
 one wins (doer `claude-code/claude-opus-5-5` →
@@ -97,9 +105,11 @@ different models.
    go, keep that; otherwise the doer uses the run's work folder. If the task has
    no acceptance criteria, do not invent them: the verifier derives them in its
    plan, and you report them back.
-2. Apply overrides from the prompt: rounds, models, working directory, or
-   another multiplexer. Otherwise use the detected preferences (see Models);
-   do not substitute another provider for the same model on your own.
+2. Use the flags `pair_setup` returned (see Models), plus any working
+   directory or multiplexer the request names. Without the extension, apply
+   overrides from the request: rounds, models, working directory, or another
+   multiplexer; otherwise use the detected preferences, and do not substitute
+   another provider for the same model on your own.
 3. Start the loop in the background, then follow it with `wait` until it
    ends. `run` prints its run id (`pair-work.mjs run …: follow it with … wait <id>`),
    and its report folder holds `status.json`:

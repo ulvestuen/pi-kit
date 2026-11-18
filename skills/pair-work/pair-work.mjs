@@ -26,7 +26,7 @@ export const DEFAULTS = {
 const FLAGS = ["task-file", "rounds", "doer-model", "verifier-model", "mux", "turn-timeout", "cwd", "run", "timeout"];
 const USAGE = `Usage:
   pair-work.mjs detect [--json]
-  pair-work.mjs models [--json]   the model each role would use, why, and the ready alternatives
+  pair-work.mjs models [--json] [--no-scan] [--<role>-model m]   the model each role would use, why, and ready alternatives (--no-scan: check only these)
   pair-work.mjs doctor [--json] [--no-launch] [--mux herdr|rex]   check this environment as a worker sees it, one fix per failure
   pair-work.mjs run --task-file <path> [options]
   pair-work.mjs wait <run-id|run-dir> [--timeout 15m] [--json]  block until the run ends or the timeout passes
@@ -141,13 +141,14 @@ export function formatResult(r) {
 }
 
 export async function main(argv, { env = process.env, exec = run, log = console.log, progress = console.error, sleep, now } = {}) {
-  const { positional, flags } = parseArgs(argv, FLAGS, ["json", "help", "h", "no-launch"]);
+  const { positional, flags } = parseArgs(argv, FLAGS, ["json", "help", "h", "no-launch", "no-scan"]);
   const [command] = positional;
   if (!command || flags.help || flags.h) {
     log(USAGE);
     return command || flags.help || flags.h ? 0 : 2;
   }
   if (flags["no-launch"] && command !== "doctor") throw new Error("--no-launch belongs to doctor");
+  if (flags["no-scan"] && command !== "models") throw new Error("--no-scan belongs to models");
   const found = detect(env);
   if (command === "detect") return detectCommand(flags, { env, exec, log });
   if (command === "models") return modelsCommand(flags, { workflow: "pair-work", roles: ROLES, preferences: DEFAULTS.models, callerRole: CALLER_ROLE, env, exec, log, cwd: flags.cwd ?? process.cwd() });

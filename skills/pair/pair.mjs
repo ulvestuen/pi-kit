@@ -63,7 +63,7 @@ const CALLER_ROLE = "implementer";
 
 const USAGE = `Usage:
   pair.mjs detect [--json]
-  pair.mjs models [--json]   the model each role would use, why, and the ready alternatives
+  pair.mjs models [--json] [--no-scan] [--<role>-model m]   the model each role would use, why, and ready alternatives (--no-scan: check only these)
   pair.mjs doctor [--json] [--no-launch] [--mux herdr|rex]   check this environment as a worker sees it, one fix per failure
   pair.mjs run --task-file <path> [options]
   pair.mjs wait <run-id|run-dir> [--timeout 15m] [--json]  block until the run ends or the timeout passes
@@ -952,14 +952,14 @@ export function formatModels(choices, { workflow, pi, roles }) {
 }
 
 /**
- * `models [--json]`: what a run would use, without starting one. Exit 0 when every role has a ready model, 1 when one
+ * `models [--json] [--no-scan]`: what a run would use, without starting one. Exit 0 when every role has a ready model, 1 when one
  * does not (for a script or the orchestrator to check before `run`). Overrides are shown and checked as they would be.
  * `--cwd` is the worker directory; the caller's `pi` and PATH entries are resolved here, like the worker launcher does.
  */
 export async function modelsCommand(flags, { workflow, roles, preferences, callerRole, env, exec, log, cwd = process.cwd(), callerCwd = process.cwd() }) {
   const options = Object.fromEntries(roles.map((role) => [role, flags[`${role}-model`]]));
   const launch = resolveLaunch({ env, cwd: callerCwd });
-  const choices = await resolveModels({ roles, preferences, overrides: options, callerRole, env, cwd: resolve(cwd), callerCwd, launch, exec, scan: true });
+  const choices = await resolveModels({ roles, preferences, overrides: options, callerRole, env, cwd: resolve(cwd), callerCwd, launch, exec, scan: !flags["no-scan"] });
   log(flags.json ? JSON.stringify({ workflow, pi: launch.pi, models: choices }, null, 2) : formatModels(choices, { workflow, pi: launch.pi, roles }));
   return roles.every((role) => choices[role].ready) ? 0 : 1;
 }
@@ -2276,13 +2276,14 @@ export function parseArgs(argv, valueFlags = PAIR_FLAGS, boolFlags = ["json", "h
 }
 
 export async function main(argv, { env = process.env, exec = run, log = console.log, progress = console.error, sleep, now } = {}) {
-  const { positional, flags } = parseArgs(argv, PAIR_FLAGS, ["json", "help", "h", "no-launch"]);
+  const { positional, flags } = parseArgs(argv, PAIR_FLAGS, ["json", "help", "h", "no-launch", "no-scan"]);
   const [command] = positional;
   if (!command || flags.help || flags.h) {
     log(USAGE);
     return command || flags.help || flags.h ? 0 : 2;
   }
   if (flags["no-launch"] && command !== "doctor") throw new Error("--no-launch belongs to doctor");
+  if (flags["no-scan"] && command !== "models") throw new Error("--no-scan belongs to models");
   const found = detect(env);
   if (command === "detect") return detectCommand(flags, { env, exec, log });
   if (command === "models") return modelsCommand(flags, { workflow: "pair", roles: ROLES, preferences: DEFAULTS.models, callerRole: CALLER_ROLE, env, exec, log, cwd: flags.cwd ?? process.cwd() });

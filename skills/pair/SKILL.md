@@ -155,7 +155,16 @@ worker is not working (`hc wait` while it is). A worker that is `blocked`
 
 ## Models
 
-Run `node {baseDir}/pair.mjs models` (add `--json` for a script) before `run`;
+**With the pi-kit pair extension** (the `pair_setup` tool is available): call
+`pair_setup` with `workflow: "pair"` before writing the task file, passing only
+the models and rounds the user named. It opens a pop-up where the user picks
+each role's model, thinking level, and the rounds; checks the picks with
+`models --no-scan`; and returns the exact `run` flags. Pass those flags
+unchanged and skip the rest of this section. If it reports that the user
+cancelled, do not start the run. Without a terminal UI it uses the user's last
+picks (or the defaults below) and says so; report that.
+
+**Without the extension**, run `node {baseDir}/pair.mjs models` (add `--json` for a script) before `run`;
 `doctor` already runs the same readiness check. It prints, per role, the model
 that would be used, why, and the ready alternatives. Readiness is checked in
 the worker's environment (`pi auth check --model … --json` and
@@ -185,8 +194,9 @@ worker that cannot authenticate after all.
 1. Write the user's task to a temporary Markdown file **verbatim**, including
    any plan, constraints, and acceptance criteria. Add only facts the workers
    cannot discover, such as which files you already know matter.
-2. Apply overrides from the `/pair` prompt: rounds, models, or another
-   multiplexer. Otherwise use the detected preferences (see Models). Do not
+2. Use the flags `pair_setup` returned (see Models). Without the extension,
+   apply overrides from the request: rounds, models, or another
+   multiplexer; otherwise use the detected preferences. Do not
    substitute another provider for the same model on your own.
 3. Start the loop in the background, then follow it with `wait` until it
    ends. `run` prints its run id (`pair.mjs run …: follow it with … wait <id>`),

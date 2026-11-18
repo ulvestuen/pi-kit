@@ -945,6 +945,26 @@ describe("pair model readiness", () => {
     const blocked = fakePiChecks({ listed: { "claude-code": ["claude-opus-5-5"] }, auth: {} });
     assert.equal(await main(["models"], { env, exec: blocked.exec, log: () => {} }), 1);
   });
+
+  it("checks only the given picks with --no-scan, still naming alternatives when one is not ready", async () => {
+    const listed = { "claude-code": ["claude-opus-5-5"], anthropic: ["claude-opus-5-5", "claude-sonnet-5"], openai: ["gpt-6.1-sol"] };
+    const auth = { "claude-code/claude-opus-5-5": READY, "anthropic/claude-opus-5-5": READY, "anthropic/claude-sonnet-5": READY, "openai/gpt-6.1-sol": READY };
+    const env = { PAIR_PI_BIN: fakePi, PATH: "/usr/bin" };
+    const authChecks = (calls) => calls.filter((c) => c.includes("auth")).length;
+    const scanned = fakePiChecks({ listed, auth });
+    await main(["models", "--json", "--implementer-model", "claude-code/claude-opus-5-5", "--auditor-model", "openai/gpt-6.1-sol:xhigh"], { env, exec: scanned.exec, log: () => {} });
+    const quick = fakePiChecks({ listed, auth });
+    let json = "";
+    assert.equal(await main(["models", "--json", "--no-scan", "--implementer-model", "claude-code/claude-opus-5-5", "--auditor-model", "openai/gpt-6.1-sol:xhigh"], { env, exec: quick.exec, log: (s) => (json = s) }), 0);
+    assert.equal(authChecks(quick.calls), 2, "only the two picks are checked");
+    assert.ok(authChecks(scanned.calls) > 2, "without --no-scan, alternatives are probed too");
+    // Alternatives are only what was already checked (the other role's pick), not a catalog scan.
+    assert.deepEqual(JSON.parse(json).models.auditor.alternatives, ["claude-code/claude-opus-5-5"]);
+    const missing = fakePiChecks({ listed, auth: { ...auth, "openai/gpt-6.1-sol": NOT_READY } });
+    assert.equal(await main(["models", "--json", "--no-scan", "--auditor-model", "openai/gpt-6.1-sol:xhigh"], { env, exec: missing.exec, log: (s) => (json = s) }), 1);
+    assert.ok(JSON.parse(json).models.auditor.alternatives.length > 0, "a pick that is not ready still gets alternatives");
+    await assert.rejects(main(["doctor", "--no-scan"], { env, exec: quick.exec, log: () => {} }), /--no-scan belongs to models/);
+  });
 });
 
 describe("pair startup detection", () => {
