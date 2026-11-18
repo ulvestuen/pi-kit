@@ -27,28 +27,64 @@ These are separate workers, not subagents or one-shot `pi -p` runs.
 
 ## Environment
 
-The same as `pair`; read its Environment section. `node {baseDir}/pair-review.mjs
-detect` prints `herdr` (app panes), `herdr (core-only: …)`, `rex`, or
-`none: <reason>`.
+The same as `pair`; read its Environment section. Run
+`node {baseDir}/pair-review.mjs doctor` first: one pass/fail line per check
+(multiplexer, `pi`/`node`/worker `PATH`, each reviewer's model, and a
+`pi --version` dry launch in a real pane through the workers' launcher), with a
+fix for every failure. **If it fails, report its output and stop.** Write no
+wrapper scripts, and set no `PAIR_PI_BIN`, `HERDR_APP_BIN`, `HC_BIN`, `REX_BIN`,
+or model overrides on your own. `detect` prints a verdict and the reason for
+each path tried: `herdr: panes via herdr-app (…)`, `herdr: panes via hc
+labels`, `herdr: core-only (…)`, `rex`, or `none: <reason>`; `models` prints
+the model each reviewer would use.
 
 - `HC_TERMINAL_ID` names a Herdr Core terminal; it does not mean the desktop
-  app CLI (`herdr-app`) is on this machine. Herdr over SSH is supported: when
-  `herdr-app` is missing or cannot see your terminal but `hc` can, the
-  reviewers run as `hc run --bg` terminals (core-only). Read `hc --skill` when
-  choosing or debugging the transport.
+  app CLI (`herdr-app`) is on this machine. Herdr over SSH is supported:
+  `herdr-app` is found through `HERDR_APP_BIN`, `PATH`, `~/.local/bin`, the
+  macOS/Windows/Linux install folders and, under WSL, the Windows
+  `%LOCALAPPDATA%` through `cmd.exe` + `wslpath`. When it is missing or cannot
+  see your terminal but `hc` can, the reviewers run as `hc run --bg`
+  terminals; if your terminal carries `herdr.space`/`herdr.tab`, those labels
+  are copied on as a placement request: with both, the caller's tab (split vs.
+  new tab unverified); with the space alone, Herdr picks a tab in that space.
+  Read `hc --skill` when choosing or debugging the transport.
 - Missing `herdr-app` alone is not a reason to stop; never tell the user to
   install the desktop CLI on a remote machine.
-- Core-only reviewers are **not** placed in desktop panes. Do not claim they
-  appeared. Give the user the terminal ids that `run` prints, with
-  `hc attach <t>` (Ctrl+\ detaches) or Herdr's terminal list to open them.
-- If it prints `none`, tell the user that `/pair-review` needs Herdr (a working
-  `hc` that sees `$HC_TERMINAL_ID`) or Rex, quote the reason, and stop, unless
-  the prompt explicitly asks for another approach. If both are detected, ask
-  which one to use and pass `--mux`.
+- Rex needs its `rex` CLI on the machine you run on (`REX_BIN`, `PATH`, the
+  macOS app/Rex Server bundles, `%LOCALAPPDATA%\Programs\Rex` on Windows, the
+  Linux install folders). A remote shell inside a Rex block has the `REX_*`
+  variables but no CLI: `detect` then says `none: REX_* set but no rex CLI here
+  (remote Rex block?)` and `run` stops before a pane. A forwarded socket is
+  control-only (`rex split` still starts its command on the server's machine),
+  so report it and run the pair where the Rex terminals run — a block on the
+  machine that runs the Rex server. Do not install anything yourself.
+- Core-only reviewers are not placed in the app at all. hc-label reviewers are
+  `hc` terminals whose rendering (split vs. new tab) is unverified, so do not
+  claim a split either. Give the user the terminal ids that `run` prints, with
+  `hc attach <t>` (Ctrl+\ detaches) or Herdr's terminal list as the fallback.
+- If detection prints `none`, tell the user that `/pair-review` needs Herdr (a
+  working `hc` that sees `$HC_TERMINAL_ID`) or Rex, quote the reason, and stop,
+  unless the prompt explicitly asks for another approach. If both are detected,
+  ask which one to use and pass `--mux` to `doctor` and `run`.
 
 Herdr reviewers are identified by terminal address (`t7`) and Rex reviewers by
 block ID. The `pair` skill page explains the overrides (`HERDR_APP_BIN`,
 `HC_BIN`, `REX_BIN`).
+
+## Models
+
+The same as `pair`, with the reviewers' roles: `node {baseDir}/pair-review.mjs
+models` (which `doctor` also runs) prints the model each reviewer would use,
+why, and the ready alternatives. Defaults are ordered preferences, the first
+ready one wins (lead `claude-code/claude-opus-5-5` →
+`anthropic/claude-opus-5-5`, peer `openai/gpt-6.1-sol:xhigh` →
+`opencode/gpt-6.1-sol:xhigh`); the lead also tries
+your own model (`PI_PROVIDER`/`PI_MODEL`) first, and the peer follows its own
+list, so the two can share a model when that is all that is ready. If nothing
+is ready, `run` stops before opening panes and names the alternatives: report
+that and ask the user. Never switch a model to another provider on your own;
+pass `--lead-model`/`--peer-model` if the user wants specific or different
+models.
 
 ## Run
 
@@ -59,8 +95,8 @@ block ID. The `pair` skill page explains the overrides (`HERDR_APP_BIN`,
    changes. If there are none, review the current branch against its upstream
    or default branch.
 2. Apply overrides from the prompt: rounds, models, or another multiplexer.
-   Keep the default providers (`claude-code/…`, `openai/…`); do not
-   substitute `openai-codex/…` or `opencode/…`.
+   Otherwise use the detected preferences (see Models); do not substitute
+   another provider for the same model on your own.
 3. Start the review in the background, then follow it with `wait` until it
    ends. `run` prints its run id (`pair-review.mjs run …: follow it with … wait <id>`),
    and its report folder holds `status.json`:

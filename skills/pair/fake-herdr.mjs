@@ -4,11 +4,12 @@
 /**
  * `answer(prompt)` plays the worker: it writes the report the prompt's turn file names.
  * `app`: "missing" (spawn ENOENT), "no-window" (herdr-app ls fails), or "hidden" (the caller has no pane).
+ * `selfLabels`: the caller terminal's labels — with `herdr.space`/`herdr.tab` the workers opt into the caller's tab.
  * `busy`: after each send, how many `hc get` checks report the *other* workers as still working (finishing a turn).
  */
-export function fakeHerdrCore({ answer, self = "t0", app = "missing", git = true, busy = 0 }) {
+export function fakeHerdrCore({ answer, self = "t0", app = "missing", git = true, busy = 0, selfLabels = {} }) {
   const calls = [];
-  const terminals = new Map([[self, { state: "live", status: { state: "working" }, labels: {} }]]);
+  const terminals = new Map([[self, { state: "live", status: { state: "working" }, labels: { ...selfLabels } }]]);
   let n = 0;
   const busyLeft = new Map();
   const exec = async (cmd, args) => {

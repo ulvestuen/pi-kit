@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { describe, it } from "node:test";
 
 import * as pairReview from "../pair-review/pair-review.mjs";
@@ -15,7 +15,13 @@ const { DONE } = pair;
 const fast = { sleep: async () => {}, now: () => 0 };
 const tmp = () => mkdtempSync(join(tmpdir(), "pair-core-test-"));
 // No SSH variables and no herdr-app override: only what a remote hc terminal provides.
-const remoteEnv = { HC_TERMINAL_ID: "t0", HC_BIN: "hc", HERDR_APP_BIN: "herdr-app", PAIR_PI_BIN: "/usr/bin/pi" };
+// A stand-in for the pi executable: the launch resolves an absolute path, so it must exist.
+const fakePi = join(mkdtempSync(join(tmpdir(), "pair-core-pi-")), "pi");
+writeFileSync(fakePi, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+const remoteEnv = { HC_TERMINAL_ID: "t0", HC_BIN: "hc", HERDR_APP_BIN: "herdr-app", PAIR_PI_BIN: fakePi };
+// The host's launcher: the POSIX script here, PowerShell on Windows (there is no /bin/sh there).
+const launcherName = process.platform === "win32" ? "launch.ps1" : "launch.sh";
+const launcherRunsPi = (text) => (process.platform === "win32" ? text.includes(`& "${fakePi}" @args`) : text.includes(`'${fakePi}' "$@"`));
 const quiet = { log: () => {}, progress: () => {} };
 
 const verdicts = (turn) => (/auditor-audit|consolidate/.test(turn) ? "Verdict: changes requested\n" : turn.includes("verifier-verify") ? "Verdict: changes requested\n" : "");
@@ -37,9 +43,14 @@ function assertCoreLaunch(calls, { workflow, roles, models, cwd }) {
     assert.equal(flag(call, "--name"), `${workflow}-${roles[i]}-${runId}`);
     assert.deepEqual(labels(call).sort(), [`pair.role=${roles[i]}`, `pair.run=${runId}`, `pair.workflow=${workflow}`]);
     const argv = call.slice(call.indexOf("--") + 1);
-    assert.deepEqual(argv.slice(0, 3), ["/usr/bin/pi", "--model", models[i]], "an interactive pi, not print mode");
-    assert.ok(!argv.includes("-p") && !argv.includes("--print"));
-    assert.match(argv.at(-1), /read \S+\.turn\.md and follow it exactly/, "the first task goes in at launch");
+    const launcher = argv.find((arg) => String(arg).endsWith(launcherName));
+    assert.ok(launcher, "workers start through the run's launcher, which carries the caller's environment");
+    assert.ok(launcherRunsPi(readFileSync(launcher, "utf8")), "the launcher runs the resolved pi");
+    // Windows starts the launcher through PowerShell, so its own arguments follow the launcher path, never argv[0].
+    const piArgs = argv.slice(argv.indexOf(launcher) + 1);
+    assert.deepEqual(piArgs.slice(0, 2), ["--model", models[i]], "an interactive pi, not print mode");
+    assert.ok(!piArgs.includes("-p") && !piArgs.includes("--print"));
+    assert.match(piArgs.at(-1), /read \S+\.turn\.md and follow it exactly/, "the first task goes in at launch");
   });
   return runId;
 }
@@ -50,7 +61,9 @@ describe("Herdr core-only transport (hc without desktop pane controls)", () => {
       const { exec } = fake({ app });
       let out = "";
       assert.equal(await pair.main(["detect"], { env: remoteEnv, exec, log: (s) => (out = s) }), 0);
-      assert.match(out, /^herdr \(core-only: hc terminals, no automatic panes;/, app);
+      assert.match(out, /^herdr: core-only \(hc terminals, no automatic panes:/, app);
+      assert.match(out, /\n {2}herdr-app: herdr-app \(HERDR_APP_BIN\)/, `${app}: the discovery path that chose the CLI is named`);
+      assert.match(out, /\n {2}hc \(hc\) get t0: live; labels carry no herdr\.space/, `${app}: why the workers are not placed`);
       assert.doesNotMatch(out, /install/i);
       let json = "";
       await pair.main(["detect", "--json"], { env: remoteEnv, exec, log: (s) => (json = s) });
@@ -64,8 +77,8 @@ describe("Herdr core-only transport (hc without desktop pane controls)", () => {
 
   it("/pair: launches implementer and auditor with hc and runs every audit/address round without herdr-app", async () => {
     const { exec, calls, sendsAfterIdleCheck } = fake();
-    const result = await pair.runPair({ task: "Add /health", mux: "herdr", cwd: "/srv/repo", dir: tmp(), rounds: 3, implementerModel: pair.DEFAULTS.implementerModel, auditorModel: pair.DEFAULTS.auditorModel, turnTimeout: "1m", env: remoteEnv, exec, ...fast });
-    const runId = assertCoreLaunch(calls, { workflow: "pair", roles: ["implementer", "auditor"], models: [pair.DEFAULTS.implementerModel, pair.DEFAULTS.auditorModel], cwd: "/srv/repo" });
+    const result = await pair.runPair({ task: "Add /health", mux: "herdr", cwd: "/srv/repo", dir: tmp(), rounds: 3, implementerModel: pair.DEFAULTS.models.implementer[0], auditorModel: pair.DEFAULTS.models.auditor[0], turnTimeout: "1m", env: remoteEnv, exec, ...fast });
+    const runId = assertCoreLaunch(calls, { workflow: "pair", roles: ["implementer", "auditor"], models: [pair.DEFAULTS.models.implementer[0], pair.DEFAULTS.models.auditor[0]], cwd: "/srv/repo" });
     assert.deepEqual([result.layout, result.runId, result.caller], ["terminals", runId, "t0"]);
     assert.deepEqual(result.panes, { implementer: "t1", auditor: "t2" });
     assert.deepEqual(result.reports.map((r) => r.path.match(/\d+-(\w+-\w+)\.report/)[1]), [
@@ -89,8 +102,8 @@ describe("Herdr core-only transport (hc without desktop pane controls)", () => {
   it("/pair-review: two read-only reviewers, a cross-check, and a consolidation over hc", async () => {
     const { exec, calls, sendsAfterIdleCheck } = fake({ app: "no-window" });
     const d = pairReview.DEFAULTS;
-    const result = await pairReview.runReview({ task: "Review main..HEAD", mux: "herdr", cwd: "/srv/repo", dir: tmp(), rounds: 1, leadModel: d.leadModel, peerModel: d.peerModel, turnTimeout: "1m", env: remoteEnv, exec, ...fast });
-    const runId = assertCoreLaunch(calls, { workflow: "pair-review", roles: ["lead", "peer"], models: [d.leadModel, d.peerModel], cwd: "/srv/repo" });
+    const result = await pairReview.runReview({ task: "Review main..HEAD", mux: "herdr", cwd: "/srv/repo", dir: tmp(), rounds: 1, leadModel: d.models.lead[0], peerModel: d.models.peer[0], turnTimeout: "1m", env: remoteEnv, exec, ...fast });
+    const runId = assertCoreLaunch(calls, { workflow: "pair-review", roles: ["lead", "peer"], models: [d.models.lead[0], d.models.peer[0]], cwd: "/srv/repo" });
     assert.deepEqual(result.panes, { lead: "t1", peer: "t2" });
     assert.equal(result.layout, "terminals");
     assert.deepEqual(result.reports.map((r) => r.path.match(/\d+-(\w+-[\w-]+)\.report/)[1]).sort(), ["lead-consolidate", "lead-cross-check", "lead-review", "peer-cross-check", "peer-review"]);
@@ -110,8 +123,8 @@ describe("Herdr core-only transport (hc without desktop pane controls)", () => {
     const answer = reportWriter(readFileSync, writeFileSync, DONE, (turn) => (turn.includes("verifier-verify") ? (++verifications >= 2 ? "Verdict: accept\n" : "Verdict: changes requested\n") : ""));
     const { exec, calls, sendsAfterIdleCheck } = fakeHerdrCore({ answer, app: "hidden", git: false });
     const d = pairWork.DEFAULTS;
-    const result = await pairWork.runWork({ task: "Write a vendor memo", mux: "herdr", cwd: "/home/me/notes", dir: tmp(), rounds: 3, doerModel: d.doerModel, verifierModel: d.verifierModel, turnTimeout: "1m", env: remoteEnv, exec, ...fast });
-    const runId = assertCoreLaunch(calls, { workflow: "pair-work", roles: ["doer", "verifier"], models: [d.doerModel, d.verifierModel], cwd: "/home/me/notes" });
+    const result = await pairWork.runWork({ task: "Write a vendor memo", mux: "herdr", cwd: "/home/me/notes", dir: tmp(), rounds: 3, doerModel: d.models.doer[0], verifierModel: d.models.verifier[0], turnTimeout: "1m", env: remoteEnv, exec, ...fast });
+    const runId = assertCoreLaunch(calls, { workflow: "pair-work", roles: ["doer", "verifier"], models: [d.models.doer[0], d.models.verifier[0]], cwd: "/home/me/notes" });
     assert.match(runs(calls)[1].at(-1), /verifier, plan/, "the verifier's first turn is its plan");
     assert.deepEqual(result.reports.map((r) => r.path.match(/\d+-(\w+-\w+)\.report/)[1]), ["verifier-plan", "doer-do", "verifier-verify", "doer-address", "verifier-verify"]);
     assert.deepEqual([result.accepted, result.rounds, result.layout], [true, 2, "terminals"]);
@@ -220,5 +233,112 @@ describe("Herdr app pane controls", () => {
     assert.equal(label[2], "t1");
     assert.deepEqual(label.slice(3).sort(), ["pair.role=doer", `pair.run=${result.runId}`, "pair.workflow=pair-work"]);
     assert.match(pairWork.formatResult(result), /Worker panes still open: doer t1, verifier t2/);
+  });
+});
+
+describe("Herdr remote panes through hc labels (C3.1)", () => {
+  // The app runs on the person's own machine; this box has only hc. The caller's terminal carries the app's
+  // herdr.space/herdr.tab labels, and copying them onto `hc run` terminals is what makes the workers visible.
+  const callerLabels = { "herdr.space": "sp1", "herdr.tab": "tb1" };
+
+  it("detect reports the label layout, distinct from core-only, and shows why each path was tried", async () => {
+    const { exec } = fake({ selfLabels: callerLabels });
+    let out = "";
+    assert.equal(await pair.main(["detect"], { env: remoteEnv, exec, log: (s) => (out = s) }), 0);
+    assert.match(out, /^herdr: panes via hc labels \(tab requested; split vs\. new tab unverified\)/, "a copied tab is a request, not a confirmed placement");
+    assert.match(out, /hc \(hc\) get t0: live; labels request worker terminals in the caller's tab \(herdr\.space=sp1 herdr\.tab=tb1\)/);
+    let json = "";
+    await pair.main(["detect", "--json"], { env: remoteEnv, exec, log: (s) => (json = s) });
+    const found = JSON.parse(json);
+    assert.deepEqual([found.mux, found.layout, found.placement], ["herdr", "labels", { space: "sp1", tab: "tb1" }]);
+    assert.ok(found.trace.some((line) => /herdr\.space=sp1/.test(line)), "--json keeps the reasons too");
+  });
+
+  it("copies herdr.space and herdr.tab onto every worker, keeping the run's own labels", async () => {
+    const { exec, calls } = fake({ selfLabels: callerLabels });
+    const notes = [];
+    const result = await pair.runPair({ task: "T", mux: "herdr", cwd: "/srv/repo", dir: tmp(), rounds: 1, implementerModel: "a", auditorModel: "b", turnTimeout: "1m", env: remoteEnv, exec, progress: (s) => notes.push(s), ...fast });
+    assert.ok(notes.some((s) => /workers are requested in the caller's Herdr tab\b/.test(s)), "the progress line is a request, not a confirmed layout");
+    const launched = runs(calls);
+    assert.equal(launched.length, 2);
+    const runId = labels(launched[0]).find((l) => l.startsWith("pair.run="))?.split("=")[1];
+    launched.forEach((call, i) => {
+      const placed = labels(call);
+      assert.ok(placed.includes("herdr.space=sp1") && placed.includes("herdr.tab=tb1"), "the app needs both labels to place a worker");
+      assert.deepEqual(placed.sort(), [`herdr.space=sp1`, `herdr.tab=tb1`, `pair.role=${["implementer", "auditor"][i]}`, `pair.run=${runId}`, "pair.workflow=pair"].sort());
+      assert.ok(!calls.some((c) => c[0] === "herdr-app" && c[1] === "do"), "no app CLI is needed on this machine");
+    });
+    assert.equal(result.layout, "labels");
+    assert.deepEqual(result.placement, { space: "sp1", tab: "tb1" }, "the result records which labels were requested");
+    const text = pair.formatResult(result);
+    assert.match(text, /Worker terminals requested in the caller's Herdr tab by hc labels \(split vs\. new tab unverified\): implementer t1, auditor t2\./, "the layout is not reported as core-only, nor a confirmed split");
+    assert.match(text, /hc attach t1/, "attach stays as the fallback when the tab shows nothing");
+    assert.doesNotMatch(text, /not placed in desktop panes/);
+  });
+
+  it("uses herdr.space alone when the caller's terminal has no herdr.tab, and says the app picks the tab", async () => {
+    const { exec, calls } = fake({ selfLabels: { "herdr.space": "sp1" } });
+    const notes = [];
+    const result = await pair.runPair({ task: "T", mux: "herdr", cwd: "/srv/repo", dir: tmp(), rounds: 1, implementerModel: "a", auditorModel: "b", turnTimeout: "1m", env: remoteEnv, exec, progress: (s) => notes.push(s), ...fast });
+    assert.ok(notes.some((s) => /workers are requested in the caller's Herdr space \(Herdr creates a tab\)/.test(s)), "space-only progress names the space, not a tab");
+    for (const call of runs(calls)) {
+      assert.ok(labels(call).includes("herdr.space=sp1"));
+      assert.ok(!labels(call).some((l) => l.startsWith("herdr.tab=")), "an invented tab would put workers somewhere the caller is not");
+    }
+    assert.deepEqual(result.placement, { space: "sp1" });
+    const text = pair.formatResult(result);
+    assert.match(text, /Worker terminals requested in the caller's Herdr space by hc labels \(Herdr picks their tab\): implementer t1/, "no same-tab placement is promised without herdr.tab");
+    assert.doesNotMatch(text, /Herdr tab by hc labels/);
+    assert.match(text, /hc attach t1/, "attach stays as the fallback");
+    // The verdict and the --json place say the same thing as detect does for this terminal.
+    let detect = "";
+    assert.equal(await pair.main(["detect"], { env: remoteEnv, exec, log: (s) => (detect = s) }), 0);
+    assert.match(detect, /^herdr: panes via hc labels \(space requested; Herdr creates a tab in it\)/);
+    assert.match(detect, /labels request worker terminals in the caller's space \(herdr\.space=sp1\); Herdr creates a tab for them/);
+    let doctor = "";
+    await pair.main(["doctor", "--no-launch"], { env: { ...remoteEnv, PAIR_PI_BIN: fakePi }, exec, log: (s) => (doctor = s) });
+    assert.match(doctor, /  pass  mux: herdr: panes via hc labels \(space requested; Herdr creates a tab in it\)/, "doctor's mux line says the same thing");
+  });
+
+  it("stays core-only when the caller's terminal has no herdr.space label", async () => {
+    const { exec, calls } = fake({ selfLabels: { "herdr.tab": "tb1" } });
+    const result = await pair.runPair({ task: "T", mux: "herdr", cwd: "/srv/repo", dir: tmp(), rounds: 1, implementerModel: "a", auditorModel: "b", turnTimeout: "1m", env: remoteEnv, exec, ...fast });
+    assert.equal(result.layout, "terminals");
+    assert.ok(!labels(runs(calls)[0]).some((l) => l.startsWith("herdr.")), "a tab without a space places nothing");
+  });
+
+  it("doctor reports the label layout as a passing mux check", async () => {
+    const { exec } = fake({ selfLabels: callerLabels });
+    let text = "";
+    const env = { ...remoteEnv, PAIR_PI_BIN: fakePi };
+    // The model probes need a pi this fake does not provide; the mux verdict is what is under test here.
+    await pair.main(["doctor", "--no-launch"], { env, exec, log: (s) => (text = s) });
+    assert.match(text, /  pass  mux: herdr: panes via hc labels/);
+  });
+});
+
+describe("C4: detect names every path tried", () => {
+  it("lists each rejected PATH candidate, in the printed verdict and in --json", async () => {
+    // An empty PATH so the miss lines are this test's own paths, whatever is installed on the machine running it.
+    const first = join(tmp(), "first");
+    const second = join(tmp(), "second");
+    // The trace names the platform's executable: on Windows a command name resolves through PATHEXT (E2), and PATH
+    // entries are joined with `;` (E3).
+    const herdrName = process.platform === "win32" ? "herdr-app.com" : "herdr-app";
+    const firstMiss = `${join(first, herdrName)} missing (PATH)`;
+    const secondMiss = `${join(second, herdrName)} missing (PATH)`;
+    const env = { ...remoteEnv, HERDR_APP_BIN: undefined, PATH: [first, second].join(delimiter), HOME: join(tmp(), "home") };
+    const { exec } = fake();
+    let out = "";
+    assert.equal(await pair.main(["detect"], { env, exec, log: (s) => (out = s) }), 0);
+    assert.match(out, /^herdr: core-only \(hc terminals, no automatic panes:/);
+    assert.ok(out.includes(firstMiss), "the first PATH entry is named with its reason");
+    assert.ok(out.includes(secondMiss), "a later PATH entry is named too");
+    assert.ok(out.includes("HERDR_APP_BIN is unset"));
+    let json = "";
+    await pair.main(["detect", "--json"], { env, exec, log: (s) => (json = s) });
+    const trace = JSON.parse(json).trace.join("\n");
+    assert.ok(trace.includes(firstMiss), "--json carries the same trace");
+    assert.ok(trace.includes(secondMiss));
   });
 });

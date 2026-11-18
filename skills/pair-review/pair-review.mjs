@@ -6,26 +6,34 @@
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { DONE, closeWorkers, detect, detectCommand, newRunId, parseArgs, run, runOptions, tracked, waitCommand, workerLines, workers } from "../pair/pair.mjs";
+import { DONE, closeWorkers, detect, detectCommand, doctorCommand, modelsCommand, newRunId, parseArgs, requireModels, resolveModels, run, runOptions, tracked, waitCommand, workerLines, workers } from "../pair/pair.mjs";
+
+export const ROLES = ["lead", "peer"];
+const CALLER_ROLE = "lead";
 
 export const DEFAULTS = {
   rounds: 1,
-  leadModel: "claude-code/claude-opus-5-5",
-  peerModel: "openai/gpt-6.1-sol:xhigh",
   turnTimeout: "60m",
+  // Ordered preferences per role: the first model that is ready in the worker's environment is used.
+  models: {
+    lead: ["claude-code/claude-opus-5-5", "anthropic/claude-opus-5-5"],
+    peer: ["openai/gpt-6.1-sol:xhigh", "opencode/gpt-6.1-sol:xhigh"],
+  },
 };
 
 const FLAGS = ["task-file", "rounds", "lead-model", "peer-model", "mux", "turn-timeout", "cwd", "run", "timeout"];
 const USAGE = `Usage:
   pair-review.mjs detect [--json]
+  pair-review.mjs models [--json]   the model each role would use, why, and the ready alternatives
+  pair-review.mjs doctor [--json] [--no-launch] [--mux herdr|rex]   check this environment as a reviewer sees it, one fix per failure
   pair-review.mjs run --task-file <path> [options]
   pair-review.mjs wait <run-id|run-dir> [--timeout 15m] [--json]  block until the run ends or the timeout passes
   pair-review.mjs close <worker>... [--mux herdr|rex] [--run <id>]   close finished reviewers (ids from run)
 
 Options:
   --rounds <n>               cross-check rounds after the independent reviews (default ${DEFAULTS.rounds})
-  --lead-model <m>           provider/id[:thinking] (default ${DEFAULTS.leadModel})
-  --peer-model <m>           provider/id[:thinking] (default ${DEFAULTS.peerModel})
+  --lead-model <m>           provider/id[:thinking] (default: first ready of ${DEFAULTS.models.lead.join(", ")})
+  --peer-model <m>           provider/id[:thinking] (default: first ready of ${DEFAULTS.models.peer.join(", ")})
   --mux herdr|rex            override environment detection
   --turn-timeout <dur>       per-turn limit, e.g. 45m (default ${DEFAULTS.turnTimeout})
   --cwd <dir>                worker working directory (default: current)
@@ -99,24 +107,37 @@ export function formatResult(r) {
 }
 
 export async function main(argv, { env = process.env, exec = run, log = console.log, progress = console.error, sleep, now } = {}) {
-  const { positional, flags } = parseArgs(argv, FLAGS);
+  const { positional, flags } = parseArgs(argv, FLAGS, ["json", "help", "h", "no-launch"]);
   const [command] = positional;
   if (!command || flags.help || flags.h) {
     log(USAGE);
     return command || flags.help || flags.h ? 0 : 2;
   }
+  if (flags["no-launch"] && command !== "doctor") throw new Error("--no-launch belongs to doctor");
   const found = detect(env);
   if (command === "detect") return detectCommand(flags, { env, exec, log });
+  if (command === "models") return modelsCommand(flags, { workflow: "pair-review", roles: ROLES, preferences: DEFAULTS.models, callerRole: CALLER_ROLE, env, exec, log, cwd: flags.cwd ?? process.cwd() });
+  if (command === "doctor") return doctorCommand(flags, { workflow: "pair-review", roles: ROLES, preferences: DEFAULTS.models, callerRole: CALLER_ROLE, env, exec, log, cwd: flags.cwd ?? process.cwd(), sleep, now });
   if (command === "close") return closeWorkers(positional.slice(1), { mux: flags.mux ?? found.mux, reason: found.reason, runId: flags.run, env, exec, log });
   if (command === "wait") return waitCommand(positional[1], flags, { log, sleep, now });
   if (command !== "run") throw new Error(`unknown command ${command}\n\n${USAGE}`);
 
   const options = runOptions(flags, { found, env, now, defaults: DEFAULTS, dirName: "pi-pair-review" });
+  // Settled before any pane opens, in the worker's environment (see pair.mjs#resolveModels).
+  const models = requireModels(await resolveModels({
+    roles: ROLES,
+    preferences: DEFAULTS.models,
+    overrides: { lead: flags["lead-model"], peer: flags["peer-model"] },
+    callerRole: CALLER_ROLE,
+    env,
+    exec,
+    cwd: options.cwd,
+  }), ROLES);
   const runId = newRunId();
   const result = await tracked({ dir: options.dir, runId, workflow: "pair-review", script: fileURLToPath(import.meta.url), progress }, (note) => runReview({
     ...options,
-    leadModel: flags["lead-model"] ?? DEFAULTS.leadModel,
-    peerModel: flags["peer-model"] ?? DEFAULTS.peerModel,
+    leadModel: models.lead.model,
+    peerModel: models.peer.model,
     exec,
     env,
     sleep,

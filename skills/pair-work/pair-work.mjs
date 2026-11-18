@@ -8,26 +8,34 @@ import { mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { DONE, closeWorkers, detect, detectCommand, newRunId, parseArgs, run, runOptions, tracked, waitCommand, workerLines, workers } from "../pair/pair.mjs";
+import { DONE, closeWorkers, detect, detectCommand, doctorCommand, modelsCommand, newRunId, parseArgs, requireModels, resolveModels, run, runOptions, tracked, waitCommand, workerLines, workers } from "../pair/pair.mjs";
+
+export const ROLES = ["doer", "verifier"];
+const CALLER_ROLE = "doer";
 
 export const DEFAULTS = {
   rounds: 3,
-  doerModel: "claude-code/claude-opus-5-5",
-  verifierModel: "openai/gpt-6.1-sol:xhigh",
   turnTimeout: "60m",
+  // Ordered preferences per role: the first model that is ready in the worker's environment is used.
+  models: {
+    doer: ["claude-code/claude-opus-5-5", "anthropic/claude-opus-5-5"],
+    verifier: ["openai/gpt-6.1-sol:xhigh", "opencode/gpt-6.1-sol:xhigh"],
+  },
 };
 
 const FLAGS = ["task-file", "rounds", "doer-model", "verifier-model", "mux", "turn-timeout", "cwd", "run", "timeout"];
 const USAGE = `Usage:
   pair-work.mjs detect [--json]
+  pair-work.mjs models [--json]   the model each role would use, why, and the ready alternatives
+  pair-work.mjs doctor [--json] [--no-launch] [--mux herdr|rex]   check this environment as a worker sees it, one fix per failure
   pair-work.mjs run --task-file <path> [options]
   pair-work.mjs wait <run-id|run-dir> [--timeout 15m] [--json]  block until the run ends or the timeout passes
   pair-work.mjs close <worker>... [--mux herdr|rex] [--run <id>]   close finished workers (ids from run)
 
 Options:
   --rounds <n>               at most this many verify → address cycles; stops early on "Verdict: accept" (default ${DEFAULTS.rounds})
-  --doer-model <m>           provider/id[:thinking] (default ${DEFAULTS.doerModel})
-  --verifier-model <m>       provider/id[:thinking] (default ${DEFAULTS.verifierModel})
+  --doer-model <m>           provider/id[:thinking] (default: first ready of ${DEFAULTS.models.doer.join(", ")})
+  --verifier-model <m>       provider/id[:thinking] (default: first ready of ${DEFAULTS.models.verifier.join(", ")})
   --mux herdr|rex            override environment detection
   --turn-timeout <dur>       per-turn limit, e.g. 45m (default ${DEFAULTS.turnTimeout})
   --cwd <dir>                worker working directory (default: current)
@@ -133,24 +141,37 @@ export function formatResult(r) {
 }
 
 export async function main(argv, { env = process.env, exec = run, log = console.log, progress = console.error, sleep, now } = {}) {
-  const { positional, flags } = parseArgs(argv, FLAGS);
+  const { positional, flags } = parseArgs(argv, FLAGS, ["json", "help", "h", "no-launch"]);
   const [command] = positional;
   if (!command || flags.help || flags.h) {
     log(USAGE);
     return command || flags.help || flags.h ? 0 : 2;
   }
+  if (flags["no-launch"] && command !== "doctor") throw new Error("--no-launch belongs to doctor");
   const found = detect(env);
   if (command === "detect") return detectCommand(flags, { env, exec, log });
+  if (command === "models") return modelsCommand(flags, { workflow: "pair-work", roles: ROLES, preferences: DEFAULTS.models, callerRole: CALLER_ROLE, env, exec, log, cwd: flags.cwd ?? process.cwd() });
+  if (command === "doctor") return doctorCommand(flags, { workflow: "pair-work", roles: ROLES, preferences: DEFAULTS.models, callerRole: CALLER_ROLE, env, exec, log, cwd: flags.cwd ?? process.cwd(), sleep, now });
   if (command === "close") return closeWorkers(positional.slice(1), { mux: flags.mux ?? found.mux, reason: found.reason, runId: flags.run, env, exec, log });
   if (command === "wait") return waitCommand(positional[1], flags, { log, sleep, now });
   if (command !== "run") throw new Error(`unknown command ${command}\n\n${USAGE}`);
 
   const options = runOptions(flags, { found, env, now, defaults: DEFAULTS, dirName: "pi-pair-work" });
+  // Settled before any pane opens, in the worker's environment (see pair.mjs#resolveModels).
+  const models = requireModels(await resolveModels({
+    roles: ROLES,
+    preferences: DEFAULTS.models,
+    overrides: { doer: flags["doer-model"], verifier: flags["verifier-model"] },
+    callerRole: CALLER_ROLE,
+    env,
+    exec,
+    cwd: options.cwd,
+  }), ROLES);
   const runId = newRunId();
   const result = await tracked({ dir: options.dir, runId, workflow: "pair-work", script: fileURLToPath(import.meta.url), progress }, (note) => runWork({
     ...options,
-    doerModel: flags["doer-model"] ?? DEFAULTS.doerModel,
-    verifierModel: flags["verifier-model"] ?? DEFAULTS.verifierModel,
+    doerModel: models.doer.model,
+    verifierModel: models.verifier.model,
     exec,
     env,
     sleep,
