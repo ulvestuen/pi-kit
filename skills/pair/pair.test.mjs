@@ -1948,6 +1948,10 @@ describe("pair doctor", () => {
     const gone = herdrFor(() => Object.assign(new Error("hc get t1 --json: exit 3"), { stdout: JSON.stringify({ error: { kind: "not_found", message: 'no terminal "t1"' } }) }));
     assert.equal(await main(["doctor"], { env: herdrEnv, exec: gone, log: (s) => (text = s), sleep: async () => {} }), 0);
     assert.match(text, /  pass  launch: .*\(t1 closed\)/);
+    // hc 0.1.21 prints the not_found answer on stderr and nothing on stdout.
+    const goneOnStderr = herdrFor(() => Object.assign(new Error("hc get t1 --json: exit 3"), { stdout: "", stderr: JSON.stringify({ error: { hint: "see `hc ls --all`", kind: "not_found", message: 'no terminal "t1"' } }) }));
+    assert.equal(await main(["doctor"], { env: herdrEnv, exec: goneOnStderr, log: (s) => (text = s), sleep: async () => {} }), 0);
+    assert.match(text, /  pass  launch: .*\(t1 closed\)/);
   });
 
   it("kills a command that overruns the timeout it is given", async () => {

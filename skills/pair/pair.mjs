@@ -106,7 +106,7 @@ export function run(cmd, args, { cwd, env, timeout, platform = process.platform 
     // handler would otherwise keep running — and keep this process's handles open — after the bounded check returned.
     execFile(cmd, args, { cwd, env, timeout, killSignal: "SIGKILL", maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
       // `code` is the exit status: readiness checks read exit 0/1/2 instead of a message (see `modelChecker`).
-      if (error) reject(Object.assign(new Error(`${cmd} ${args.join(" ")}: ${(stderr || error.message).trim()}`), { stdout, code: error.code, killed: error.killed }));
+      if (error) reject(Object.assign(new Error(`${cmd} ${args.join(" ")}: ${(stderr || error.message).trim()}`), { stdout, stderr, code: error.code, killed: error.killed }));
       else resolvePromise(stdout);
     });
   });
@@ -1358,15 +1358,17 @@ function hcControls({ hc, sleep = sleepMs, now = Date.now, timeout = 3_600_000, 
     },
     /**
      * True only when the core says this terminal does not exist: `hc get` then answers exit 3 with
-     * `{"error":{"kind":"not_found","message":"no terminal \"t7\""}}` on stdout. A socket or server failure is not
-     * evidence that the pane disappeared, so it is thrown for the caller to report as unconfirmed closure.
+     * `{"error":{"kind":"not_found","message":"no terminal \"t7\""}}` — on stdout in older releases, on stderr in
+     * hc 0.1.21. A socket or server failure is not evidence that the pane disappeared, so it is thrown for the caller
+     * to report as unconfirmed closure.
      */
     async gone(id) {
       try {
         await get(id);
         return false;
       } catch (error) {
-        if (parseJson(error?.stdout)?.error?.kind === "not_found") return true;
+        const notFound = (text) => parseJson(text)?.error?.kind === "not_found";
+        if (notFound(error?.stdout) || notFound(error?.stderr)) return true;
         throw error;
       }
     },
