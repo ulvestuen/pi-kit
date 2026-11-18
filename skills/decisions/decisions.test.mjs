@@ -138,7 +138,8 @@ test("sends native OpenAI inputs and preserves booleans, distributions, refusals
 });
 
 test("accepts both documented examples and explicit model overrides", async () => {
-  const skill = await readFile(new URL("./SKILL.md", import.meta.url), "utf8");
+  // Windows checkouts may convert SKILL.md to CRLF; the examples are the same either way.
+  const skill = (await readFile(new URL("./SKILL.md", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
   const examples = [...skill.matchAll(/decisions\.mjs (jev|openai) - <<'JSON'\n([\s\S]*?)\nJSON/g)];
   assert.equal(examples.length, 2);
   for (const [, provider, json] of examples) {
