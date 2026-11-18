@@ -2,7 +2,7 @@
 title: Pick pair models in a pop-up instead of a preference list
 status: open
 owner: idar
-updated: 2026-11-18
+updated: 2026-11-19
 ---
 
 ## Background
@@ -135,6 +135,8 @@ Design:
   - **Print mode:** `pi -p` used the defaults, matched the request "gpt-6.1-sol:xhigh"
     to `openai/gpt-6.1-sol:xhigh`, passed the check, and reported that no pop-up
     was shown.
+  - **Shipped:** commit `9c26fac` on `main`. CI passed on ubuntu, macOS and
+    Windows: https://github.com/ulvestuen/pi-kit/actions/runs/44421752829
   - **Still open:**
     - Whether an agent calls `pair_setup` by itself when the user asks in
       plain words.
