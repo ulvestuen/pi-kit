@@ -251,12 +251,25 @@ The matrix and the POSIX branches are covered, but these acceptance scenarios
 - **Rex on an SSH-remote box.** D2's answer is control-only; confirm on a real
   remote that the documented "run the orchestration where the Rex terminals
   run" fallback is what the skill reports there.
-- **The CI matrix itself.** Not pushable from this session: confirm the first
-  run is green on all three runners, that `windows-latest` shows 0 of the two
-  native fixtures skipped, and that the full `npm test` passes on Windows.
 - **A restrictive PowerShell execution policy.** `-ExecutionPolicy Bypass`
   loses to a MachinePolicy/UserPolicy setting; only a managed Windows box can
   show the resulting launcher error.
+
+## Shipped (2026-11-18)
+
+- `c3f3cb3` (all seven steps): ubuntu and macos green; windows failed one
+  non-pair test, `decisions.test.mjs`, because the Windows checkout turned
+  SKILL.md into CRLF and its example regex expected `\n`.
+- `ea56e9b` (that test normalises CRLF): green on all three runners,
+  https://github.com/ulvestuen/pi-kit/actions/runs/44243651583.
+  On `windows-latest` the full `npm test` passed with 186 pass, 0 fail and
+  9 skipped (only POSIX launcher/shebang tests, each with its reason); threema
+  passed 69/69. Both Windows-only native fixtures ran and passed
+  (`runs a real npm-style shim…`, `round-trips non-ASCII…`).
+- Live on macOS in Rex: `pair.mjs doctor` 7/7 pass, including a real dry
+  launch. Every pair run since batch 2 started its workers through the new
+  launcher.
+- Remaining before `status: closed`: the real-machine scenarios in section 6.
 
 ## 7. Open questions for the Herdr maintainers
 
