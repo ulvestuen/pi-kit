@@ -12,8 +12,7 @@
   ],
   "workspaces": [
     "threema",
-    "extensions/pair",
-    "extensions/antigravity"
+    "extensions/pair"
   ],
   "repository": {
     "type": "git",
@@ -22,8 +21,7 @@
   "pi": {
     "extensions": [
       "./threema",
-      "./extensions/pair",
-      "./extensions/antigravity"
+      "./extensions/pair"
     ],
     "skills": [
       "./skills"

@@ -10,7 +10,6 @@ Pi agent
 ├─ skills/       A3 problem solving · pair · pair review · pair work · ship · hansei · search · issue trackers · canvas
 ├─ prompts/      /a3 · /hansei · /ship
 ├─ extensions/   pair → model picker pop-up + /pair · /pair-review · /pair-work
-│                antigravity → provider routing `antigravity/*` through `agy acp` (Pi owns tools)
 └─ threema/      extension → send + receive messages
 ```
 
@@ -100,7 +99,6 @@ The extensions target Pi **1.1.0+** using the `@earendil-works` SDK packages.
 
 - [`threema/`](./threema/) – Threema integration for pi
 - [`extensions/pair/`](./extensions/pair/) – a model picker for the pair skills. When you ask for pair programming, a pair review, or pair work (in plain words or with `/pair`, `/pair-review`, `/pair-work`), the agent calls its `pair_setup` tool, which opens a pop-up to pick each role's model (from your scoped models, else every available one), thinking level, and the rounds. Your last picks per workflow are remembered in `~/.pi/agent/pair-picker.json`. The picks are checked for readiness before any worker pane opens. Without a terminal UI, RPC clients get simple select dialogs, and print/JSON mode or Threema-driven turns use the last picks (or defaults). The skills still work without the extension, using their preference lists.
-- [`extensions/antigravity/`](./extensions/antigravity/) – a Pi provider (`antigravity/*`) that routes Antigravity models through the official `agy acp --stdio` harness while keeping Pi in control of tools, `codemode`, permissions, and session history (`/antigravity-status` checks binary, tier, and discovered models).
 
 ### Prompt aliases
 
