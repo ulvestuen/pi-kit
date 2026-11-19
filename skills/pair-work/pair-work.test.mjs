@@ -132,7 +132,7 @@ describe("pair-work turns and CLI", () => {
     assert.match(text, /^pair-work models \(checked in a worker's environment: /);
     assert.match(text, /\bdoer +\(none ready\)\n +why: claude-code\/claude-opus-5-5 is not ready: credentials_not_configured; .*\n +ready alternatives: openai\/gpt-6\.1-sol:xhigh/);
     assert.match(text, /\bverifier +openai\/gpt-6\.1-sol:xhigh/);
-    assert.match(text, /why: preference 1 of 2/);
+    assert.match(text, new RegExp(`why: preference 1 of ${DEFAULTS.models.verifier.length}`));
   });
 
   it("validates input, rejects other pair flags, and closes worker panes", async () => {

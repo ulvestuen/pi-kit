@@ -919,7 +919,7 @@ describe("pair model readiness", () => {
     const env = { HC_TERMINAL_ID: "t0", HERDR_APP_BIN: "herdr-app", HC_BIN: "hc", PAIR_PI_BIN: fakePi, PATH: "/usr/bin" };
     await assert.rejects(
       main(["run", "--task-file", task], { env, exec: record, log: () => {}, progress: () => {} }),
-      /^Error: implementer model claude-code\/claude-opus-5-5 is not ready: credentials_not_configured; also not ready: anthropic\/claude-opus-5-5 \(credentials_not_configured\); ready alternatives: opencode\/gpt-6\.1-sol:xhigh; pass --implementer-model$/,
+      /^Error: implementer model claude-code\/claude-opus-5-5 is not ready: credentials_not_configured; also not ready: anthropic\/claude-opus-5-5 \(credentials_not_configured\), claude\/opus \(.*?\), agy\/gemini-4-neon:xhigh \(.*?\); ready alternatives: opencode\/gpt-6\.1-sol:xhigh; pass --implementer-model$/,
     );
     assert.deepEqual(calls.filter((c) => c.some((arg) => String(arg).includes("pane.split"))), [], "no pane was opened");
     assert.deepEqual(calls.filter((c) => c[0] === "hc"), [], "the transport was never used");
@@ -934,7 +934,7 @@ describe("pair model readiness", () => {
     let text = "";
     assert.equal(await main(["models"], { env, exec, log: (s) => (text = s) }), 0);
     assert.match(text, /implementer {2}anthropic\/claude-opus-5-5/);
-    assert.match(text, /why: preference 2 of 2/);
+    assert.match(text, new RegExp(`why: preference 2 of ${DEFAULTS.models.implementer.length}`));
     assert.match(text, /auditor {6}openai\/gpt-6\.1-sol:xhigh/);
     assert.match(text, /ready alternatives: openai\/gpt-6\.1-sol/);
     let json = "";

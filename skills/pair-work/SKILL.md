@@ -23,9 +23,10 @@ Use `/pair-work` when the deliverable is something else: a research brief, a
 memo or document, an analysis, a plan, a data set, a configuration audit, or a
 runbook. `{baseDir}/pair-work.mjs` (Node.js 22+, no dependencies) reuses the
 worker transport in `../pair/pair.mjs`, so keep both skill folders installed
-together. It starts two interactive `pi` workers, in new panes next to yours or
-as Herdr core terminals (see Environment), and relays turns through Markdown
-files. These are separate workers, not subagents or one-shot `pi -p` runs. The
+together. It starts two interactive workers (`pi`, or direct `agy/*`, `claude/*`,
+`codex/*` CLIs; see `../pair/SKILL.md`), in new panes next to yours or as Herdr
+core terminals (see Environment), and relays turns through Markdown files.
+These are separate workers, not subagents or one-shot `-p` runs. The
 working directory need not be a Git repository.
 
 ## Environment

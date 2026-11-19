@@ -98,7 +98,7 @@ node skills/doctor.mjs
 The extensions target Pi **1.1.0+** using the `@earendil-works` SDK packages.
 
 - [`threema/`](./threema/) – Threema integration for pi
-- [`extensions/pair/`](./extensions/pair/) – a model picker for the pair skills. When you ask for pair programming, a pair review, or pair work (in plain words or with `/pair`, `/pair-review`, `/pair-work`), the agent calls its `pair_setup` tool, which opens a pop-up to pick each role's model (from your scoped models, else every available one), thinking level, and the rounds. Your last picks per workflow are remembered in `~/.pi/agent/pair-picker.json`. The picks are checked for readiness before any worker pane opens. Without a terminal UI, RPC clients get simple select dialogs, and print/JSON mode or Threema-driven turns use the last picks (or defaults). The skills still work without the extension, using their preference lists.
+- [`extensions/pair/`](./extensions/pair/) – a model picker for the pair skills. When you ask for pair programming, a pair review, or pair work (in plain words or with `/pair`, `/pair-review`, `/pair-work`), the agent calls its `pair_setup` tool, which opens a pop-up to pick each role's model (from your scoped/available Pi models plus ready `agy/*`, `claude/*`, and `codex/*` CLI workers), thinking level, and the rounds. Your last picks per workflow are remembered in `~/.pi/agent/pair-picker.json`. The picks are checked for readiness before any worker pane opens. Without a terminal UI, RPC clients get simple select dialogs, and print/JSON mode or Threema-driven turns use the last picks (or defaults). The skills still work without the extension, using their preference lists.
 
 ### Prompt aliases
 

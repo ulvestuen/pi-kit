@@ -10,6 +10,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  cliThinkingLevels,
   describeSelection,
   fromThreema,
   joinSpec,
@@ -23,6 +24,7 @@ import {
   thinkingChoices,
   WORKFLOW_IDS,
   WORKFLOWS,
+  type CliModelEntry,
   type Requested,
   type Selection,
   type Workflow,
@@ -32,6 +34,15 @@ import { PairPicker } from "./picker.ts";
 const SKILLS = resolve(dirname(fileURLToPath(import.meta.url)), "../../skills");
 const PICKS_FILE = () => join(getAgentDir(), "pair-picker.json");
 const CHECK_TIMEOUT = 120_000;
+const CLI_MODELS_TIMEOUT = 6_000;
+const CLI_MODELS_TTL = 60_000;
+
+interface CliModelsSnapshot {
+  specs: string[];
+  levels: Map<string, readonly string[]>;
+  at: number;
+}
+const cliModelsCache = new Map<string, CliModelsSnapshot>();
 
 export interface PairSetupResult {
   status: "chosen" | "cancelled" | "not-ready";
@@ -68,7 +79,36 @@ async function checkSelection(pi: ExtensionAPI, selection: Selection, cwd: strin
   return problems.length ? problems.join(" · ") : null;
 }
 
-function models(ctx: ExtensionContext): string[] {
+/** Discover ready external CLI models (`agy/*`, `claude/*`, `codex/*`), cached briefly so the pop-up stays fast. */
+async function loadCliModels(pi: ExtensionAPI, cwd: string, signal?: AbortSignal): Promise<{ specs: string[]; levels: Map<string, readonly string[]> }> {
+  const cached = cliModelsCache.get(cwd);
+  if (cached && Date.now() - cached.at < CLI_MODELS_TTL) {
+    return { specs: cached.specs, levels: cached.levels };
+  }
+  const empty = { specs: [] as string[], levels: new Map<string, readonly string[]>() };
+  try {
+    const result = await pi.exec(process.execPath, [scriptFor("pair"), "cli-models", "--json", "--cwd", cwd], {
+      cwd,
+      timeout: CLI_MODELS_TIMEOUT,
+      signal,
+    });
+    if (result.code !== 0) return empty;
+    const parsed = JSON.parse(result.stdout) as { models?: CliModelEntry[] };
+    const specs: string[] = [];
+    const levels = new Map<string, readonly string[]>();
+    for (const entry of parsed.models ?? []) {
+      if (!entry?.spec) continue;
+      specs.push(entry.spec);
+      if (Array.isArray(entry.levels) && entry.levels.length) levels.set(entry.spec, entry.levels);
+    }
+    cliModelsCache.set(cwd, { specs, levels, at: Date.now() });
+    return { specs, levels };
+  } catch {
+    return empty;
+  }
+}
+
+function models(ctx: ExtensionContext, extra: readonly string[] = []): string[] {
   const scoped = ctx.scopedModels.map((entry) => entry.model);
   let available: { provider: string; id: string }[] = [];
   try {
@@ -76,11 +116,13 @@ function models(ctx: ExtensionContext): string[] {
   } catch {
     available = [];
   }
-  return modelList(scoped, available);
+  return modelList(scoped, available, extra);
 }
 
-function levelsFor(ctx: ExtensionContext) {
+function levelsFor(ctx: ExtensionContext, cliLevels?: ReadonlyMap<string, readonly string[]>) {
   return (spec: string): readonly string[] | undefined => {
+    const cli = cliThinkingLevels(spec, cliLevels);
+    if (cli) return cli;
     const slash = spec.indexOf("/");
     if (slash <= 0) return undefined;
     const model = ctx.modelRegistry.find(spec.slice(0, slash), spec.slice(slash + 1));
@@ -89,10 +131,10 @@ function levelsFor(ctx: ExtensionContext) {
 }
 
 /** RPC clients get plain select dialogs: one per role's model, one per thinking level, then rounds. */
-async function selectDialogs(ctx: ExtensionContext, start: Selection, list: string[], check: (s: Selection) => Promise<string | null>): Promise<Selection | null> {
+async function selectDialogs(ctx: ExtensionContext, start: Selection, list: string[], check: (s: Selection) => Promise<string | null>, cliLevels?: ReadonlyMap<string, readonly string[]>): Promise<Selection | null> {
   const selection = structuredClone(start);
   const info = WORKFLOWS[selection.workflow];
-  const levels = levelsFor(ctx);
+  const levels = levelsFor(ctx, cliLevels);
   for (;;) {
     for (const { id, label } of info.roles) {
       const current = selection.roles[id];
@@ -124,7 +166,8 @@ async function selectDialogs(ctx: ExtensionContext, start: Selection, list: stri
 /** The whole picking flow for one workflow, by mode. Saves and returns the confirmed picks. */
 export async function pickModels(pi: ExtensionAPI, ctx: ExtensionContext, workflow: Workflow, requested: Requested, task: string | undefined, signal?: AbortSignal): Promise<PairSetupResult> {
   const file = PICKS_FILE();
-  const list = models(ctx);
+  const cli = await loadCliModels(pi, ctx.cwd, signal);
+  const list = models(ctx, cli.specs);
   const { selection: start, sources } = preselect(workflow, { requested, saved: loadPicks(file), models: list });
   const check = (selection: Selection) => checkSelection(pi, selection, ctx.cwd, signal);
   const awayOnThreema = fromThreema(ctx.sessionManager.getBranch());
@@ -135,12 +178,12 @@ export async function pickModels(pi: ExtensionAPI, ctx: ExtensionContext, workfl
     via = "overlay";
     chosen = await ctx.ui.custom<Selection | null>(
       (tui, theme, _keybindings, done) =>
-        new PairPicker(theme, { selection: start, sources, models: list, task, levelsFor: levelsFor(ctx), check, done, requestRender: () => tui.requestRender() }),
+        new PairPicker(theme, { selection: start, sources, models: list, task, levelsFor: levelsFor(ctx, cli.levels), check, done, requestRender: () => tui.requestRender() }),
       { overlay: true, overlayOptions: { anchor: "center", width: "70%", minWidth: 60, maxHeight: "80%" } },
     );
   } else if (ctx.mode === "rpc" && ctx.hasUI && !awayOnThreema) {
     via = "select";
-    chosen = await selectDialogs(ctx, start, list, check);
+    chosen = await selectDialogs(ctx, start, list, check, cli.levels);
   } else {
     via = "saved";
     const problem = await check(start);

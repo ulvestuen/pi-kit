@@ -11,13 +11,24 @@ import { homedir, tmpdir } from "node:os";
 import { join, posix, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  backendLaunchArgs,
+  backendOf,
+  createExternalChecker,
+  EXTERNAL_BACKENDS,
+  isExternalBackend,
+  resolveBackendBin,
+} from "./backends.mjs";
+
+export { backendLaunchArgs, backendOf, createExternalChecker, EXTERNAL_BACKENDS, isExternalBackend, resolveBackendBin };
+
 export const DEFAULTS = {
   rounds: 3,
   turnTimeout: "60m",
   // Ordered preferences per role, not fixed IDs: the first model that is ready in the worker's environment is used.
   models: {
-    implementer: ["claude-code/claude-opus-5-5", "anthropic/claude-opus-5-5"],
-    auditor: ["openai/gpt-6.1-sol:xhigh", "opencode/gpt-6.1-sol:xhigh"],
+    implementer: ["claude-code/claude-opus-5-5", "anthropic/claude-opus-5-5", "claude/opus", "agy/gemini-4-neon:xhigh"],
+    auditor: ["openai/gpt-6.1-sol:xhigh", "opencode/gpt-6.1-sol:xhigh", "codex/gpt-6.1-sol:xhigh", "agy/gemini-4-neon:xhigh"],
   },
 };
 export const DONE = "<!-- pair:done -->";
@@ -64,6 +75,7 @@ const CALLER_ROLE = "implementer";
 const USAGE = `Usage:
   pair.mjs detect [--json]
   pair.mjs models [--json] [--no-scan] [--<role>-model m]   the model each role would use, why, and ready alternatives (--no-scan: check only these)
+  pair.mjs cli-models [--json]                              list ready agy/*, claude/*, and codex/* CLI models
   pair.mjs doctor [--json] [--no-launch] [--mux herdr|rex]   check this environment as a worker sees it, one fix per failure
   pair.mjs run --task-file <path> [options]
   pair.mjs wait <run-id|run-dir> [--timeout 15m] [--json]  block until the run ends or the timeout passes
@@ -255,10 +267,10 @@ export const LAUNCH_ID = "launch.id";
  * `idFile` records the worker's identity when the launcher starts (before any work), which is the recovery path for a
  * pane whose creation answer never arrived.
  */
-export function launcherScript({ env = {}, pi, node, entry, exitFile, idFile, mux, cwd, platform = process.platform }) {
+export function launcherScript({ env = {}, pi, node, entry, command: explicitCommand, exitFile, idFile, mux, cwd, platform = process.platform }) {
   const names = Object.keys(env).filter((name) => SHELL_NAME.test(name)).sort();
   const idVar = identityVar(mux);
-  const command = piCommand({ pi, node, entry });
+  const command = explicitCommand ?? piCommand({ pi, node, entry });
   if (platform === "win32") return powershellLauncher({ env, names, command, exitFile, idFile, idVar, cwd: cwd ? String(cwd) : null });
   const exit = exitFile ? shellQuote(exitFile) : null;
   const id = idVar ? `\${${idVar}:-?}` : "?";
@@ -427,10 +439,10 @@ export function powershell(env = process.env, { exists = existsSync } = {}) {
  * without it a non-ASCII caller value or a Unicode user name in a path is corrupted before the worker starts
  * (audit 4). The POSIX script is plain UTF-8, as `sh` expects.
  */
-export function writeLauncher({ dir, env, pi, node, entry, exitFile, idFile, mux, cwd, platform = process.platform }) {
+export function writeLauncher({ dir, env, pi, node, entry, command, exitFile, idFile, mux, cwd, platform = process.platform, filename }) {
   const windows = platform === "win32";
-  const file = join(dir, windows ? "launch.ps1" : "launch.sh");
-  const text = launcherScript({ env, pi, node, entry, exitFile, idFile, mux, cwd, platform });
+  const file = join(dir, filename ?? (windows ? "launch.ps1" : "launch.sh"));
+  const text = launcherScript({ env, pi, node, entry, command, exitFile, idFile, mux, cwd, platform });
   writeFileSync(file, windows ? `\uFEFF${text}` : text, { mode: 0o700 });
   if (!windows) chmodSync(file, 0o700);
   return file;
@@ -594,6 +606,45 @@ export function prepareLaunch({ dir, env = process.env, mux, cwd = process.cwd()
 }
 
 /**
+ * Write a backend-specific worker launcher (`launch-agy.sh`, `launch-claude.sh`, `launch-codex.sh`) sharing
+ * the run's `launch.exit`, `launch.id`, and sanitized environment.
+ */
+export function prepareBackendLaunch(backend, { dir, env = process.env, PATH, mux, cwd = process.cwd(), workdir = cwd, platform = process.platform, execPath = process.execPath, exists = existsSync, readFile = readFileSync, pathext, exitFile = join(dir, LAUNCH_EXIT), idFile = join(dir, LAUNCH_ID) } = {}) {
+  const resolved = resolveBackendBin(backend, { env, cwd, execPath, exists, readFile, platform, pathext });
+  if (!resolved) {
+    throw new Error(`${backend} not found on PATH; install ${backend} or set PAIR_${backend.toUpperCase()}_BIN`);
+  }
+  const separator = pathDelimiter(platform);
+  const rawPath = PATH ?? String(envGet(env, "PATH", { platform }) ?? "").split(separator).filter(Boolean).map((entry) => absoluteFrom(entry, cwd, platform)).join(separator);
+  const effectivePath = prependPath(resolved.node && pathOf(platform).dirname(resolved.node), rawPath, platform);
+  const windows = platform === "win32";
+  const filename = windows ? `launch-${backend}.ps1` : `launch-${backend}.sh`;
+  const launcher = writeLauncher({
+    dir,
+    env: launchEnv(env, effectivePath, platform),
+    command: resolved.command,
+    exitFile,
+    idFile,
+    mux,
+    cwd: workdir,
+    platform,
+    filename,
+  });
+  const runner = windows ? [powershell(env, { exists }), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File"] : [];
+  return {
+    backend,
+    bin: resolved.bin,
+    command: resolved.command,
+    PATH: effectivePath,
+    launcher,
+    exitFile,
+    idFile,
+    record: { backend, bin: resolved.bin, command: resolved.command, PATH: effectivePath, launcher },
+    argv: (args) => [...runner, launcher, ...args],
+  };
+}
+
+/**
  * The exit code a worker's launcher recorded in `launch.exit`, or null while it has not exited. A line naming the
  * worker's own address matches it; `?` is an identity the launcher could not determine (the selected mux's variable
  * was unset, or no mux was known) and counts for any worker, because a worker exiting during a turn or startup is a
@@ -688,10 +739,15 @@ function authDetail(parsed) {
  * load extension-provided providers) is ready but `verified: false` — "listed, auth unverifiable" — and a real
  * `not_ready` from a provider auth check still blocks. `verified` is true only for an authorized model.
  */
-export function modelChecker({ pi, node, entry, env = process.env, cwd = process.cwd(), exec = run }) {
+export function modelChecker({ pi, node, entry, env = process.env, cwd = process.cwd(), callerCwd = cwd, exec = run, exists = existsSync, readFile = readFileSync, platform = process.platform, pathext }) {
   // `node <entry>` when Pi is a JS entry point (a Windows bat shim is resolved first), else the path itself.
-  const [file, ...prefix] = piCommand({ pi, node, entry });
-  const spawn = (args) => exec(file, [...prefix, ...args], { cwd, env });
+  const hasPi = Boolean(pi);
+  const [file, ...prefix] = hasPi ? piCommand({ pi, node, entry }) : [null];
+  const spawn = (args) => {
+    if (!file) return Promise.reject(new Error("pi not found on PATH"));
+    return exec(file, [...prefix, ...args], { cwd, env });
+  };
+  const external = createExternalChecker({ env, cwd, callerCwd, exec, exists, readFile, platform, pathext });
   const tables = new Map();
   const statuses = new Map();
   const providers = new Map();
@@ -728,6 +784,9 @@ export function modelChecker({ pi, node, entry, env = process.env, cwd = process
     return providers.get(provider);
   };
   const probe = async (parts) => {
+    if (isExternalBackend(parts.spec)) {
+      return external.check(parts);
+    }
     const status = { spec: parts.spec, model: parts.model, thinking: parts.thinking };
     try {
       if (!(await listed(parts))) {
@@ -756,25 +815,29 @@ export function modelChecker({ pi, node, entry, env = process.env, cwd = process
   };
   const check = async (spec) => {
     const parts = modelParts(spec);
-    if (!statuses.has(parts.model)) statuses.set(parts.model, await probe(parts));
-    return statuses.get(parts.model);
+    const cacheKey = isExternalBackend(parts.spec) ? parts.spec : parts.model;
+    if (!statuses.has(cacheKey)) statuses.set(cacheKey, await probe(parts));
+    return statuses.get(cacheKey);
   };
+  let externalScanned = false;
   return {
     check,
     /** Every model probed so far, in order, so a caller can name the ready ones without probing again. */
     known: () => [...statuses.values()],
     /**
-     * Ready models to name as alternatives, probed from `pi --list-models`. Candidates are ordered per call — the
-     * roles' own model ids on their other providers first, then a provider-balanced sweep so one unauthenticated
-     * provider cannot use up every probe — and models probed by an earlier call are never probed again, so a caller
-     * can keep asking until `exhausted` says the catalog has nothing left. `budget` bounds the probes in one call.
+     * Ready models to name as alternatives, probed from `pi --list-models` plus installed CLI backends
+     * (`agy`, `claude`, `codex`). Candidates are ordered per call — the roles' own model ids on their other
+     * providers first, then a provider-balanced sweep so one unauthenticated provider cannot use up every probe —
+     * and models probed by an earlier call are never probed again. `budget` bounds the probes in one call.
      */
     async scan({ prefer = [], limit = 5, budget = 8 } = {}) {
-      let rows;
-      try {
-        rows = await table();
-      } catch {
-        return { ready: [], exhausted: true };
+      let rows = [];
+      if (hasPi) {
+        try {
+          rows = await table();
+        } catch {
+          rows = [];
+        }
       }
       const byProvider = new Map();
       const providersOf = new Map();
@@ -786,7 +849,7 @@ export function modelChecker({ pi, node, entry, env = process.env, cwd = process
       const order = [];
       const add = (spec) => {
         const { model } = modelParts(spec);
-        if (!statuses.has(model) && !order.includes(model)) order.push(model);
+        if (!statuses.has(model) && !statuses.has(spec) && !order.includes(model)) order.push(model);
       };
       // The same model id on its other providers first: that is the one substitution a user can make knowingly, and
       // the alternative a pairing role actually names.
@@ -807,7 +870,17 @@ export function modelChecker({ pi, node, entry, env = process.env, cwd = process
         if ((await check(spec)).ready) ready.push(spec);
         if (ready.length >= limit) break;
       }
-      return { ready, exhausted: order.length <= budget };
+      if (ready.length < limit && !externalScanned) {
+        externalScanned = true;
+        const extModels = await external.discoverAll().catch(() => []);
+        for (const entry of extModels) {
+          if (statuses.has(entry.spec)) continue;
+          const res = await check(entry.spec);
+          if (res.ready) ready.push(entry.spec);
+          if (ready.length >= limit) break;
+        }
+      }
+      return { ready, exhausted: order.length <= budget && externalScanned };
     },
   };
 }
@@ -838,10 +911,19 @@ export function callerModel(env = process.env) {
  * while the readiness commands run in `cwd`, the worker's directory, where its project and provider config apply.
  */
 export async function resolveModels({ roles, preferences = {}, overrides = {}, callerRole, env = process.env, cwd = process.cwd(), callerCwd = process.cwd(), launch, exec = run, checker, scan = false, limit = 5 }) {
+  const allExternalOverrides = roles.every((role) => overrides[role] && isExternalBackend(overrides[role]));
   const probe = checker ?? (() => {
     // The same resolution the worker launcher uses (`workers` → `prepareLaunch`), so what is checked is what is run.
-    const resolved = launch ?? resolveLaunch({ env, cwd: callerCwd });
-    return modelChecker({ pi: resolved.pi, node: resolved.node, entry: resolved.entry, env: { ...workerEnv(env), PATH: resolved.PATH }, cwd, exec });
+    let resolved = launch ?? null;
+    if (!resolved) {
+      try {
+        resolved = resolveLaunch({ env, cwd: callerCwd });
+      } catch (err) {
+        if (!allExternalOverrides) throw err;
+      }
+    }
+    const probeEnv = resolved ? { ...workerEnv(env), PATH: resolved.PATH } : workerEnv(env);
+    return modelChecker({ pi: resolved?.pi, node: resolved?.node, entry: resolved?.entry, env: probeEnv, cwd, callerCwd, exec });
   })();
   const caller = callerRole ? callerModel(env) : null;
   // The model ids the roles care about: the scan tries these on their other providers before anything else, so a
@@ -958,10 +1040,31 @@ export function formatModels(choices, { workflow, pi, roles }) {
  */
 export async function modelsCommand(flags, { workflow, roles, preferences, callerRole, env, exec, log, cwd = process.cwd(), callerCwd = process.cwd() }) {
   const options = Object.fromEntries(roles.map((role) => [role, flags[`${role}-model`]]));
-  const launch = resolveLaunch({ env, cwd: callerCwd });
+  const allExternal = roles.every((role) => options[role] && isExternalBackend(options[role]));
+  let launch = null;
+  try {
+    launch = resolveLaunch({ env, cwd: callerCwd });
+  } catch (err) {
+    if (!allExternal) throw err;
+  }
   const choices = await resolveModels({ roles, preferences, overrides: options, callerRole, env, cwd: resolve(cwd), callerCwd, launch, exec, scan: !flags["no-scan"] });
-  log(flags.json ? JSON.stringify({ workflow, pi: launch.pi, models: choices }, null, 2) : formatModels(choices, { workflow, pi: launch.pi, roles }));
+  log(flags.json ? JSON.stringify({ workflow, pi: launch?.pi ?? null, models: choices }, null, 2) : formatModels(choices, { workflow, pi: launch?.pi ?? "external CLI", roles }));
   return roles.every((role) => choices[role].ready) ? 0 : 1;
+}
+
+/** `cli-models [--json]`: list ready `agy/*`, `claude/*`, and `codex/*` models for the picker. */
+export async function cliModelsCommand(flags, { env = process.env, exec = run, log = console.log, cwd = process.cwd(), callerCwd = process.cwd() } = {}) {
+  const checker = createExternalChecker({ env: workerEnv(env), cwd: resolve(cwd), callerCwd, exec });
+  const models = await checker.discoverAll();
+  if (flags.json) {
+    log(JSON.stringify({ models }, null, 2));
+  } else if (models.length === 0) {
+    log("No external CLI models ready (agy, claude, codex).");
+  } else {
+    const width = Math.max(...models.map((m) => m.spec.length));
+    log(models.map((m) => `${m.spec.padEnd(width)}  ${m.levels.join(",")}`).join("\n"));
+  }
+  return 0;
 }
 
 /**
@@ -1560,6 +1663,9 @@ export const LIMIT_PATTERNS = [
   /charged to (?:\w+ )?usage credits/i,
   /UsageLimitError/,
   /out of (?:plan )?(?:usage|quota)/i,
+  /RESOURCE_EXHAUSTED/i,
+  /quota (?:has been )?(?:exceeded|exhausted)/i,
+  /hit your (?:usage )?limit/i,
 ];
 
 /**
@@ -1585,10 +1691,28 @@ export class StoppedError extends Error {
  * Lines that mean a worker never started: the program is missing, the model is unknown, or no provider is logged in.
  * Startup has nothing else on screen yet, so these are safe to match there.
  */
-export const STARTUP_ERRORS = [/No API key found/i, /Model not found/i, /unknown model/i, /command not found/i, /No such file or directory/i, /Use \/login|\/login to log/i];
+export const STARTUP_ERRORS = [
+  /No API key found/i,
+  /Model not found/i,
+  /unknown model/i,
+  /command not found/i,
+  /No such file or directory/i,
+  /Use \/login|\/login to log/i,
+  /please run [`']?(?:agy|claude auth login|codex login)/i,
+  /trust (?:this folder|the files in this folder)/i,
+];
 
 /** The same notices that are still conclusive during a turn: nobody is logged in, so no report is coming. */
-export const TURN_ERRORS = [/No API key found/i, /Model not found/i, /unknown model/i, /Use \/login|\/login to log/i, /not (?:logged|signed) in/i, /not authenticated/i];
+export const TURN_ERRORS = [
+  /No API key found/i,
+  /Model not found/i,
+  /unknown model/i,
+  /Use \/login|\/login to log/i,
+  /not (?:logged|signed) in/i,
+  /not authenticated/i,
+  /please run [`']?(?:agy|claude auth login|codex login)/i,
+  /trust (?:this folder|the files in this folder)/i,
+];
 
 /** The last lines of a worker's screen, for an error message. */
 export const screenTail = (screen, lines = 12) => linesOf(screen).slice(-lines).join("\n").trim();
@@ -1792,11 +1916,42 @@ export async function workers({ task, mux, cwd, dir, turnTimeout, label = "Pair 
   // Reports and the worker launcher hold the caller's environment: keep them for this user only.
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   // The caller's environment, resolved in the caller's directory: relative overrides and PATH entries are the
-  // caller's files, not the worker folder's.
-  const launch = prepareLaunch({ dir, env, mux, cwd: process.cwd(), workdir: cwd });
+  // caller's files, not the worker folder's. Prepare Pi lazily if Pi is missing (e.g. an agy/claude/codex-only run).
+  const exitFile = join(dir, LAUNCH_EXIT);
+  const idFile = join(dir, LAUNCH_ID);
+  let piLaunch = null;
+  let piLaunchError = null;
+  try {
+    piLaunch = prepareLaunch({ dir, env, mux, cwd: process.cwd(), workdir: cwd });
+  } catch (err) {
+    piLaunchError = err;
+  }
+  const backendLaunches = new Map();
+  const getLaunchFor = (backend) => {
+    if (backend === "pi") {
+      if (piLaunch) return piLaunch;
+      throw piLaunchError ?? new Error("pi not found on PATH");
+    }
+    if (!backendLaunches.has(backend)) {
+      backendLaunches.set(
+        backend,
+        prepareBackendLaunch(backend, {
+          dir,
+          env,
+          PATH: piLaunch?.PATH,
+          mux,
+          cwd: process.cwd(),
+          workdir: cwd,
+          exitFile,
+          idFile,
+        }),
+      );
+    }
+    return backendLaunches.get(backend);
+  };
   const baseline = await exec("git", ["status", "--short", "--branch"], { cwd }).then((s) => `\`git status --short --branch\`:\n\n\`\`\`\n${s.trim()}\n\`\`\``, () => "");
   writeFileSync(join(dir, "task.md"), task);
-  updateStatus(dir, { launch: launch.record });
+  if (piLaunch) updateStatus(dir, { launch: piLaunch.record });
 
   let step = 0;
   const reports = [];
@@ -1822,13 +1977,27 @@ export async function workers({ task, mux, cwd, dir, turnTimeout, label = "Pair 
       writeFileSync(turn, render({ role, kind, task, report, baseline, ...extra }));
       return { turn, report, prompt: `${label} (${role}, ${kind}): read ${turn} and follow it exactly.` };
     },
-    // The first task is Pi's launch argument, so it cannot be dropped by a send to a booting agent.
+    // The first task is each CLI's launch argument, so it cannot be dropped by a send to a booting agent.
     async spawn(anchor, direction, name, model, prompt) {
       const role = parseLabel(name).role;
-      const id = await panes.split(anchor, direction, name, launch.argv(["--model", model, prompt]));
+      const backend = backendOf(model);
+      const parts = modelParts(model);
+      const activeLaunch = getLaunchFor(backend);
+      const cliArgs = backendLaunchArgs(backend, { spec: model, id: parts.id, thinking: parts.thinking, prompt, runDir: dir });
+      const id = await panes.split(anchor, direction, name, activeLaunch.argv(cliArgs));
       const status = readStatus(dir);
-      if (status) updateStatus(dir, { mux, layout: panes.layout, workers: { ...status.workers, [role]: id } });
-      await awaitStartup(id, { panes, role, launch: launch.record, dir, exitFile: launch.exitFile, sleep, now, progress });
+      if (status) {
+        updateStatus(dir, {
+          mux,
+          layout: panes.layout,
+          workers: { ...status.workers, [role]: id },
+          ...(backend !== "pi" ? { backends: { ...(status.backends ?? {}), [role]: activeLaunch.record } } : {}),
+        });
+      }
+      const startupLaunch = backend === "pi"
+        ? activeLaunch.record
+        : { pi: activeLaunch.bin, node: activeLaunch.command.length > 1 ? activeLaunch.command[0] : null, PATH: activeLaunch.PATH };
+      await awaitStartup(id, { panes, role, launch: startupLaunch, dir, exitFile, sleep, now, progress });
       return id;
     },
     async finish(role, id, { report }) {
@@ -1848,8 +2017,8 @@ export async function workers({ task, mux, cwd, dir, turnTimeout, label = "Pair 
         }, (error) => {
           throw new Error(`${role} ${panes.layout === "panes" ? "pane" : "terminal"} ${id} is gone (${error.message}); reports so far are in ${dir}`);
         });
-        // The launcher records Pi's exit, which is a death signal even where the agent reports no status.
-        const code = launcherExit(launch.exitFile, id);
+        // The launcher records the worker's exit, which is a death signal even where the agent reports no status.
+        const code = launcherExit(exitFile, id);
         if (code !== null) throw new Error(`${role} ${id} exited (code ${code}) before writing ${report}; reports so far are in ${dir}`);
         const status = await panes.status?.(id).catch(() => null);
         last = status ?? last;
@@ -2287,6 +2456,7 @@ export async function main(argv, { env = process.env, exec = run, log = console.
   const found = detect(env);
   if (command === "detect") return detectCommand(flags, { env, exec, log });
   if (command === "models") return modelsCommand(flags, { workflow: "pair", roles: ROLES, preferences: DEFAULTS.models, callerRole: CALLER_ROLE, env, exec, log, cwd: flags.cwd ?? process.cwd() });
+  if (command === "cli-models") return cliModelsCommand(flags, { env, exec, log, cwd: flags.cwd ?? process.cwd() });
   if (command === "doctor") return doctorCommand(flags, { workflow: "pair", roles: ROLES, preferences: DEFAULTS.models, callerRole: CALLER_ROLE, env, exec, log, cwd: flags.cwd ?? process.cwd(), sleep, now });
   if (command === "close") return closeWorkers(positional.slice(1), { mux: flags.mux ?? found.mux, reason: found.reason, runId: flags.run, env, exec, log });
   if (command === "wait") return waitCommand(positional[1], flags, { log, sleep, now });

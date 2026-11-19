@@ -21,9 +21,10 @@ counterpart of the `pair` skill: `/pair` builds a change with an implementer and
 an auditor, while `/pair-review` only reviews existing work and changes nothing.
 `{baseDir}/pair-review.mjs` (Node.js 22+, no dependencies) reuses the worker
 transport in `../pair/pair.mjs`, so keep both skill folders installed together.
-It starts two interactive `pi` workers, in new panes next to yours or as Herdr
+It starts two interactive workers (`pi`, or direct `agy/*`, `claude/*`,
+`codex/*` CLIs; see `../pair/SKILL.md`), in new panes next to yours or as Herdr
 core terminals (see Environment), and relays turns through Markdown files.
-These are separate workers, not subagents or one-shot `pi -p` runs.
+These are separate workers, not subagents or one-shot `-p` runs.
 
 ## Environment
 

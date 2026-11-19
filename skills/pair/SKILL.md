@@ -22,11 +22,17 @@ non-coding work (research, writing, analysis) with a doer and a verifier, use
 `pair-work` (`/pair-work`).
 
 You orchestrate; you do not implement. `{baseDir}/pair.mjs` (Node.js 22+, no
-dependencies) starts two interactive `pi` workers the user can watch: in new
-panes next to yours where the multiplexer can place them, otherwise as Herdr
-core terminals the user can attach to. It sends each turn as a Markdown file
+dependencies) starts two interactive workers the user can watch — `pi` by
+default, or direct interactive `agy` (`agy/<model>[:effort]`), `claude`
+(`claude/<model>[:effort]`), and `codex` (`codex/<model>[:effort]`) TUIs — in
+new panes next to yours where the multiplexer can place them, otherwise as
+Herdr core terminals the user can attach to. External CLI workers launch with
+their unrestricted auto-approve flags (`--dangerously-skip-permissions` /
+`--dangerously-bypass-approvals-and-sandbox`) plus `--add-dir <runDir>` so
+rounds complete unattended; override binary paths with `PAIR_AGY_BIN`,
+`PAIR_CLAUDE_BIN`, or `PAIR_CODEX_BIN`. It sends each turn as a Markdown file
 and waits for the worker's report file before starting the next turn. These
-are separate workers, not subagents or one-shot `pi -p` runs.
+are separate workers, not subagents or one-shot `-p` runs.
 
 ## Environment
 

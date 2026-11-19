@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  cliThinkingLevels,
   describeSelection,
   fromThreema,
   joinSpec,
@@ -60,6 +61,20 @@ describe("modelList", () => {
   });
   it("falls back to every available model, without duplicates", () => {
     assert.deepEqual(modelList([], [m("a", "x"), m("a", "x"), m("b", "y")]), ["a/x", "b/y"]);
+  });
+  it("appends discovered external CLI models and resolves their thinking levels", () => {
+    const extra = ["agy/gemini-4-neon", "claude/opus", "codex/gpt-6.1-sol"];
+    assert.deepEqual(modelList([m("openai", "gpt-6.1-sol")], [], extra), [
+      "openai/gpt-6.1-sol",
+      "agy/gemini-4-neon",
+      "claude/opus",
+      "codex/gpt-6.1-sol",
+    ]);
+    const discovered = new Map<string, readonly string[]>([["agy/gemini-3.8-flash", ["low", "medium", "high"]]]);
+    assert.deepEqual(cliThinkingLevels("agy/gemini-3.8-flash", discovered), ["low", "medium", "high"]);
+    assert.deepEqual(cliThinkingLevels("claude/opus:high"), ["low", "medium", "high", "xhigh", "max"]);
+    assert.deepEqual(cliThinkingLevels("codex/gpt-6.1-sol"), ["low", "medium", "high", "xhigh"]);
+    assert.equal(cliThinkingLevels("openai/gpt-6.1-sol"), undefined);
   });
 });
 

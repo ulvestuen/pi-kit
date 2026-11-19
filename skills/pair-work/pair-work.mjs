@@ -18,8 +18,8 @@ export const DEFAULTS = {
   turnTimeout: "60m",
   // Ordered preferences per role: the first model that is ready in the worker's environment is used.
   models: {
-    doer: ["claude-code/claude-opus-5-5", "anthropic/claude-opus-5-5"],
-    verifier: ["openai/gpt-6.1-sol:xhigh", "opencode/gpt-6.1-sol:xhigh"],
+    doer: ["claude-code/claude-opus-5-5", "anthropic/claude-opus-5-5", "claude/opus", "agy/gemini-4-neon:xhigh"],
+    verifier: ["openai/gpt-6.1-sol:xhigh", "opencode/gpt-6.1-sol:xhigh", "codex/gpt-6.1-sol:xhigh", "agy/gemini-4-neon:xhigh"],
   },
 };
 

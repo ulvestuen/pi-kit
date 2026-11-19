@@ -99,10 +99,39 @@ export function matchModel(text: string, models: readonly string[]): RolePick {
   return { model: partial[0] ?? model, thinking };
 }
 
-/** The models the picker lists: scoped ones when scoping is configured, else every available one. Deduplicated. */
-export function modelList(scoped: readonly { provider: string; id: string }[], available: readonly { provider: string; id: string }[]): string[] {
+export const CLI_DEFAULT_LEVELS: Record<string, readonly string[]> = {
+  agy: ["low", "medium", "high", "xhigh"],
+  claude: ["low", "medium", "high", "xhigh", "max"],
+  codex: ["low", "medium", "high", "xhigh"],
+};
+
+export interface CliModelEntry {
+  spec: string;
+  levels?: readonly string[];
+}
+
+/** Supported thinking levels for an external CLI model spec (`agy/*`, `claude/*`, `codex/*`), or undefined for Pi models. */
+export function cliThinkingLevels(
+  spec: string,
+  discovered?: ReadonlyMap<string, readonly string[]>,
+): readonly string[] | undefined {
+  const { model } = splitSpec(spec);
+  const exact = discovered?.get(model);
+  if (exact?.length) return exact;
+  const slash = model.indexOf("/");
+  if (slash <= 0) return undefined;
+  const provider = model.slice(0, slash).toLowerCase();
+  return CLI_DEFAULT_LEVELS[provider];
+}
+
+/** The models the picker lists: scoped ones when scoping is configured, else every available one, plus ready CLI backends. Deduplicated. */
+export function modelList(
+  scoped: readonly { provider: string; id: string }[],
+  available: readonly { provider: string; id: string }[],
+  extra: readonly string[] = [],
+): string[] {
   const source = scoped.length ? scoped : available;
-  return [...new Set(source.map((m) => `${m.provider}/${m.id}`))];
+  return [...new Set([...source.map((m) => `${m.provider}/${m.id}`), ...extra])];
 }
 
 // ---------- saved picks ----------
