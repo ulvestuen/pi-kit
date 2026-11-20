@@ -22,7 +22,9 @@ import {
   WORKFLOWS,
   type Selection,
 } from "./lib.ts";
+import { pickModels } from "./index.ts";
 import { PairPicker } from "./picker.ts";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 
 const MODELS = [
@@ -145,6 +147,35 @@ describe("fromThreema", () => {
     assert.equal(fromThreema([user("hi"), user([{ type: "text", text: "[Threema message from ABCD1234]: pair on x" }])]), true);
     assert.equal(fromThreema([user("[Threema message from X]: a"), user("now at the desk")]), false);
     assert.equal(fromThreema([]), false);
+  });
+});
+
+describe("pickModels", () => {
+  it("runs CLI discovery and readiness through Node rather than the Pi executable", async () => {
+    const calls: { command: string; args: string[] }[] = [];
+    const pi = {
+      exec: async (command: string, args: string[]) => {
+        calls.push({ command, args });
+        const stdout = args[1] === "cli-models" ? '{"models":[]}' : '{"models":{}}';
+        return { code: 0, stdout, stderr: "", killed: false, truncated: false };
+      },
+    } as unknown as ExtensionAPI;
+    const ctx = {
+      cwd: process.cwd(),
+      mode: "print",
+      scopedModels: [],
+      modelRegistry: { getAvailable: () => [] },
+      sessionManager: { getBranch: () => [] },
+    } as unknown as ExtensionContext;
+
+    // Keep the fixture not-ready so it never writes saved picks.
+    const result = await pickModels(pi, ctx, "pair", {}, undefined);
+    assert.equal(result.status, "not-ready");
+    assert.deepEqual(calls.map(({ command, args }) => [command, args[1]]), [
+      ["node", "cli-models"],
+      ["node", "models"],
+    ]);
+    assert.deepEqual(calls[1].args.slice(2, 6), ["--json", "--no-scan", "--cwd", ctx.cwd]);
   });
 });
 

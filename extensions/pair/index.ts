@@ -32,6 +32,8 @@ import {
 import { PairPicker } from "./picker.ts";
 
 const SKILLS = resolve(dirname(fileURLToPath(import.meta.url)), "../../skills");
+// The skill scripts require Node; process.execPath is Pi itself in standalone installs.
+const NODE = "node";
 const PICKS_FILE = () => join(getAgentDir(), "pair-picker.json");
 const CHECK_TIMEOUT = 120_000;
 const CLI_MODELS_TIMEOUT = 6_000;
@@ -61,7 +63,7 @@ async function checkSelection(pi: ExtensionAPI, selection: Selection, cwd: strin
   const roles = WORKFLOWS[selection.workflow].roles;
   const args = [scriptFor(selection.workflow), "models", "--json", "--no-scan", "--cwd", cwd];
   for (const { id } of roles) args.push(`--${id}-model`, joinSpec(selection.roles[id]));
-  const result = await pi.exec(process.execPath, args, { cwd, timeout: CHECK_TIMEOUT, signal });
+  const result = await pi.exec(NODE, args, { cwd, timeout: CHECK_TIMEOUT, signal });
   let report: any;
   try {
     report = JSON.parse(result.stdout);
@@ -87,7 +89,7 @@ async function loadCliModels(pi: ExtensionAPI, cwd: string, signal?: AbortSignal
   }
   const empty = { specs: [] as string[], levels: new Map<string, readonly string[]>() };
   try {
-    const result = await pi.exec(process.execPath, [scriptFor("pair"), "cli-models", "--json", "--cwd", cwd], {
+    const result = await pi.exec(NODE, [scriptFor("pair"), "cli-models", "--json", "--cwd", cwd], {
       cwd,
       timeout: CLI_MODELS_TIMEOUT,
       signal,
