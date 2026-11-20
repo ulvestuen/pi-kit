@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { after, describe, it } from "node:test";
 
 import {
@@ -29,13 +29,16 @@ after(() => {
 });
 
 const fast = { sleep: async () => {}, now: () => 1_700_000_000_000 };
+const windows = process.platform === "win32";
+const launcherName = (backend) => `launch${backend ? `-${backend}` : ""}.${windows ? "ps1" : "sh"}`;
 
 function makeBinDir() {
   const dir = tmp();
   const touch = (name) => {
-    const p = join(dir, name);
-    writeFileSync(p, "#!/bin/sh\nexit 0\n");
-    chmodSync(p, 0o755);
+    // All calls are mocked, but discovery still needs a platform-native filename.
+    const p = join(dir, windows ? `${name}.exe` : name);
+    writeFileSync(p, windows ? "" : "#!/bin/sh\nexit 0\n");
+    if (!windows) chmodSync(p, 0o755);
     return p;
   };
   return {
@@ -214,10 +217,10 @@ describe("mixed-backend pair, pair-review, and pair-work runs", () => {
   function fakeRexExec(splits, sent) {
     let nextId = 0;
     const writeReportFromPrompt = (prompt) => {
-      const m = /read (\S+\.turn\.md)/.exec(prompt);
+      const m = /: read (.+\.turn\.md) and follow it exactly\.$/.exec(prompt);
       if (!m) return;
       const turnText = readFileSync(m[1], "utf8");
-      const r = /write your report as Markdown to:\n\n(\S+)/.exec(turnText);
+      const r = /write your report as Markdown to:\n\n([^\n]+)/.exec(turnText);
       if (!r) return;
       const isVerify = turnText.includes("Verdict: accept");
       writeFileSync(r[1], `Report ok.\n${isVerify ? "Verdict: accept\n" : "Verdict: approve\n"}${DONE}\n`);
@@ -228,7 +231,12 @@ describe("mixed-backend pair, pair-review, and pair-work runs", () => {
       if (args[0] === "split") {
         const id = `b${++nextId}`;
         const sep = args.indexOf("--");
-        const argv = args.slice(sep + 1);
+        const command = args.slice(sep + 1);
+        if (windows) {
+          assert.equal(basename(command[0]).toLowerCase(), "powershell.exe");
+          assert.deepEqual(command.slice(1, 5), ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]);
+        }
+        const argv = windows ? command.slice(5) : command;
         splits.push({ id, label: args[args.indexOf("--label") + 1], argv });
         writeReportFromPrompt(argv.at(-1) ?? "");
         return JSON.stringify({ block_ids: [id] });
@@ -268,11 +276,11 @@ describe("mixed-backend pair, pair-review, and pair-work runs", () => {
     });
 
     assert.equal(splits.length, 2);
-    assert.match(splits[0].argv[0], /launch-claude\.sh$/);
+    assert.equal(basename(splits[0].argv[0]), launcherName("claude"));
     assert.deepEqual(splits[0].argv.slice(1, 8), ["--model", "opus", "--effort", "high", "--dangerously-skip-permissions", "--add-dir", dir]);
     assert.equal(splits[0].argv[8], "--");
 
-    assert.match(splits[1].argv[0], /launch-agy\.sh$/);
+    assert.equal(basename(splits[1].argv[0]), launcherName("agy"));
     assert.deepEqual(splits[1].argv.slice(1, 8), ["--model", "gemini-4-neon", "--effort", "xhigh", "--dangerously-skip-permissions", "--add-dir", dir]);
     assert.match(splits[1].argv[8], /^--prompt-interactive=/);
 
@@ -301,9 +309,9 @@ describe("mixed-backend pair, pair-review, and pair-work runs", () => {
       exec: fakeRexExec(revSplits, revSent),
       ...fast,
     });
-    assert.match(revSplits[0].argv[0], /launch\.sh$/);
+    assert.equal(basename(revSplits[0].argv[0]), launcherName());
     assert.deepEqual(revSplits[0].argv.slice(1, 3), ["--model", "openai/gpt-6.1-sol:xhigh"]);
-    assert.match(revSplits[1].argv[0], /launch-codex\.sh$/);
+    assert.equal(basename(revSplits[1].argv[0]), launcherName("codex"));
     assert.deepEqual(revSplits[1].argv.slice(1, 9), [
       "-m",
       "gpt-6.1-sol",
@@ -332,8 +340,8 @@ describe("mixed-backend pair, pair-review, and pair-work runs", () => {
       ...fast,
     });
     assert.equal(workRes.accepted, true);
-    assert.match(workSplits[0].argv[0], /launch-agy\.sh$/);
-    assert.match(workSplits[1].argv[0], /launch-claude\.sh$/);
+    assert.equal(basename(workSplits[0].argv[0]), launcherName("agy"));
+    assert.equal(basename(workSplits[1].argv[0]), launcherName("claude"));
   });
 
   it("writes a valid backend launcher script pointing at the resolved binary", () => {
