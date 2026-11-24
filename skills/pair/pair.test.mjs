@@ -77,10 +77,12 @@ const herdrEnv = { HC_TERMINAL_ID: "t0", HERDR_APP_BIN: "herdr-app", HC_BIN: "hc
 describe("pair detect", () => {
   it("recognizes Herdr, Rex, neither, and refuses to guess when both are set", () => {
     assert.equal(detect({ HC_TERMINAL_ID: "t7" }).mux, "herdr");
-    assert.equal(detect({ REX_SESSION: "s", REX_BLOCK: "b" }).mux, "rex");
+    assert.deepEqual(detect({ REX_BLOCK: "b" }), { mux: "rex", session: "b", pane: "b" });
+    assert.deepEqual(detect({ REX_SESSION: "s", REX_BLOCK: "b" }), { mux: "rex", session: "s", pane: "b" });
+    assert.equal(detect({ REX_SESSION: "s" }).mux, null);
     assert.equal(detect({ HERDR_ENV: "1", HERDR_PANE_ID: "w1:p1" }).mux, null, "the old Herdr TUI is not supported");
     assert.equal(detect({}).mux, null);
-    assert.match(detect({ HC_TERMINAL_ID: "t7", REX_SESSION: "s", REX_BLOCK: "b" }).reason, /--mux/);
+    assert.match(detect({ HC_TERMINAL_ID: "t7", REX_BLOCK: "b" }).reason, /--mux/);
   });
 });
 
@@ -217,9 +219,10 @@ describe("pair turns and CLI", () => {
     const quiet = { log: () => {}, progress: () => {} };
     // A Rex *fixture*: `REX_BIN` is taken as given, so these validation calls do not need Rex installed on the host
     // (a clean CI runner has none). The no-CLI case has its own injected-filesystem test in windows.test.mjs.
-    const rex = { REX_SESSION: "s", REX_BLOCK: "b", REX_BIN: "rex" };
+    const rex = { REX_BLOCK: "b", REX_BIN: "rex" };
     await assert.rejects(main(["run", "--task-file", "/nope"], { env: {}, ...quiet }), /not running inside Herdr/);
     await assert.rejects(main(["run"], { env: rex, ...quiet }), /--task-file/);
+    await assert.rejects(main(["run", "--mux", "rex"], { env: rex, ...quiet }), /--task-file/);
     const file = join(tmp(), "task.md");
     writeFileSync(file, "do it");
     await assert.rejects(main(["run", "--task-file", file, "--rounds", "0"], { env: rex, ...quiet }), /--rounds/);
@@ -1410,10 +1413,11 @@ describe("pair doctor", () => {
   it("checks the mux, the launch resolution, both roles, and pi --version through the workers' own launcher", async () => {
     const launchers = [];
     const { exec, calls } = doctorRex({ launchers });
+    const env = { ...rexEnv, REX_SESSION: undefined };
     let text = "";
-    assert.equal(await main(["doctor"], { env: rexEnv, exec, log: (s) => (text = s) }), 0);
+    assert.equal(await main(["doctor"], { env, exec, log: (s) => (text = s) }), 0);
     assert.match(text, /^pair doctor: \d+ pass, 0 fail/);
-    assert.match(text, /  pass  mux: rex \(Rex panes\)\n {8}rex: REX_SESSION and REX_BLOCK are set/);
+    assert.match(text, /  pass  mux: rex \(Rex panes\)\n {8}rex: REX_BLOCK is set; using REX_BLOCK as the session/);
     assert.match(text, /  pass  pi: \S+ \(PAIR_PI_BIN\)/);
     assert.match(text, /  pass  node: \S+/);
     assert.match(text, /  pass  PATH: \d+ entries for the worker: /);
@@ -1423,6 +1427,7 @@ describe("pair doctor", () => {
 
     // It went through the same launcher the workers use, with the environment resolved for the worker…
     const split = calls.find((c) => c[0] === "rex" && c[1] === "split");
+    assert.deepEqual(split.slice(2, 6), ["-s", "blk0", "-b", "blk0"]);
     assert.ok(split.includes("--focus=false"));
     assert.deepEqual(split.slice(split.indexOf(launcherOf(split)) + 1), ["--version"], "the version probe is the launcher's only argument");
     const script = launchers[0].script;
@@ -2086,7 +2091,7 @@ describe("pair doctor", () => {
     assert.equal(await main(["doctor", "--no-launch"], { env: both, exec: doctorRex().exec, log: (s) => (text = s) }), 1);
     assert.match(text, /  fail  mux: none: both Herdr \(HC_TERMINAL_ID\) and Rex variables are set; pass --mux herdr\|rex/);
     assert.equal(await main(["doctor", "--no-launch", "--mux", "rex"], { env: both, exec: doctorRex().exec, log: (s) => (text = s) }), 0);
-    assert.match(text, /  pass  mux: rex \(Rex panes\)\n {8}selected with --mux rex\n {8}rex: REX_SESSION and REX_BLOCK are set/);
+    assert.match(text, /  pass  mux: rex \(Rex panes\)\n {8}selected with --mux rex\n {8}rex: REX_BLOCK is set; using REX_SESSION as the session/);
     assert.equal(await main(["doctor", "--no-launch", "--mux", "herdr"], { env: both, exec: herdrExec, log: (s) => (text = s) }), 0);
     assert.match(text, /  pass  mux: herdr: panes via herdr-app \(HERDR_APP_BIN\)\n {8}selected with --mux herdr\n {8}herdr: HC_TERMINAL_ID=t0\n {8}herdr-app: herdr-app \(HERDR_APP_BIN\)\n {8}herdr-app \(herdr-app\) ls: pane p0 shows t0/);
     // A selection still has to be a mux, and still needs the environment it runs in.
@@ -2094,7 +2099,7 @@ describe("pair doctor", () => {
     assert.match(text, /  fail  mux: none: --mux must be herdr or rex, not both/);
     assert.match(text, / {8}fix: pass a mux this machine can run in/);
     assert.equal(await main(["doctor", "--no-launch", "--mux", "rex"], { env: { HC_TERMINAL_ID: "t0", PAIR_PI_BIN: fakePi, PATH: "/usr/bin" }, exec: doctorRex().exec, log: (s) => (text = s) }), 1);
-    assert.match(text, /  fail  mux: none: --mux rex needs REX_SESSION and REX_BLOCK/);
+    assert.match(text, /  fail  mux: none: --mux rex needs REX_BLOCK \(REX_SESSION is optional; run inside a Rex pane\)/);
     assert.equal(await main(["doctor", "--no-launch", "--mux", "herdr"], { env: { REX_SESSION: "s", REX_BLOCK: "b", PAIR_PI_BIN: fakePi, PATH: "/usr/bin" }, exec: doctorRex().exec, log: (s) => (text = s) }), 1);
     assert.match(text, /  fail  mux: none: --mux herdr needs HC_TERMINAL_ID/);
   });

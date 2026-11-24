@@ -94,8 +94,8 @@ describe("pair-work run", () => {
 
   it("in Rex: stops early once the verifier accepts", async () => {
     const { exec, calls } = fakeMux({ acceptOnRound: 2 });
-    const result = await runWork({ ...options("rex", { REX_SESSION: "sess", REX_BLOCK: "blk0", REX_BIN: "rex", PAIR_PI_BIN: fakePi }), exec });
-    assert.equal(calls.filter((c) => c[1] === "split").length, 2);
+    const result = await runWork({ ...options("rex", { REX_BLOCK: "blk0", REX_BIN: "rex", PAIR_PI_BIN: fakePi }), exec });
+    assert.deepEqual(calls.filter((c) => c[1] === "split").map((c) => c.slice(2, 4)), [["-s", "blk0"], ["-s", "blk0"]]);
     assert.deepEqual(kinds(result), ["verifier-plan", "doer-do", "verifier-verify", "doer-address", "verifier-verify"]);
     assert.equal(result.rounds, 2);
     assert.equal(result.accepted, true);
@@ -167,7 +167,7 @@ describe("pair-work doctor", () => {
 
   it("prints the shared doctor checks with the doer and verifier role names", async () => {
     let text = "";
-    const env = { REX_SESSION: "sess", REX_BLOCK: "blk0", REX_BIN: "rex", PAIR_PI_BIN: fakePi, PATH: "/usr/bin" };
+    const env = { REX_BLOCK: "blk0", REX_BIN: "rex", PAIR_PI_BIN: fakePi, PATH: "/usr/bin" };
     assert.equal(await main(["doctor", "--no-launch"], { env, exec, log: (s) => (text = s) }), 0);
     assert.match(text, /^pair-work doctor: \d+ pass, 0 fail, 1 skipped/);
     assert.match(text, /  pass  doer: claude-code\/claude-opus-5-5 .*listed; auth unverifiable/);

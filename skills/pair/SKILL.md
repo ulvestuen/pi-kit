@@ -41,7 +41,9 @@ are separate workers, not subagents or one-shot `-p` runs.
 | `HC_TERMINAL_ID`, and `herdr-app ls` shows your terminal in a pane | Herdr app panes (`herdr-app` + herdr-core `hc`) | `herdr-app do pane.split` right of yours, auditor below it, focus handed back; turns via `hc send` |
 | `HC_TERMINAL_ID`, `hc` sees your terminal and it carries `herdr.space` (and usually `herdr.tab`), but no `herdr-app` can see you (typical over SSH) | Herdr core terminals with your labels copied on | `hc run --bg` terminals whose `herdr.space`/`herdr.tab` request a place in your space or tab; how the app renders them (split vs. new tab) is unverified; turns via `hc send` |
 | `HC_TERMINAL_ID`, `hc` sees your terminal, but nothing places it in a window | Herdr core only (`hc`) | `hc run --bg` terminals in the worker folder; **not** placed in desktop panes |
-| `REX_SESSION` and `REX_BLOCK` | Rex | `rex split` right of your block, auditor below it, `--focus=false` |
+| `REX_BLOCK` and a local `rex` CLI | Rex | `rex split` right of your block, auditor below it, `--focus=false` |
+
+Rex on Windows exports both `REX_BLOCK` and `REX_SESSION`; on Linux it exports `REX_BLOCK` without `REX_SESSION`. The pair uses `REX_SESSION` as the session selector when set and otherwise lets Rex find the session by `REX_BLOCK`.
 
 `HC_TERMINAL_ID` names a Herdr Core terminal. It does **not** mean the
 desktop app CLI (`herdr-app`) runs on the machine where you run. Herdr over
@@ -108,9 +110,9 @@ pane and asks for `PAIR_PI_BIN` to point at the `.js` entry or a `pi.exe`.
 
 ### A remote shell inside a Rex block
 
-`REX_SESSION`/`REX_BLOCK` are inherited by a shell you open over SSH from a Rex
-block, but that machine has neither the `rex` CLI nor the server, and Rex has no
-label-style remote placement like Herdr's. `detect` then prints
+A remote shell can inherit `REX_BLOCK` (with or without `REX_SESSION`) without
+having the local `rex` CLI or server. Rex has no label-style remote placement
+like Herdr's. `detect` then prints
 `none: REX_* set but no rex CLI here (remote Rex block?)` and a run stops before
 opening a pane.
 

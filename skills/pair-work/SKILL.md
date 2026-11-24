@@ -56,8 +56,8 @@ the model each worker would use.
   install the desktop CLI on a remote machine.
 - Rex needs its `rex` CLI on the machine you run on (`REX_BIN`, `PATH`, the
   macOS app/Rex Server bundles, `%LOCALAPPDATA%\Programs\Rex` on Windows, the
-  Linux install folders). A remote shell inside a Rex block has the `REX_*`
-  variables but no CLI: `detect` then says `none: REX_* set but no rex CLI here
+  Linux install folders). A remote shell can inherit `REX_BLOCK` without a
+  local CLI: `detect` then says `none: REX_* set but no rex CLI here
   (remote Rex block?)` and `run` stops before a pane. A forwarded socket is
   control-only (`rex split` still starts its command on the server's machine),
   so report it and run the pair where the Rex terminals run — a block on the

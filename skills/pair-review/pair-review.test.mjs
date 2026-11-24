@@ -85,8 +85,8 @@ describe("pair-review run", () => {
 
   it("in Rex: splits beside REX_BLOCK and runs the requested number of cross-check rounds", async () => {
     const { exec, calls } = fakeMux();
-    const result = await runReview({ ...options("rex", { REX_SESSION: "sess", REX_BLOCK: "blk0", REX_BIN: "rex", PAIR_PI_BIN: fakePi }, 2), exec });
-    assert.equal(calls.filter((c) => c[1] === "split").length, 2);
+    const result = await runReview({ ...options("rex", { REX_BLOCK: "blk0", REX_BIN: "rex", PAIR_PI_BIN: fakePi }, 2), exec });
+    assert.deepEqual(calls.filter((c) => c[1] === "split").map((c) => c.slice(2, 4)), [["-s", "blk0"], ["-s", "blk0"]]);
     assert.equal(calls.filter((c) => c[1] === "send").length, 5, "two rounds × two reviewers + one consolidation");
     assert.equal(result.reports.length, 7);
   });
@@ -151,7 +151,7 @@ describe("pair-review doctor", () => {
 
   it("prints the shared doctor checks with the reviewers' role names", async () => {
     let text = "";
-    const env = { REX_SESSION: "sess", REX_BLOCK: "blk0", REX_BIN: "rex", PAIR_PI_BIN: fakePi, PATH: "/usr/bin" };
+    const env = { REX_BLOCK: "blk0", REX_BIN: "rex", PAIR_PI_BIN: fakePi, PATH: "/usr/bin" };
     assert.equal(await main(["doctor", "--no-launch"], { env, exec, log: (s) => (text = s) }), 0);
     assert.match(text, /^pair-review doctor: \d+ pass, 0 fail, 1 skipped/);
     assert.match(text, /  pass  mux: rex/);

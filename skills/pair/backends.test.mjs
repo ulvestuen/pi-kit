@@ -237,7 +237,7 @@ describe("mixed-backend pair, pair-review, and pair-work runs", () => {
           assert.deepEqual(command.slice(1, 5), ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]);
         }
         const argv = windows ? command.slice(5) : command;
-        splits.push({ id, label: args[args.indexOf("--label") + 1], argv });
+        splits.push({ id, session: args[args.indexOf("-s") + 1], label: args[args.indexOf("--label") + 1], argv });
         writeReportFromPrompt(argv.at(-1) ?? "");
         return JSON.stringify({ block_ids: [id] });
       }
@@ -259,7 +259,7 @@ describe("mixed-backend pair, pair-review, and pair-work runs", () => {
     const dir = tmp();
     const splits = [];
     const sent = [];
-    const env = { PATH: bins.dir, REX_SESSION: "s1", REX_BLOCK: "b0", REX_BIN: "rex" };
+    const env = { PATH: bins.dir, REX_BLOCK: "b0", REX_BIN: "rex" };
 
     const result = await runPair({
       task: "Implement feature",
@@ -275,7 +275,7 @@ describe("mixed-backend pair, pair-review, and pair-work runs", () => {
       ...fast,
     });
 
-    assert.equal(splits.length, 2);
+    assert.deepEqual(splits.map((split) => split.session), ["b0", "b0"]);
     assert.equal(basename(splits[0].argv[0]), launcherName("claude"));
     assert.deepEqual(splits[0].argv.slice(1, 8), ["--model", "opus", "--effort", "high", "--dangerously-skip-permissions", "--add-dir", dir]);
     assert.equal(splits[0].argv[8], "--");

@@ -145,9 +145,11 @@ Also observed:
 
 ### D. Rex, local and remote
 
+Rex detection requires `REX_BLOCK`, not both variables as in the original progress notes. Windows exports `REX_SESSION` too; Linux does not. Use `REX_SESSION` as the session selector when set, otherwise use `REX_BLOCK`.
+
 - D1. Find `rex` via `REX_BIN`, PATH, macOS `.app` helpers (already done),
   Windows `%LOCALAPPDATA%\Programs\Rex\…`, and Linux install dirs.
-- D2. When `REX_SESSION`/`REX_BLOCK` are set but the `rex` CLI is not on the box
+- D2. When `REX_BLOCK` is set but the `rex` CLI is not on the box
   (remote shell inside a Rex block), check whether Rex has a remote mode like
   Herdr's labels or a control socket forwarded over SSH. Document the
   supported path and the fallback, as for Herdr.

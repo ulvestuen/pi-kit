@@ -194,17 +194,21 @@ export function parseDuration(value) {
 
 // ---------- environment ----------
 
+// Rex accepts a full block ID as a session selector when no explicit override is set.
+const rexSession = (env) => env.REX_SESSION || env.REX_BLOCK;
+const REX_NEEDS_BLOCK = "--mux rex needs REX_BLOCK (REX_SESSION is optional; run inside a Rex pane)";
+
 /**
  * Decide which multiplexer hosts this process, from the variables each one injects.
  * Herdr app terminals are herdr-core terminals and carry HC_TERMINAL_ID (an address like t7, not a pane id).
  */
 export function detect(env = process.env) {
   const herdr = Boolean(env.HC_TERMINAL_ID);
-  const rex = Boolean(env.REX_SESSION && env.REX_BLOCK);
+  const rex = Boolean(env.REX_BLOCK);
   if (herdr && rex) return { mux: null, reason: "both Herdr (HC_TERMINAL_ID) and Rex variables are set; pass --mux herdr|rex" };
   if (herdr) return { mux: "herdr", terminal: env.HC_TERMINAL_ID };
-  if (rex) return { mux: "rex", session: env.REX_SESSION, pane: env.REX_BLOCK };
-  return { mux: null, reason: "not running inside Herdr (HC_TERMINAL_ID) or Rex (REX_SESSION/REX_BLOCK)" };
+  if (rex) return { mux: "rex", session: rexSession(env), pane: env.REX_BLOCK };
+  return { mux: null, reason: "not running inside Herdr (HC_TERMINAL_ID) or Rex (REX_BLOCK; REX_SESSION is optional)" };
 }
 
 // ---------- worker environment ----------
@@ -1080,7 +1084,7 @@ export function adapter(mux, { exec = run, env = process.env, cwd, onSpawn, ...r
   if (mux === "rex") {
     // The same discovery `detect`/`doctor` report, so what a run uses is what the check named (D1).
     const bin = findRex({ env }).bin;
-    const session = env.REX_SESSION;
+    const session = rexSession(env);
     const rex = async (args) => exec(bin, args);
     return {
       layout: "panes",
@@ -1207,8 +1211,8 @@ export function findRex({ env = process.env, platform = process.platform, exists
 export const REX_NO_CLI = "REX_* set but no rex CLI here (remote Rex block?)";
 
 /**
- * Rex when its CLI is on this machine. A Rex terminal exports `REX_SESSION`/`REX_BLOCK`, and a shell inside one over
- * SSH inherits them while having neither the CLI nor the server.
+ * Rex when its CLI is on this machine. A Rex terminal exports `REX_BLOCK` (and may export `REX_SESSION`), but a
+ * remote shell that inherits those variables may have neither the CLI nor the server.
  *
  * That case cannot be bridged: the pair hands `rex split` an absolute launcher path inside this machine's run folder,
  * plus a `-c` folder, and the server starts that command **on its own machine** — where this box's repository, task,
@@ -1219,8 +1223,9 @@ export const REX_NO_CLI = "REX_* set but no rex CLI here (remote Rex block?)";
  * machine that runs the Rex server.
  */
 export function probeRex({ env = process.env, platform = process.platform, exists = existsSync, trace = [] } = {}) {
+  trace.push(`rex: REX_BLOCK is set; using ${env.REX_SESSION ? "REX_SESSION" : "REX_BLOCK"} as the session`);
   const rex = findRex({ env, platform, exists, trace });
-  if (rex.how) return { mux: "rex", session: env.REX_SESSION, pane: env.REX_BLOCK, bin: rex.bin, how: rex.how };
+  if (rex.how) return { mux: "rex", session: rexSession(env), pane: env.REX_BLOCK, bin: rex.bin, how: rex.how };
   trace.push(
     "rex: REX_* are inherited, but there is no rex CLI here; Rex terminals run on the server's machine, where this folder's launcher, task and reports do not exist, so run the pair on the machine that runs the Rex server (a forwarded socket is control-only: rex split still starts its command there)",
   );
@@ -2511,11 +2516,10 @@ export async function environment({ env = process.env, exec = run, trace = [], m
   }
   if (mux === "rex") {
     trace.push("selected with --mux rex");
-    if (!(env.REX_SESSION && env.REX_BLOCK)) {
-      trace.push("rex: REX_SESSION and/or REX_BLOCK are unset");
-      return { mux: null, reason: "--mux rex needs REX_SESSION and REX_BLOCK (run inside a Rex pane)" };
+    if (!env.REX_BLOCK) {
+      trace.push("rex: REX_BLOCK is unset");
+      return { mux: null, reason: REX_NEEDS_BLOCK };
     }
-    trace.push("rex: REX_SESSION and REX_BLOCK are set");
     return probeRex({ env, platform, exists, trace });
   }
   if (mux === "herdr") {
@@ -2533,7 +2537,6 @@ export async function environment({ env = process.env, exec = run, trace = [], m
       }
       // Rex is only usable with its CLI: a remote shell inside a Rex block has the variables but neither the CLI nor
       // the server (D2), and that is reported as its own reason instead of failing later at the first split.
-      trace.push("rex: REX_SESSION and REX_BLOCK are set");
       return probeRex({ env, platform, exists, trace });
     }
   }
@@ -2597,12 +2600,12 @@ export function runOptions(flags, { found, env, now, defaults, dirName, platform
   const mux = flags.mux ?? found.mux;
   if (!["herdr", "rex"].includes(mux)) throw new Error(found.reason ?? `--mux must be herdr or rex`);
   if (mux === "herdr" && !env.HC_TERMINAL_ID) throw new Error("--mux herdr needs HC_TERMINAL_ID (run inside a Herdr terminal)");
-  if (mux === "rex" && !(env.REX_SESSION && env.REX_BLOCK)) throw new Error("--mux rex needs REX_SESSION and REX_BLOCK (run inside a Rex pane)");
+  if (mux === "rex" && !env.REX_BLOCK) throw new Error(REX_NEEDS_BLOCK);
   // Stop before a pane instead of failing at the first split: inside a remote Rex block there are the variables but no
   // CLI (D2). The fix is the one `detect` prints.
   if (mux === "rex" && !findRex({ env, platform, exists }).how) {
     throw new Error(
-      "REX_SESSION and REX_BLOCK are set but there is no rex CLI on this machine (a remote shell inside a Rex block?). Rex terminals run where the Rex server runs, so the pair has to run there too: a forwarded Rex socket is control-only (`rex split` starts its command on the server's machine) and cannot start workers against this machine's files.",
+      "REX_BLOCK is set but there is no rex CLI on this machine (a remote shell inside a Rex block?). Rex terminals run where the Rex server runs, so the pair has to run there too: a forwarded Rex socket is control-only (`rex split` starts its command on the server's machine) and cannot start workers against this machine's files.",
     );
   }
   if (flags.run) throw new Error("--run belongs to close; run creates its own run id");

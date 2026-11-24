@@ -406,7 +406,7 @@ describe("Rex discovery and the remote block case (D1, D2, D3)", () => {
   });
 
   it("says why a remote Rex block cannot open panes, and reports no mux", async () => {
-    const env = { REX_SESSION: "sess", REX_BLOCK: "blk0", PATH: "/nowhere", HOME: "/home/me" };
+    const env = { REX_BLOCK: "blk0", PATH: "/nowhere", HOME: "/home/me" };
     const trace = [];
     const found = await environment({ env, platform: "linux", exists: () => false, trace });
     assert.deepEqual(found, { mux: null, reason: REX_NO_CLI });
@@ -416,7 +416,7 @@ describe("Rex discovery and the remote block case (D1, D2, D3)", () => {
     assert.match(text, /forwarded socket is control-only/, "and that a forwarded socket does not change that");
     // The same with an explicit --mux, which still validates the environment it was given.
     const selected = await environment({ env, platform: "linux", mux: "rex", exists: () => false, trace: [] });
-    assert.equal(selected.mux, null);
+    assert.deepEqual(selected, found);
     // The fix is to run the orchestration where the terminals run — not to install a CLI and forward a socket.
     assert.match(doctorMuxFix(found), /run the pair on the machine that runs the Rex server/);
     assert.match(doctorMuxFix(found), /control-only/);
@@ -430,31 +430,38 @@ describe("Rex discovery and the remote block case (D1, D2, D3)", () => {
     assert.match(doctorMuxFix(found), /pass a mux this machine can run in/);
     assert.doesNotMatch(doctorMuxFix(found), /rex CLI|control-only/);
     // And a Herdr failure keeps the Herdr advice.
-    assert.match(doctorMuxFix({ reason: "not running inside Herdr (HC_TERMINAL_ID) or Rex (REX_SESSION/REX_BLOCK)" }), /run doctor inside a Herdr pane or a Rex block/);
+    assert.match(doctorMuxFix(await environment({ env: {} })), /run doctor inside a Herdr pane or a Rex block/);
   });
 
   it("reports the CLI it found, so doctor's Rex line can be traced to a file", async () => {
-    const found = await environment({ env: { REX_SESSION: "sess", REX_BLOCK: "blk0", REX_BIN: "/opt/rex/rex" }, platform: "linux" });
-    assert.deepEqual(found, { mux: "rex", session: "sess", pane: "blk0", bin: "/opt/rex/rex", how: "REX_BIN" });
+    const found = await environment({ env: { REX_BLOCK: "blk0", PATH: "/opt/rex" }, platform: "linux", exists: files(["/opt/rex/rex"]) });
+    assert.deepEqual(found, { mux: "rex", session: "blk0", pane: "blk0", bin: "/opt/rex/rex", how: "PATH" });
   });
 
   it("stops a run before a pane when the rex CLI is missing", () => {
-    const absent = { platform: "linux", exists: () => false, defaults: { rounds: 1, turnTimeout: "1m" }, found: { mux: "rex" }, env: { REX_SESSION: "s", REX_BLOCK: "b", PATH: "/nowhere", HOME: "/home/me" } };
-    assert.throws(() => runOptions({ "task-file": "unused" }, absent), /REX_SESSION and REX_BLOCK are set but there is no rex CLI on this machine/);
+    const absent = { platform: "linux", exists: () => false, defaults: { rounds: 1, turnTimeout: "1m" }, found: { mux: "rex" }, env: { REX_BLOCK: "b", PATH: "/nowhere", HOME: "/home/me" } };
+    assert.throws(() => runOptions({ "task-file": "unused" }, absent), /REX_BLOCK is set but there is no rex CLI on this machine/);
   });
 
-  it("starts Rex workers through the run's launcher, with the worker folder on the split", async () => {
+  it("uses REX_SESSION when both variables are set and starts the Windows launcher", async () => {
     const calls = [];
     const exec = async (cmd, args) => {
       calls.push([cmd, ...args]);
       return JSON.stringify({ block_ids: ["blk1"] });
     };
-    const panes = adapter("rex", { exec, env: { REX_SESSION: "sess", REX_BLOCK: "blk0", REX_BIN: "rex" }, cwd: "/repo" });
-    const id = await panes.split("blk0", "right", "pair: implementer", ["/run/launch.sh", "--model", "claude-code/claude-opus-5-5", "prompt"]);
+    const cwd = "C:\\repo";
+    const env = { REX_SESSION: "sess", REX_BLOCK: "blk0", REX_BIN: "C:\\tools\\rex.exe", PATH: "C:\\tools" };
+    const exists = files([env.REX_BIN, "C:\\tools\\pi.exe", "C:\\tools\\node.exe", PS]);
+    const found = await environment({ env, platform: "win32", exists });
+    assert.deepEqual(found, { mux: "rex", session: "sess", pane: "blk0", bin: env.REX_BIN, how: "REX_BIN" });
+    const dir = tmp();
+    const launch = prepareLaunch({ dir, env, mux: found.mux, cwd, platform: "win32", execPath: "C:\\tools\\node.exe", exists, readFile: () => "" });
+    const panes = adapter(found.mux, { exec, env, cwd });
+    const id = await panes.split(await panes.anchor(), "right", "pair: implementer", launch.argv(["--model", "claude-code/claude-opus-5-5", "prompt"]));
     assert.equal(id, "blk1");
     assert.deepEqual(calls[0], [
-      "rex", "split", "-s", "sess", "-b", "blk0", "--split=right", "-c", "/repo", "--label", "pair: implementer", "--focus=false", "--json", "--",
-      "/run/launch.sh", "--model", "claude-code/claude-opus-5-5", "prompt",
+      env.REX_BIN, "split", "-s", "sess", "-b", "blk0", "--split=right", "-c", cwd, "--label", "pair: implementer", "--focus=false", "--json", "--",
+      PS, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(dir, "launch.ps1"), "--model", "claude-code/claude-opus-5-5", "prompt",
     ]);
   });
 });
