@@ -66,7 +66,7 @@ describe("backend detection and argv shaping", () => {
   it("builds interactive auto-approve launch arguments with --add-dir for each backend", () => {
     assert.deepEqual(
       backendLaunchArgs("agy", { spec: "agy/gemini-4-neon:xhigh", id: "gemini-4-neon", thinking: "xhigh", prompt: "Do X", runDir: "/tmp/run-1" }),
-      ["--model", "gemini-4-neon", "--effort", "xhigh", "--dangerously-skip-permissions", "--add-dir", "/tmp/run-1", "--prompt-interactive=Do X"],
+      ["--model", "gemini-4-neon", "--effort", "xhigh", "--dangerously-skip-permissions", "--add-dir", "/tmp/run-1", "--prompt-interactive", "Do X"],
     );
     assert.deepEqual(
       backendLaunchArgs("claude", { spec: "claude/opus:high", id: "opus", thinking: "high", prompt: "Do X", runDir: "/tmp/run-1" }),
@@ -282,7 +282,9 @@ describe("mixed-backend pair, pair-review, and pair-work runs", () => {
 
     assert.equal(basename(splits[1].argv[0]), launcherName("agy"));
     assert.deepEqual(splits[1].argv.slice(1, 8), ["--model", "gemini-4-neon", "--effort", "xhigh", "--dangerously-skip-permissions", "--add-dir", dir]);
-    assert.match(splits[1].argv[8], /^--prompt-interactive=/);
+    assert.equal(splits[1].argv[8], "--prompt-interactive");
+    assert.match(splits[1].argv[9], /^Pair session \(auditor, orient\): read /);
+    assert.equal(splits[1].argv.length, 10);
 
     assert.equal(sent.length, 2);
     assert.equal(result.models.implementer, "claude/opus:high");

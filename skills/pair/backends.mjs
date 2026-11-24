@@ -249,7 +249,7 @@ export function backendLaunchArgs(backend, { spec, id, thinking, prompt, runDir 
     if (thinking && AGY_EFFORTS.includes(thinking)) args.push("--effort", thinking);
     args.push("--dangerously-skip-permissions");
     if (runDir) args.push("--add-dir", runDir);
-    args.push(`--prompt-interactive=${prompt}`);
+    args.push("--prompt-interactive", prompt);
     return args;
   }
   if (backend === "claude") {

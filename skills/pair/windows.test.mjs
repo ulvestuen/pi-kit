@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join, posix, win32 } from "node:path";
 import { describe, it } from "node:test";
 
-import { adapter, DONE, doctorMuxFix, envGet, environment, executableNames, findRex, LAUNCH_EXIT, launcherExit, launcherScript, launchEnv, modelChecker, muxVerdict, onPath, piCommand, prepareLaunch, powershell, reportDone, resolveLaunch, resolvePi, REX_NO_CLI, run, runOptions, screenError, screenTail, shimEntry, shimParts, STARTUP_ERRORS, waitForReport, writeLauncher } from "./pair.mjs";
+import { adapter, backendLaunchArgs, DONE, doctorMuxFix, envGet, environment, executableNames, findRex, LAUNCH_EXIT, launcherExit, launcherScript, launchEnv, modelChecker, muxVerdict, onPath, piCommand, prepareBackendLaunch, prepareLaunch, powershell, reportDone, resolveLaunch, resolvePi, REX_NO_CLI, run, runOptions, screenError, screenTail, shimEntry, shimParts, STARTUP_ERRORS, waitForReport, writeLauncher } from "./pair.mjs";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "pair-win-"));
 /** A fake filesystem: exactly these paths exist. */
@@ -346,6 +346,105 @@ describe("the Windows launcher (E1, audits 3–5)", () => {
     assert.equal(child.status, 0, child.stderr);
     assert.equal(readFileSync(marker, "utf8"), "Grüße 日本語 ✓", "a BOM makes PowerShell 5.1 read UTF-8, so the value survives");
     assert.equal(readFileSync(launch.exitFile, "utf8"), "t8 0\n");
+  });
+
+  it("passes agy's --prompt-interactive flag and prompt separately to launch-agy.ps1", () => {
+    const dir = tmp();
+    try {
+      const agyExe = win32.join("C:\\tools", "agy.exe");
+      const runDir = "C:\\Test Folder";
+      const prompt = "Pair review (lead, review): read C:\\Test Folder\\01-lead-review.turn.md and follow it exactly.";
+      const env = { SystemRoot: "C:\\Windows", PATH: "C:\\tools", PATHEXT, PAIR_AGY_BIN: agyExe };
+      const launch = prepareBackendLaunch("agy", { dir, env, mux: "herdr", cwd: "C:\\work", workdir: "C:\\work", platform: "win32", exists: files([agyExe, PS]) });
+      const cliArgs = backendLaunchArgs("agy", { spec: "agy/gemini-4-neon:high", id: "gemini-4-neon", thinking: "high", prompt, runDir });
+      assert.equal(launch.launcher, join(dir, "launch-agy.ps1"));
+      assert.ok(readFileSync(launch.launcher, "utf8").includes(`& "${agyExe}" @args`));
+      assert.deepEqual(launch.argv(cliArgs), [
+        PS,
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        join(dir, "launch-agy.ps1"),
+        "--model",
+        "gemini-4-neon",
+        "--effort",
+        "high",
+        "--dangerously-skip-permissions",
+        "--add-dir",
+        runDir,
+        "--prompt-interactive",
+        prompt,
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("round-trips agy's --prompt-interactive flag and synthetic prompt through launch-agy.ps1 (Windows only)", { skip: process.platform !== "win32" && "needs a real Windows host for PowerShell launcher handoff" }, () => {
+    const dir = tmp();
+    try {
+      const runDir = join(dir, "Test Folder");
+      mkdirSync(runDir);
+      const recorder = join(dir, "agy-recorder.mjs");
+      const argvFile = join(dir, "argv.json");
+      writeFileSync(
+        recorder,
+        `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(argvFile)}, JSON.stringify(process.argv.slice(2)));\n`,
+      );
+      const systemRoot = process.env.SystemRoot || process.env.SYSTEMROOT || "C:\\Windows";
+      const systemDrive = process.env.SystemDrive || process.env.SYSTEMDRIVE || "C:";
+      const env = {
+        SystemDrive: systemDrive,
+        SystemRoot: systemRoot,
+        WINDIR: systemRoot,
+        ComSpec: win32.join(systemRoot, "System32", "cmd.exe"),
+        PATH: [
+          win32.dirname(process.execPath),
+          win32.join(systemRoot, "System32"),
+          win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0"),
+        ].join(";"),
+        PATHEXT,
+        TEMP: dir,
+        TMP: dir,
+        USERPROFILE: dir,
+        APPDATA: dir,
+        LOCALAPPDATA: dir,
+        PAIR_AGY_BIN: recorder,
+        HC_TERMINAL_ID: "t9",
+      };
+      const prompt = "Pair review (lead, review): read C:\\Test Folder\\01-lead-review.turn.md and follow it exactly.";
+      const cliArgs = backendLaunchArgs("agy", {
+        spec: "agy/gemini-4-neon:high",
+        id: "gemini-4-neon",
+        thinking: "high",
+        prompt,
+        runDir,
+      });
+      const launch = prepareBackendLaunch("agy", { dir, env, mux: "herdr", cwd: dir, workdir: dir });
+      const [exe, ...args] = launch.argv(cliArgs);
+      const child = spawnSync(exe, args, { env, encoding: "utf8" });
+      assert.equal(child.error, undefined, child.error?.message);
+      assert.equal(child.status, 0, child.stderr);
+      const received = JSON.parse(readFileSync(argvFile, "utf8"));
+      assert.deepEqual(received, [
+        "--model",
+        "gemini-4-neon",
+        "--effort",
+        "high",
+        "--dangerously-skip-permissions",
+        "--add-dir",
+        runDir,
+        "--prompt-interactive",
+        prompt,
+      ]);
+      const flagIndex = received.indexOf("--prompt-interactive");
+      assert.equal(flagIndex, received.length - 2, "prompt flag and value arrive as two adjacent arguments with no stray words");
+      assert.equal(received[flagIndex + 1], prompt);
+      assert.equal(readFileSync(launch.exitFile, "utf8"), "t9 0\n");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("kills a hung probe's Node child and reaps it", async () => {
