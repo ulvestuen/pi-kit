@@ -95,8 +95,7 @@ state, which removes cross-process locking.
     in a loop. System posts now wake only `@coordinator`.
   - A `handled` prompt disposition never settles a worker, so the driver now
     settles it directly.
-- Not verified: a full swarm with real model calls (no paid runs were made),
-  and the Windows CI runner. The tests use only portable APIs, but worktree
-  removal right after a child exits may need a retry on Windows if CI shows
-  EBUSY.
+- Shipped in 3663c54 on main. CI passed on ubuntu, macOS, and Windows:
+  https://github.com/ulvestuen/pi-kit/actions/runs/45907911869
+- Not verified: a full swarm with real model calls (no paid runs were made).
 - Deferred: `/swarm resume <id>` after Pi restarts.
