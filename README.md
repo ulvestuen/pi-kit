@@ -10,6 +10,7 @@ Pi agent
 ├─ skills/       A3 problem solving · pair · pair review · pair work · ship · hansei · search · issue trackers · canvas
 ├─ prompts/      /a3 · /hansei · /ship
 ├─ extensions/   pair → model picker pop-up + /pair · /pair-review · /pair-work
+│                swarm → /swarm coordinator + @mention board + local web UI
 └─ threema/      extension → send + receive messages
 ```
 
@@ -99,6 +100,7 @@ The extensions target Pi **1.1.0+** using the `@earendil-works` SDK packages.
 
 - [`threema/`](./threema/) – Threema integration for pi
 - [`extensions/pair/`](./extensions/pair/) – a model picker for the pair skills. When you ask for pair programming, a pair review, or pair work (in plain words or with `/pair`, `/pair-review`, `/pair-work`), the agent calls its `pair_setup` tool, which opens a pop-up to pick each role's model (from your scoped/available Pi models plus ready `agy/*`, `claude/*`, and `codex/*` CLI workers), thinking level, and the rounds. Your last picks per workflow are remembered in `~/.pi/agent/pair-picker.json`. The picks are checked for readiness before any worker pane opens. Without a terminal UI, RPC clients get simple select dialogs, and print/JSON mode or Threema-driven turns use the last picks (or defaults). The skills still work without the extension, using their preference lists.
+- [`extensions/swarm/`](./extensions/swarm/) – `/swarm <goal>` turns the session into a coordinator. It spawns named Pi workers (each a `pi --mode rpc` child, in the shared checkout or in its own git worktree) that collaborate on an append-only `@mention` board under `.swarm/<id>/`. Idle workers use no tokens until someone mentions them, and active workers are capped. A `127.0.0.1` web page shows the roster, the board, and each worker's transcript, and lets you post as `human`. `/swarm ui`, `/swarm status`, `/swarm stop`.
 
 ### Prompt aliases
 

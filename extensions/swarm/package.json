@@ -1,0 +1,16 @@
+{
+  "name": "pi-swarm",
+  "version": "1.0.0",
+  "description": "Pi extension: /swarm coordinator and workers on a shared @mention board with a local web UI",
+  "type": "module",
+  "scripts": {
+    "test": "tsx --test test.ts"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "^1.1.0",
+    "@earendil-works/pi-coding-agent": "^1.1.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3"
+  }
+}

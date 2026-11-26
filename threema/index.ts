@@ -75,6 +75,9 @@ function buildSendTool(config: ThreemaConfig) {
 }
 
 export default function (pi: ExtensionAPI) {
+  // /swarm workers are child Pi processes of a coordinator session: they must not bind the webhook port a second
+  // time or message the user directly. The coordinator keeps Threema.
+  if (process.env.PI_SWARM_ROLE === "worker") return;
   let config: ThreemaConfig;
   try {
     config = loadConfig();
