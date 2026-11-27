@@ -762,7 +762,8 @@ describe("structured swarm presets", () => {
 
   it("does not dispatch a review when untracked file bytes change between copies", async (t) => {
     const source = fs.realpathSync(gitRepo());
-    const first = join(source, "a.txt");
+    // Git for Windows can spell the drive letter differently from the fixture.
+    const first = join(source.replace(/^[A-Z]:/, (drive) => drive.toLowerCase()), "a.txt");
     const second = join(source, "b.txt");
     writeFileSync(first, "old A");
     writeFileSync(second, "old B");
@@ -770,7 +771,7 @@ describe("structured swarm presets", () => {
     const copy = fs.copyFileSync;
     const hook = t.mock.method(fs, "copyFileSync", (...[src, dest, mode]: Parameters<typeof copy>) => {
       copy(src, dest, mode);
-      if (src === first) {
+      if (typeof src === "string" && relative(first, src) === "") {
         // The old A/new B pair never existed in the source checkout.
         writeFileSync(first, "new A");
         writeFileSync(second, "new B");

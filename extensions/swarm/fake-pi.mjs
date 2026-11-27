@@ -5,6 +5,7 @@
 // board_post would. `delayMs` holds the run open so tests can mention a working member.
 
 import { appendFileSync, readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 
 if (process.argv.includes("--version")) { console.log("1.1.0"); process.exit(0); }
 if (process.argv[2] === "auth") process.exit(0);
@@ -34,7 +35,7 @@ async function run(message) {
     if (managed) {
       const { tsImport } = await import("tsx/esm/api");
       const active = process.argv[process.argv.indexOf("--tools") + 1].split(",");
-      (await tsImport(extension, import.meta.url)).default({ registerTool: (tool) => {
+      (await tsImport(pathToFileURL(extension).href, import.meta.url)).default({ registerTool: (tool) => {
         if (active.includes(tool.name)) tools.set(tool.name, tool);
       } });
     }
