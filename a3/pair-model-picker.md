@@ -5,6 +5,8 @@ owner: idar
 updated: 2026-11-19
 ---
 
+> Historical plan for the retired picker. Model selection now lives in [Swarm pair workflow setup](../extensions/swarm/README.md#pair-workflows).
+
 ## Background
 
 `pair`, `pair-review` and `pair-work` start two Pi workers. Today each role

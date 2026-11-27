@@ -5,6 +5,8 @@ owner: idar
 updated: 2026-11-26
 ---
 
+> Initial design notes. For the headless runtime and pair commands now in use, see the [Swarm guide](../extensions/swarm/README.md).
+
 ## Background
 
 The user wants one Pi session to coordinate several named workers on a goal:

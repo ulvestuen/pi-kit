@@ -4,6 +4,7 @@
 
 import { EventEmitter } from "node:events";
 import { Mutex, type BoardMessage, type Kind, type Member, type SwarmStore } from "./store.ts";
+import type { PairWorkflow } from "./workflow.ts";
 
 export const COORDINATOR = "coordinator";
 export const HUMAN = "human";
@@ -42,6 +43,7 @@ export interface RouterOptions {
 export type SwarmEvent =
   | { type: "board"; message: BoardMessage }
   | { type: "roster"; members: Member[] }
+  | { type: "workflow"; workflow: ReturnType<PairWorkflow["snapshot"]> }
   | { type: "transcript"; name: string; record: unknown };
 
 export function formatUnread(name: string, messages: BoardMessage[], maxChars = 60_000): string {
@@ -117,26 +119,28 @@ export class Router extends EventEmitter {
   async settled(name: string): Promise<void> {
     await this.lock.run(async () => {
       const member = this.store.member(name);
-      if (!member || member.state === "killed" || member.state === "stopped") return;
+      if (!member || member.state !== "working") return;
       await this.setState(name, { state: "waiting" });
       if (this.pending.delete(name)) await this.request(name);
       await this.drain();
     });
   }
 
-  /** The member's process went away. Mentions still wake it (by respawning). */
-  async exited(name: string, reason?: string): Promise<void> {
+  /** Pi can respawn on a later mention; native failures require a new worker rather than replaying. */
+  async exited(name: string, reason?: string, failure?: Member["failure"]): Promise<void> {
     let report = false;
     await this.lock.run(async () => {
       const member = this.store.member(name);
-      if (!member || member.state === "killed" || member.state === "stopped") return;
+      if (!member || (member.state !== "waiting" && member.state !== "working")) return;
       report = Boolean(reason);
       this.pending.delete(name);
       this.dequeue(name);
-      await this.setState(name, { state: "stopped" });
+      await this.setState(name, failure
+        ? { state: failure === "permission" || failure === "auth" ? "blocked" : "failed", failure, problem: reason }
+        : { state: "stopped" });
       await this.drain();
     });
-    if (report) await this.post(SYSTEM, `@${COORDINATOR} worker @${name} stopped unexpectedly: ${reason}`, "system");
+    if (report) await this.post(SYSTEM, `@${COORDINATOR} worker @${name} ${failure ? `failed [${failure}]` : "stopped unexpectedly"}: ${reason}`, "system");
   }
 
   async kill(name: string): Promise<void> {
@@ -175,7 +179,7 @@ export class Router extends EventEmitter {
 
   private async request(name: string) {
     const member = this.store.member(name);
-    if (!member || member.state === "killed") return;
+    if (!member || member.state === "killed" || member.state === "failed" || member.state === "blocked") return;
     if (member.state === "working") {
       this.pending.add(name);
       return;

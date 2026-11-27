@@ -1,16 +1,21 @@
-// /swarm: turn this session into the coordinator of named Pi workers that collaborate on a shared append-only board.
-// Workers are `pi --mode rpc` children woken only by @mentions; a 127.0.0.1 web page shows the roster, the board,
+// /swarm: turn this session into the coordinator of headless workers that collaborate on a shared append-only board.
+// Workers wake only on @mentions; a 127.0.0.1 web page shows the roster, the board,
 // and each worker's transcript, and lets the human post. See a3/swarm.md and README.md.
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { StringEnum } from "@earendil-works/pi-ai";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { getSupportedThinkingLevels, StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { piInvocation } from "./driver.ts";
 import { COORDINATOR } from "./router.ts";
 import { parseSwarmArgs, Swarm } from "./swarm.ts";
+import { HARNESSES } from "./worker.ts";
 import { describeStatus } from "./worktree.ts";
 import { formatMessages } from "./worker-ext.ts";
+import { PRESETS, applyPicks, workflowRequest, type Pick as WorkerPick, type PickOverrides, type Preset } from "./workflow.ts";
 
 export const SWARM_TOOLS = ["swarm_add", "swarm_status", "swarm_kill", "board_post", "board_read"];
 
@@ -25,7 +30,8 @@ export function coordinatorRules(swarm: Pick<Swarm, "id" | "goal" | "limits">): 
   return [
     `You are @coordinator of Pi swarm ${swarm.id}. Goal: ${swarm.goal}`,
     "- Split the goal into a few non-overlapping tracks with clear owners and done criteria. Spawn one worker per track with swarm_add; its brief is posted to the board as an @mention and wakes it.",
-    '- Use workspace "worktree" for every worker that edits files in parallel with others; use "inherit" (shared checkout) for readers, reviewers, and verifiers.',
+    '- Use workspace "worktree" for every worker that edits files in parallel with others; use "inherit" (shared checkout) for readers, reviewers, and verifiers. A worktree is not a sandbox.',
+    "- Pi is the available harness. If the user requests native Claude Code or Codex, explain that Swarm cannot verify their effective permissions before launch. Ask before using a different harness or provider.",
     "- Wire collaboration in the briefs: say who hands work to whom (for example builder → @verifier → @coordinator).",
     `- Workers wake only when mentioned and report with @coordinator. After spawning, end your turn: you are woken with unread board messages. Never poll swarm_status in a loop.`,
     "- Merge finished worktree branches yourself (git merge in the main checkout), then swarm_kill the worker to remove its worktree. swarm_kill refuses unmerged work unless force is set; only force when the user agrees to discard it.",
@@ -44,6 +50,13 @@ function text(t: string, details: unknown = {}) {
   return { content: [{ type: "text" as const, text: t }], details };
 }
 
+function readPicks(name: string): any {
+  try { return JSON.parse(readFileSync(join(getAgentDir(), name), "utf8")); }
+  catch { return {}; }
+}
+
+const presets = Object.keys(PRESETS) as Preset[];
+
 export default function swarmExtension(pi: ExtensionAPI) {
   // Workers load the user's extensions too; their board tools come from worker-ext.ts, and they cannot nest swarms.
   if (process.env.PI_SWARM_ROLE === "worker") return;
@@ -51,6 +64,7 @@ export default function swarmExtension(pi: ExtensionAPI) {
   let swarm: Swarm | null = null;
   let statusCtx: ExtensionContext | null = null;
   let offStatus: (() => void) | null = null;
+  let openingWorkflow = false;
 
   const need = (): Swarm => {
     if (!swarm) throw new Error("No swarm is running. Start one with /swarm <goal>.");
@@ -95,6 +109,62 @@ export default function swarmExtension(pi: ExtensionAPI) {
     await pi.exec(cmd as string, args as string[], { timeout: 5_000 }).catch(() => undefined);
   };
 
+  const openWorkflow = async (preset: Preset, args: string, ctx: ExtensionContext, requested?: PickOverrides) => {
+    if (swarm || openingWorkflow) throw new Error("A swarm is already open. Use /swarm stop before starting a new workflow.");
+    openingWorkflow = true;
+    try {
+      const models = ctx.modelRegistry.getAvailable();
+      const piModels = models.map((model) => `${model.provider}/${model.id}`);
+      const saved = readPicks("swarm-picks.json")?.[preset];
+      const legacy = readPicks("pair-picker.json")?.[preset];
+      const roles = Object.fromEntries(PRESETS[preset].roles.map((role, i) => {
+        const prior = saved?.roles?.[role];
+        let pick: WorkerPick;
+        if (HARNESSES.includes(prior?.harness)) pick = prior;
+        else if (typeof legacy?.roles?.[role] === "string") {
+          const [, spec, effort] = /^(.*?)(?::([a-z]+))?$/.exec(legacy.roles[role])!;
+          const match = /^(claude|codex)\/(.+)$/.exec(spec);
+          pick = { harness: (match?.[1] as WorkerPick["harness"]) ?? "pi", model: match?.[2] ?? spec, effort };
+        } else {
+          const preferred = i === 0 ? ["anthropic/claude-opus-5-5"] : ["openai/gpt-6.1-sol", "opencode/gpt-6.1-sol"];
+          const model = preferred.find((option) => piModels.includes(option)) ?? modelSpec(ctx, "off");
+          pick = { harness: "pi", model, ...(i === 1 && preferred.includes(model ?? "") ? { effort: "xhigh" } : {}) };
+        }
+        return [role, pick];
+      }));
+      const rounds = saved?.rounds ?? legacy?.rounds;
+      const defaults = { rounds: Number.isInteger(rounds) && rounds >= 1 && rounds <= 10 ? rounds : PRESETS[preset].rounds, roles };
+      const request = requested
+        ? { target: args.trim() || (preset === "pair-review" ? "working tree" : ""), selection: applyPicks(preset, defaults, requested) }
+        : workflowRequest(preset, args, defaults);
+      swarm = await Swarm.start({
+        goal: PRESETS[preset].title, cwd: ctx.cwd, pi: piInvocation(), maxActive: 2, maxWorkers: 2,
+        coordinator: { deliver: async () => undefined, stop: async () => undefined },
+        workflow: { preset, source: ctx.cwd, ...request, piModels,
+          validatePi(model, effort) {
+            const index = piModels.indexOf(model);
+            if (index < 0) throw new Error(`Pi model ${model} is not available with the current credentials.`);
+            if (effort && !getSupportedThinkingLevels(models[index]).some((level) => level === effort)) throw new Error(`Pi model ${model} does not support effort ${effort}.`);
+          },
+          save(selection) {
+            const dir = getAgentDir();
+            mkdirSync(dir, { recursive: true });
+            const file = join(dir, "swarm-picks.json");
+            const temp = `${file}.${process.pid}.tmp`;
+            writeFileSync(temp, JSON.stringify({ ...readPicks("swarm-picks.json"), [preset]: selection }, null, 2) + "\n", { mode: 0o600 });
+            renameSync(temp, file);
+          },
+        },
+      });
+      statusCtx = ctx;
+      offStatus = swarm.onEvent((event) => event.type === "roster" && footer());
+      if (ctx.mode === "tui") await openUrl(swarm.url);
+      return `${PRESETS[preset].title} setup: ${swarm.url}\nNo workers launch until you select Start. Use /swarm stop to close the run.`;
+    } finally {
+      openingWorkflow = false;
+    }
+  };
+
   pi.on("session_start", async () => {
     // Nothing survives a reload: keep the tools off until /swarm runs.
     if (!swarm) setTools(false);
@@ -105,7 +175,7 @@ export default function swarmExtension(pi: ExtensionAPI) {
   });
 
   pi.on("before_agent_start", async (event) => {
-    if (swarm) event.systemPromptOptions.sections.swarm = coordinatorRules(swarm);
+    if (swarm && !swarm.workflow) event.systemPromptOptions.sections.swarm = coordinatorRules(swarm);
     else delete event.systemPromptOptions.sections.swarm;
   });
 
@@ -118,7 +188,7 @@ export default function swarmExtension(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("swarm", {
-    description: "Coordinate named Pi workers on a shared @mention board with a local web UI (/swarm <goal> | ui | status | stop)",
+    description: "Coordinate headless workers on a shared @mention board with a local web UI (/swarm <goal> | ui | status | stop)",
     getArgumentCompletions: (prefix: string) => {
       const items = ["ui", "status", "stop"].filter((v) => v.startsWith(prefix)).map((value) => ({ value, label: value }));
       return items.length ? items : null;
@@ -144,7 +214,7 @@ export default function swarmExtension(pi: ExtensionAPI) {
       if (command.action === "status") {
         if (!swarm) return ctx.ui.notify("No swarm is running.", "warning");
         const s = await swarm.status();
-        const lines = [`Swarm ${s.id} — ${s.goal}`, `UI: ${s.url}`, `State: ${s.dir}`, ...s.members.map((m) => `  @${m.name.padEnd(14)} ${m.state.padEnd(8)} ${m.workspace}${m.branch ? ` ${m.branch}` : ""}${m.model ? `  ${m.model}` : ""}`)];
+        const lines = [`Swarm ${s.id} — ${s.goal}`, `UI: ${s.url}`, `State: ${s.dir}`, ...s.members.map((m) => `  @${m.name.padEnd(14)} ${m.state.padEnd(8)} ${m.harness ?? "pi"} ${m.workspace}${m.branch ? ` ${m.branch}` : ""}${m.model ? `  ${m.model}` : ""}${m.effort ? ` (${m.effort})` : ""}${m.problem ? ` — ${m.problem}` : ""}`)];
         if (s.queued.length) lines.push(`Queued wakes: ${s.queued.map((n) => "@" + n).join(", ")}`);
         for (const w of s.worktrees) lines.push(`  ${describeStatus(w)}`);
         ctx.ui.notify(lines.join("\n"), "info");
@@ -156,8 +226,8 @@ export default function swarmExtension(pi: ExtensionAPI) {
         return;
       }
       if (command.action !== "start") return;
-      if (swarm) {
-        ctx.ui.notify(`Swarm ${swarm.id} is already running (${swarm.url}). /swarm stop first.`, "warning");
+      if (swarm || openingWorkflow) {
+        ctx.ui.notify("A swarm is already open or starting. Use /swarm stop first.", "warning");
         return;
       }
       try {
@@ -168,6 +238,12 @@ export default function swarmExtension(pi: ExtensionAPI) {
           port: command.port,
           ...command.limits,
           coordinatorModel: modelSpec(ctx, pi.getThinkingLevel()),
+          validatePiEffort: (model, effort) => {
+            const slash = model.indexOf("/");
+            const entry = slash > 0 && ctx.modelRegistry.find(model.slice(0, slash), model.slice(slash + 1));
+            if (!entry) throw new Error(`Explicit Pi effort requires a known provider/model; ${model} was not found.`);
+            if (!getSupportedThinkingLevels(entry).some((level) => level === effort)) throw new Error(`Pi model ${model} does not support effort ${effort}.`);
+          },
           coordinator: {
             deliver: async (body) => {
               pi.sendMessage({ customType: "swarm-board", content: body, display: true }, { triggerTurn: true, deliverAs: "followUp" });
@@ -194,11 +270,36 @@ export default function swarmExtension(pi: ExtensionAPI) {
     },
   });
 
+  for (const preset of presets) pi.registerCommand(preset, {
+    description: `${PRESETS[preset].title}: configure and start two headless workers in the Swarm browser`,
+    async handler(args, ctx) {
+      try { ctx.ui.notify(await openWorkflow(preset, args, ctx), "info"); }
+      catch (error) { ctx.ui.notify((error as Error).message, "error"); }
+    },
+  });
+
+  pi.registerTool({
+    name: "swarm_workflow",
+    label: "Open pair workflow setup",
+    description: "Open browser setup for pair, pair-review, or pair-work. Pi roles can run; native Claude Code and Codex fail readiness. Keep the user's explicit selections without substituting a harness. The user starts the run in the browser.",
+    parameters: Type.Object({
+      preset: StringEnum(presets),
+      target: Type.String({ description: "Task or local review target; empty for the working tree" }),
+      rounds: Type.Optional(Type.Integer({ minimum: 1, maximum: 10 })),
+      roles: Type.Optional(Type.Record(Type.String(), Type.Object({
+        harness: Type.Optional(StringEnum(["pi", "claude"] as const)), model: Type.Optional(Type.String()), effort: Type.Optional(Type.String()),
+      }))),
+    }),
+    async execute(_id, params, _signal, _update, ctx) {
+      return text(await openWorkflow(params.preset, params.target, ctx, params));
+    },
+  });
+
   pi.registerTool({
     name: "swarm_add",
     label: "Swarm add",
     description:
-      'Spawn a named swarm worker with a fresh context and post its brief to the board as an @mention, which wakes it. workspace "inherit" shares the main checkout (readers, verifiers); "worktree" gives it an isolated git worktree and branch (parallel editors).',
+      "Spawn a headless Pi worker and post its brief to wake it. Native harnesses fail readiness; a worktree separates checkouts, not permissions.",
     promptSnippet: "Spawn a named swarm worker and post its brief to the board",
     promptGuidelines: [
       "Use swarm_add once per non-overlapping track; give every worker that edits files in parallel workspace \"worktree\".",
@@ -208,13 +309,15 @@ export default function swarmExtension(pi: ExtensionAPI) {
     parameters: Type.Object({
       name: Type.String({ description: "Short lowercase handle, e.g. builder, verifier, docs" }),
       brief: Type.String({ description: "The assignment: scope, files it owns, done criteria, and whom to @mention when done" }),
-      workspace: Type.Optional(StringEnum(["inherit", "worktree"] as const, { description: "inherit (default) = shared main checkout; worktree = isolated git worktree + branch" })),
-      model: Type.Optional(Type.String({ description: "provider/model[:thinking]; defaults to the coordinator's model" })),
+      workspace: Type.Optional(StringEnum(["inherit", "worktree"] as const, { description: "inherit (default) = shared main checkout; worktree = separate Git checkout and branch, not a sandbox" })),
+      harness: Type.Optional(StringEnum(["pi", "claude"] as const, { description: "pi (default); claude is recognized but cannot launch" })),
+      model: Type.Optional(Type.String({ description: "Pi provider/model or native CLI model ID. Omit for the coordinator's model in Pi, or the CLI default in a native harness." })),
+      effort: Type.Optional(Type.String({ description: "Explicit reasoning effort for the selected harness/model; omit to retain the default." })),
     }),
     async execute(_id, params) {
       const { member, brief } = await need().add(params);
       const where = member.workspace === "worktree" ? `worktree ${member.cwd} on ${member.branch}` : "the shared checkout";
-      return text(`Spawned @${member.name} (${member.state}) in ${where}. Brief posted as #${brief.id}.`, { member, brief });
+      return text(`Added @${member.name} (${member.harness}, ${member.state}) in ${where}. Brief posted as #${brief.id}.`, { member, brief });
     },
   });
 

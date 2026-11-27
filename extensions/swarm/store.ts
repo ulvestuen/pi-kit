@@ -4,8 +4,9 @@
 
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { Failure, Harness } from "./worker.ts";
 
-export type MemberState = "working" | "waiting" | "stopped" | "killed";
+export type MemberState = "working" | "waiting" | "stopped" | "killed" | "failed" | "blocked";
 export type Workspace = "inherit" | "worktree" | "coordinator";
 export const KINDS = ["message", "brief", "result", "question", "system"] as const;
 export type Kind = (typeof KINDS)[number];
@@ -25,7 +26,11 @@ export interface Member {
   workspace: Workspace;
   cwd: string;
   branch?: string;
+  harness?: Harness;
   model?: string;
+  effort?: string;
+  failure?: Failure;
+  problem?: string;
   lastSeenMessageId: number;
   wakes: number;
   createdAt: string;

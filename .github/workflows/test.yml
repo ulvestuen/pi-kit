@@ -20,22 +20,5 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      # Windows runs the pair suites first as an explicit file list. `run` uses pwsh there, which does not expand a
-      # glob for `node --test` the way a POSIX shell does; the list is independent of package.json, so a pair suite
-      # cannot silently drop out of the check that proves G8. These suites are the ones this plan changed (the Windows
-      # launcher, PATHEXT resolution, CRLF parsing and npm shims), and the two native Windows fixtures in
-      # windows.test.mjs run here rather than skip. The full `npm test` follows on every runner.
-      - name: pair suites (explicit files; pwsh does not expand globs)
-        if: matrix.os == 'windows-latest'
-        run: >-
-          node --test
-          skills/pair/pair.test.mjs
-          skills/pair/herdr-core.test.mjs
-          skills/pair/discovery.test.mjs
-          skills/pair/windows.test.mjs
-          skills/pair-review/pair-review.test.mjs
-          skills/pair-work/pair-work.test.mjs
-      # Every runner runs the full suite: the other skill tests and the threema workspace use only portable Node APIs
-      # (`os.tmpdir`, `path.join`, `process.execPath`) and inject `platform` where it matters, so they are OS-neutral.
       - name: npm test
         run: npm test

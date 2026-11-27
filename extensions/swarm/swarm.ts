@@ -1,19 +1,24 @@
-// One running swarm: store + router + RPC workers + worktrees + local server. Independent of ExtensionAPI so it can be
+// One running swarm: store + router + headless workers + worktrees + local server. Independent of ExtensionAPI so it can be
 // driven by tests with a fake `pi` and a temporary git repository. index.ts adapts it to Pi commands and tools.
 
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { RpcWorker, type PiCommand } from "./driver.ts";
+import type { PiCommand } from "./driver.ts";
+import { nativeInvocation, nativeWorker } from "./native.ts";
 import { COORDINATOR, HUMAN, Router, validName, type AgentHandle, type SwarmEvent } from "./router.ts";
 import { startServer, type SwarmServer } from "./server.ts";
-import { KINDS, SwarmStore, type BoardMessage, type Kind, type Member, type Workspace } from "./store.ts";
+import { KINDS, Mutex, SwarmStore, type BoardMessage, type Kind, type Member, type Workspace } from "./store.ts";
+import { DEFAULT_TURN_TIMEOUT_MS, HARNESSES, failed, piWorker, probe, type Harness, type TranscriptEvent, type TurnResult, type WorkerAdapter } from "./worker.ts";
 import { addWorktree, baseRef, describeStatus, excludeDir, removeWorktree, repoRoot, worktreeStatus, type Git, git as realGit, type WorktreeStatus } from "./worktree.ts";
+import { PairWorkflow, type Pick as WorkerPick, type WorkflowOptions } from "./workflow.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const WORKER_EXTENSION = join(HERE, "worker-ext.ts");
+const WORKFLOW_TOOLS_EXTENSION = join(HERE, "workflow-tools.ts");
 const UI_FILE = join(HERE, "ui.html");
 /** Environment that must not leak from the coordinator into workers. */
 const UNSET_ENV = ["PI_SESSION_FILE", "PI_SESSION_ID"];
@@ -32,18 +37,24 @@ export interface SwarmOptions extends Partial<SwarmLimits> {
   pi: PiCommand;
   coordinator: AgentHandle;
   coordinatorModel?: string;
+  validatePiEffort?: (model: string, effort: string) => void;
   port?: number;
   id?: string;
   git?: Git;
   /** Extra args for every worker after `--mode rpc` (tests use this to stub the CLI). */
   workerArgs?: string[];
+  nativeTurnTimeoutMs?: number;
+  managedPiTurnTimeoutMs?: number;
+  workflow?: WorkflowOptions;
 }
 
 export interface AddOptions {
   name: string;
   brief: string;
   workspace?: "inherit" | "worktree";
+  harness?: Harness;
   model?: string;
+  effort?: string;
 }
 
 export interface StopReport {
@@ -90,17 +101,17 @@ export function newSwarmId(now = new Date()): string {
   return `${stamp}-${randomBytes(2).toString("hex")}`;
 }
 
-export function workerRules(goal: string, member: Pick<Member, "name" | "workspace" | "cwd" | "branch">, base?: string): string {
+export function workerRules(goal: string, member: Pick<Member, "name" | "workspace" | "cwd" | "branch" | "harness">, base?: string): string {
   const where =
     member.workspace === "worktree"
-      ? `Your workspace is your own git worktree at ${member.cwd} on branch ${member.branch}. Edit and commit there; @coordinator merges your branch into ${base ?? "the base branch"}. Do not touch the main checkout.`
+      ? `Your workspace is your own git worktree at ${member.cwd} on branch ${member.branch}. Do not touch the main checkout.${member.harness === "claude" ? " Your tools cannot run git commands; hand off the worktree path and identify any uncommitted changes." : ` Edit and commit there; @coordinator merges your branch into ${base ?? "the base branch"}.`}`
       : `Your workspace is the shared main checkout at ${member.cwd}. Other members may be working there too: stay inside your track, and prefer reading and verifying over editing files outside it.`;
   return [
     `<swarm-worker>`,
     `You are @${member.name}, a worker in a Pi swarm run by @coordinator. Swarm goal: ${goal}`,
     `- Your assignment is the board message addressed to @${member.name} with kind "brief". Do only that track.`,
     `- ${where}`,
-    `- The shared board is how members talk. Use board_post and @mention whoever must act next: a peer (for example @verifier) to hand work over, or @coordinator when your track is done (kind "result") or blocked (kind "question").`,
+    `- The shared board is how members talk. Use board_post${member.harness && member.harness !== "pi" ? " (on the swarm_board MCP server)" : ""} and @mention whoever must act next: a peer (for example @verifier) to hand work over, or @coordinator when your track is done (kind "result") or blocked (kind "question").`,
     `- You are woken only when someone mentions you; the board messages you have not seen arrive as your next prompt. Ending your turn is how you wait. Never poll, sleep, or loop while waiting.`,
     `- Messages from @human come from the person running the swarm and take priority.`,
     `</swarm-worker>`,
@@ -116,10 +127,11 @@ export class Swarm {
   readonly store: SwarmStore;
   readonly router: Router;
   readonly uiToken = randomBytes(18).toString("base64url");
+  readonly workflow?: PairWorkflow;
   server: SwarmServer | null = null;
-  private readonly workers = new Map<string, RpcWorker>();
+  private readonly workerChanges = new Mutex();
+  private readonly workers = new Map<string, WorkerAdapter>();
   private readonly tokens = new Map<string, string>();
-  private readonly started = new Set<string>();
   private readonly git: Git;
   private stopping = false;
 
@@ -132,23 +144,26 @@ export class Swarm {
     this.limits = { ...DEFAULT_LIMITS, ...Object.fromEntries(Object.entries({ maxActive: options.maxActive, maxWorkers: options.maxWorkers, maxWakes: options.maxWakes }).filter(([, v]) => v !== undefined)) };
     this.store = new SwarmStore(join(root, ".swarm"), this.id, this.goal, base);
     this.router = new Router(this.store, { maxActive: this.limits.maxActive, maxWakes: this.limits.maxWakes });
+    if (options.workflow) this.workflow = new PairWorkflow(this, options.workflow);
   }
 
   static async start(options: SwarmOptions): Promise<Swarm> {
     const run = options.git ?? realGit;
-    const top = await repoRoot(options.cwd, run);
-    const root = top ?? resolve(options.cwd);
+    const top = options.workflow ? null : await repoRoot(options.cwd, run);
+    const root = options.workflow ? mkdtempSync(join(tmpdir(), "pi-swarm-pair-")) : top ?? resolve(options.cwd);
     if (top) await excludeDir(top, ".swarm/", run);
     const swarm = new Swarm(options, root, Boolean(top), top ? await baseRef(top, run) : undefined);
-    await swarm.store.upsertMember(COORDINATOR, { state: "working", workspace: "coordinator", cwd: root, model: options.coordinatorModel });
-    swarm.router.attach(COORDINATOR, options.coordinator);
+    if (!swarm.workflow) {
+      await swarm.store.upsertMember(COORDINATOR, { state: "working", workspace: "coordinator", cwd: root, harness: "pi", model: options.coordinatorModel });
+      swarm.router.attach(COORDINATOR, options.coordinator);
+    }
     try {
       swarm.server = await startServer(swarm.serverApi(), { token: swarm.uiToken, port: options.port });
     } catch (error) {
       await swarm.store.close();
       throw error;
     }
-    await swarm.router.post("system", `Swarm ${swarm.id} started.\n\n**Goal:** ${swarm.goal}`, "system");
+    if (!swarm.workflow) await swarm.router.post("system", `Swarm ${swarm.id} started.\n\n**Goal:** ${swarm.goal}`, "system");
     return swarm;
   }
 
@@ -170,6 +185,12 @@ export class Swarm {
   }
 
   async add(input: AddOptions): Promise<{ member: Member; brief: BoardMessage }> {
+    return this.workerChanges.run(() => this.addWorker(input));
+  }
+
+  private async addWorker(input: AddOptions): Promise<{ member: Member; brief: BoardMessage }> {
+    if (this.stopping) throw new Error("The swarm is stopping.");
+    if (this.workflow) throw new Error("Workflow workers are configured in browser setup.");
     const name = input.name.trim().toLowerCase();
     if (!validName(name)) throw new Error(`Invalid worker name "${input.name}": use 1-31 lowercase letters, digits, or dashes, starting with a letter (reserved: coordinator, human, system, all).`);
     const existing = this.store.member(name);
@@ -177,6 +198,17 @@ export class Swarm {
     if (existing) throw new Error(`@${name} was killed in this swarm; choose a new name.`);
     if (this.liveMembers().length >= this.limits.maxWorkers) throw new Error(`Worker limit reached (${this.limits.maxWorkers}). Kill a finished worker first.`);
     if (!input.brief.trim()) throw new Error("brief is required");
+    const harness = input.harness ?? "pi";
+    if (!HARNESSES.includes(harness)) throw new Error(`Unsupported harness ${harness}. Choose ${HARNESSES.join(", ")}.`);
+    const requestedModel = input.model?.trim() || undefined;
+    const effort = input.effort?.trim() || undefined;
+    let model = requestedModel ?? (harness === "pi" ? this.options.coordinatorModel : undefined);
+    if (harness === "pi" && effort) {
+      if (requestedModel?.includes(":")) throw new Error("Choose Pi effort separately or use the legacy model:effort syntax, not both.");
+      model = model?.replace(/:[a-z]+$/, "");
+      if (!model || !this.options.validatePiEffort) throw new Error("Explicit Pi effort requires a model in the coordinator's model registry.");
+      this.options.validatePiEffort(model, effort);
+    }
     const workspace: Workspace = input.workspace ?? "inherit";
     let cwd = this.root;
     let branch: string | undefined;
@@ -185,15 +217,77 @@ export class Swarm {
       if (!this.isRepo) throw new Error(`workspace "worktree" needs a git repository; ${this.root} is not one.`);
       cwd = join(this.store.dir, "worktrees", name);
       branch = `swarm/${this.id}/${name}`;
-      await addWorktree(this.root, cwd, branch, base ?? "HEAD", this.git);
     }
-    const model = input.model ?? this.options.coordinatorModel;
-    const member = await this.store.upsertMember(name, { state: "waiting", workspace, cwd, branch, model, lastSeenMessageId: 0, wakes: 0 });
+    const selection = { name, workspace, cwd, branch, harness, model, effort };
+    const token = randomBytes(18).toString("base64url");
+    const worker = this.createWorker(selection, token, base);
+    await worker.preflight();
+    if (this.stopping) throw new Error("The swarm is stopping.");
+    if (branch) await addWorktree(this.root, cwd, branch, base ?? "HEAD", this.git);
+    await this.store.upsertMember(name, { ...selection, state: "waiting", lastSeenMessageId: 0, wakes: 0 });
+    if (!this.stopping) this.tokens.set(token, name);
+    this.attachWorker(name, harness, token, worker);
     this.router.emitEvent({ type: "roster", members: this.store.getRoster().members });
-    this.createWorker(member, base);
     // The brief is an ordinary @mention: it wakes the worker through the same router as every other message.
     const brief = await this.router.post(COORDINATOR, `@${name} ${input.brief.trim()}`, "brief");
     return { member: this.store.member(name)!, brief };
+  }
+
+  /** Build and check both roles before adding either to the roster. Workflow roles are never attached to mention routing. */
+  async prepareWorkflowWorkers(roles: (WorkerPick & { name: string; policy: "read" | "write" })[], cwd: string, preflightCwd: string) {
+    const workers = await Promise.all(roles.map(async ({ policy, ...pick }) => {
+      const member = { ...pick, cwd, workspace: "inherit" as const };
+      const token = randomBytes(18).toString("base64url");
+      const worker = this.createWorker(member, token, undefined, policy, preflightCwd);
+      try { await worker.preflight(); } catch (error) { throw new Error(`@${member.name}: ${(error as Error).message}`); }
+      return { member, token, worker };
+    }));
+    return () => this.workerChanges.run(async () => {
+      if (this.stopping || this.workflow?.snapshot().status !== "checking") return;
+      for (const { member, token, worker } of workers) {
+        this.workers.set(member.name, worker);
+        this.tokens.set(token, member.name);
+        await this.store.upsertMember(member.name, { ...member, state: "waiting" });
+      }
+      this.router.emitEvent({ type: "roster", members: this.store.getRoster().members });
+    });
+  }
+
+  async workflowTurn(name: string, prompt: string): Promise<TurnResult> {
+    const worker = this.workers.get(name);
+    if (!worker || this.stopping) return { type: "cancelled" };
+    const wakes = this.store.member(name)!.wakes;
+    await this.store.upsertMember(name, { state: "working", wakes: wakes + 1 });
+    this.router.emitEvent({ type: "roster", members: this.store.getRoster().members });
+    // Private prompts and raw reports are never published to the board or written to transcripts.
+    const result = await worker.deliver(prompt).catch(() => failed("exit", "Could not deliver the workflow turn."));
+    if (result.type === "failed") {
+      await this.record(name, { type: "turn_failed", failure: result.failure, reason: result.reason });
+      await this.router.exited(name, undefined, result.failure);
+      await this.store.upsertMember(name, { problem: result.reason });
+      this.router.emitEvent({ type: "roster", members: this.store.getRoster().members });
+    } else if (result.type === "completed") {
+      await this.record(name, { type: "agent_settled" });
+      await this.router.settled(name);
+      return { ...result, text: this.redact(result.text) };
+    } else {
+      await this.record(name, { type: "turn_cancelled" });
+    }
+    return result;
+  }
+
+  async stopWorkflowWorkers() {
+    if (!this.workflow) return;
+    await this.workerChanges.run(async () => {
+      this.tokens.clear();
+      await Promise.all([...this.workers].map(async ([name, worker]) => {
+        await worker.stop();
+        const member = this.store.member(name);
+        if (member?.state === "working" || member?.state === "waiting") await this.store.upsertMember(name, { state: "stopped" });
+      }));
+      this.workers.clear();
+      this.router.emitEvent({ type: "roster", members: this.store.getRoster().members });
+    });
   }
 
   async post(from: string, body: string, kind: Kind = "message"): Promise<BoardMessage> {
@@ -224,9 +318,9 @@ export class Swarm {
     const member = this.store.member(name);
     if (!member || name === COORDINATOR) throw new Error(`No worker named @${name}.`);
     if (member.state !== "killed") {
+      for (const [token, owner] of this.tokens) if (owner === name) this.tokens.delete(token);
       await this.router.kill(name);
       this.workers.delete(name);
-      for (const [token, owner] of this.tokens) if (owner === name) this.tokens.delete(token);
       await this.router.post("system", `@${name} was killed.`, "system");
     }
     if (member.workspace !== "worktree" || !member.branch) return { member: this.store.member(name)!, removed: false };
@@ -239,6 +333,9 @@ export class Swarm {
     const report: StopReport = { stopped: [], kept: [], removed: [], errors: [] };
     if (this.stopping) return report;
     this.stopping = true;
+    await this.workflow?.cancel();
+    this.tokens.clear();
+    await this.workerChanges.run(() => undefined);
     for (const [name, worker] of this.workers) {
       try {
         await worker.stop();
@@ -249,7 +346,7 @@ export class Swarm {
       const m = this.store.member(name);
       if (m && m.state !== "killed") await this.store.upsertMember(name, { state: "stopped" });
     }
-    await this.store.upsertMember(COORDINATOR, { state: "stopped" });
+    if (!this.workflow) await this.store.upsertMember(COORDINATOR, { state: "stopped" });
     const roster = this.store.getRoster();
     for (const m of roster.members) {
       if (m.workspace !== "worktree" || !m.branch) continue;
@@ -282,77 +379,91 @@ export class Swarm {
 
   // ----- internals -----
 
-  private createWorker(member: Member, base: string | undefined) {
-    const token = randomBytes(18).toString("base64url");
-    this.tokens.set(token, member.name);
-    const sessionDir = join(this.store.dir, "sessions", member.name);
+  private createWorker(member: Pick<Member, "name" | "cwd" | "workspace" | "branch" | "harness" | "model" | "effort">, token: string, base: string | undefined, policy?: "read" | "write", preflightCwd = this.root): WorkerAdapter {
+    const { name, cwd, harness, model, effort } = member;
+    const rules = policy ? `Follow the assigned workflow phase. Use only this checkout for the task. ${policy === "read" ? "Do not edit files." : "Only edit task files; do not commit, merge or push."} Return your final report as instructed.` : workerRules(this.goal, member, base);
+    const env = { PI_SWARM_ROLE: "worker", PI_SWARM_ID: this.id, PI_SWARM_NAME: name, PI_SWARM_URL: this.apiBase, PI_SWARM_TOKEN: token };
+    const onRecord = (record: TranscriptEvent, live?: boolean) => {
+      if (this.stopping || !this.tokens.has(token)) return;
+      if (policy && record.type !== "agent_start") return;
+      if (live) this.router.emitEvent({ type: "transcript", name, record: { ...this.safeRecord(record), ts: Date.now() } });
+      else void this.record(name, record);
+    };
+    if (harness === "claude" || harness === "codex") {
+      const childEnv: NodeJS.ProcessEnv = { ...process.env, ...env };
+      for (const key of UNSET_ENV) delete childEnv[key];
+      return nativeWorker({ harness, cli: nativeInvocation(harness, preflightCwd), cwd, env: childEnv, model, effort, policy,
+        rules, boardUrl: `${this.apiBase}/api/worker/mcp`, timeoutMs: this.options.nativeTurnTimeoutMs, onRecord,
+        revokeBoard: () => this.tokens.delete(token) });
+    }
     const args = [
       ...(this.options.workerArgs ?? []),
-      "--session-dir", sessionDir,
-      "--name", `swarm ${this.id} @${member.name}`,
-      "-e", WORKER_EXTENSION,
-      "--append-system-prompt", workerRules(this.goal, member, base),
-      ...(member.model ? ["--model", member.model] : []),
+      ...(policy
+        ? ["--no-session", "--no-approve", "--no-extensions", "--no-mcp", "--no-skills", "--no-context-files",
+          "--tools", policy === "write" ? "task_read,task_ls,task_edit,task_write" : "task_read,task_ls",
+          "-e", WORKFLOW_TOOLS_EXTENSION]
+        : ["--session-dir", join(this.store.dir, "sessions", name), "-e", WORKER_EXTENSION]),
+      "--name", `swarm ${this.id} @${name}`,
+      "--append-system-prompt", rules,
+      ...(model ? ["--model", model] : []),
+      ...(effort ? ["--thinking", effort] : []),
     ];
-    const name = member.name;
-    const worker = new RpcWorker({
-      name,
-      cwd: member.cwd,
-      pi: this.options.pi,
-      args,
-      unset: UNSET_ENV,
-      env: { PI_SWARM_ROLE: "worker", PI_SWARM_ID: this.id, PI_SWARM_NAME: name, PI_SWARM_URL: this.apiBase, PI_SWARM_TOKEN: token },
-      onEvent: (event) => this.onWorkerEvent(name, event),
-      onExit: ({ code, signal, expected, stderr }) => {
-        if (expected || this.stopping) return;
-        const tail = stderr.trim().split("\n").slice(-3).join(" | ");
-        void this.record(name, { type: "exit", code, signal, stderr: tail });
-        void this.router.exited(name, `exit ${signal ?? code}${tail ? `: ${tail}` : ""}`);
+    const worker = piWorker({
+      name, cwd, pi: this.options.pi, args, unset: UNSET_ENV,
+      env: policy ? { ...env, PI_SWARM_WORKFLOW_WRITE: policy === "write" ? "1" : "0" } : env, onRecord,
+      managedTimeoutMs: policy ? this.options.managedPiTurnTimeoutMs ?? DEFAULT_TURN_TIMEOUT_MS : undefined,
+      onIdleExit: (reason) => {
+        if (this.stopping || !this.tokens.has(token)) return;
+        reason = this.redact(reason);
+        void this.record(name, { type: "turn_failed", failure: "exit", reason });
+        void this.router.exited(name, reason);
       },
     });
+    if (policy) worker.preflight = async () => {
+      const result = await probe(this.options.pi, ["--version"], preflightCwd);
+      if (!result.ok) throw new Error("The Pi CLI version check failed.");
+      const auth = await probe(this.options.pi, ["auth", "check", "--model", model!, "--json", "--no-refresh"], preflightCwd);
+      if (!auth.ok) throw new Error(`Pi could not verify ${model} without extensions. Check credentials or choose another model or harness.`);
+    };
+    return worker;
+  }
+
+  private attachWorker(name: string, harness: Harness, token: string, worker: WorkerAdapter) {
     this.workers.set(name, worker);
     this.router.attach(name, {
       deliver: async (text) => {
-        if (this.stopping) return;
-        if (!worker.running) {
-          // A stopped worker resumes its own session; a new one starts fresh.
-          worker.start(this.started.has(name) ? ["--continue"] : []);
-          this.started.add(name);
-        }
+        if (this.stopping || !this.tokens.has(token)) return;
         await this.record(name, { type: "wake", text });
-        // "handled" means no run started, so no agent_settled will follow: settle here or the member stays working.
-        if ((await worker.prompt(text)) === "handled") await this.router.settled(name);
+        if (this.stopping || !this.tokens.has(token)) return;
+        const result = await worker.deliver(text);
+        if (result.type === "cancelled" || this.stopping || this.store.member(name)?.state === "killed") {
+          await this.record(name, { type: "turn_cancelled" });
+          if (!this.stopping && this.tokens.has(token)) await this.router.settled(name);
+        } else if (result.type === "failed") {
+          const reason = this.redact(result.reason);
+          await this.record(name, { type: "turn_failed", failure: result.failure, reason });
+          if (harness !== "pi") this.tokens.delete(token);
+          if (!this.stopping) await this.router.exited(name, reason, harness === "pi" ? undefined : result.failure);
+        } else {
+          await this.record(name, { type: "agent_settled" });
+          if (!this.stopping) await this.router.settled(name);
+        }
       },
       stop: () => worker.stop(),
     });
   }
 
-  private onWorkerEvent(name: string, event: any) {
-    switch (event?.type) {
-      case "agent_settled":
-        void this.record(name, event).then(() => this.router.settled(name));
-        return;
-      case "message_end":
-      case "tool_execution_start":
-      case "tool_execution_end":
-      case "agent_start":
-      case "auto_retry_start":
-      case "auto_retry_end":
-      case "compaction_end":
-      case "extension_error":
-        void this.record(name, event);
-        return;
-      case "message_update": {
-        // Live-only (not persisted): stream text so the drawer shows progress while the model writes.
-        const e = event.assistantMessageEvent;
-        if (e?.type === "text_delta" || e?.type === "thinking_delta") this.router.emitEvent({ type: "transcript", name, record: { type: "delta", kind: e.type, delta: e.delta, ts: Date.now() } });
-        return;
-      }
-    }
+  private redact(text: string): string {
+    for (const token of [this.uiToken, ...this.tokens.keys()]) text = text.replaceAll(token, "[redacted]");
+    return text;
   }
 
-  private async record(name: string, event: any) {
-    const record = { ts: Date.now(), ...event };
+  private safeRecord(record: TranscriptEvent): TranscriptEvent {
+    return JSON.parse(this.redact(JSON.stringify(record)));
+  }
+
+  private async record(name: string, event: TranscriptEvent) {
+    const record = { ts: Date.now(), ...this.safeRecord(event) };
     await this.store.appendTranscript(name, record);
     this.router.emitEvent({ type: "transcript", name, record });
   }
@@ -361,17 +472,22 @@ export class Swarm {
     const html = existsSync(UI_FILE) ? readFileSync(UI_FILE, "utf8") : "<!doctype html><p>ui.html missing</p>";
     return {
       html: () => html,
-      state: () => ({ id: this.id, goal: this.goal, dir: relative(this.root, this.store.dir) || this.store.dir, limits: this.limits, roster: this.store.getRoster(), board: this.store.messages(), queued: this.router.queued() }),
+      state: () => ({ id: this.id, goal: this.goal, dir: this.workflow ? this.store.dir : relative(this.root, this.store.dir) || this.store.dir, limits: this.limits, roster: this.store.getRoster(), board: this.store.messages(), queued: this.router.queued(), workflow: this.workflow?.snapshot() }),
+      workflowAction: this.workflow ? (input: unknown) => this.workflow!.action(input) : undefined,
       transcript: (name: string) => (this.store.member(name) ? this.store.transcript(name) : null),
       humanPost: (body: string) => this.post(HUMAN, body, "message"),
       workerName: (token: string) => this.tokens.get(token) ?? null,
-      workerPost: (name: string, body: string, kind: Kind) => this.post(name, body, kind === "brief" || kind === "system" ? "message" : kind),
+      workerPost: (name: string, body: string, kind: Kind) => {
+        if (this.workflow) throw Object.assign(new Error("Workflow reports do not go on the board."), { status: 403 });
+        return this.post(name, this.redact(body), kind === "brief" || kind === "system" ? "message" : kind);
+      },
       workerRead: async (name: string, q: URLSearchParams) =>
-        this.read(name, { since: q.has("since") ? Number(q.get("since")) : undefined, from: q.get("from") ?? undefined, limit: q.has("limit") ? Number(q.get("limit")) : undefined }),
+        this.workflow ? { messages: [], members: [], lastId: 0 } : this.read(name, { since: q.has("since") ? Number(q.get("since")) : undefined, from: q.get("from") ?? undefined, limit: q.has("limit") ? Number(q.get("limit")) : undefined }),
       subscribe: (listener: (type: string, data: unknown) => void) =>
         this.onEvent((event) => {
           if (event.type === "board") listener("board", event.message);
           else if (event.type === "roster") listener("roster", { members: event.members, queued: this.router.queued() });
+          else if (event.type === "workflow") listener("workflow", event.workflow);
           else listener("transcript", { name: event.name, record: event.record });
         }),
     };

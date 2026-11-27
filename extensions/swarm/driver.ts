@@ -25,15 +25,24 @@ export function piInvocation(argv = process.argv, execPath = process.execPath): 
 export class LineSplitter {
   private readonly decoder = new StringDecoder("utf8");
   private buffer = "";
+  constructor(private readonly maxRecord = Infinity) {}
   push(chunk: Buffer | string, onLine: (line: string) => void) {
     this.buffer += typeof chunk === "string" ? chunk : this.decoder.write(chunk);
     let nl: number;
     while ((nl = this.buffer.indexOf("\n")) >= 0) {
+      if (nl > this.maxRecord) throw new Error("JSONL record exceeds limit");
       let line = this.buffer.slice(0, nl);
       this.buffer = this.buffer.slice(nl + 1);
       if (line.endsWith("\r")) line = line.slice(0, -1);
       if (line) onLine(line);
     }
+    if (this.buffer.length > this.maxRecord) throw new Error("JSONL record exceeds limit");
+  }
+
+  end(onLine: (line: string) => void) {
+    const last = this.buffer + this.decoder.end();
+    this.buffer = "";
+    if (last.trim()) onLine(last);
   }
 }
 

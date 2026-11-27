@@ -1,17 +1,20 @@
 import { after, describe, it } from "node:test";
 import * as assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import fs, { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { LineSplitter } from "./driver.ts";
+import { nativeWorker } from "./native.ts";
 import { formatUnread, parseMentions, Router, validName, type AgentHandle } from "./router.ts";
 import { startServer, type ServerApi } from "./server.ts";
 import { Mutex, readJsonl, SwarmStore } from "./store.ts";
 import { parseSwarmArgs, Swarm } from "./swarm.ts";
+import { workflowRequest, type Preset, type Selection } from "./workflow.ts";
 import { addWorktree, excludeDir, removeWorktree, worktreeStatus } from "./worktree.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -342,6 +345,10 @@ describe("server", () => {
     assert.equal((await http(server.port, "/api/worker/board", { method: "POST", headers: { ...host, "x-swarm-token": "tok" }, body: '{"body":"x"}' })).status, 401);
     const r = await http(server.port, "/api/worker/board", { method: "POST", headers: { ...host, "x-swarm-token": "wtok" }, body: '{"body":"x","kind":"result"}' });
     assert.equal(JSON.parse(r.body).from, "builder");
+    const mcp = { method: "POST", headers: { ...host, "x-swarm-token": "tok" }, body: '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' };
+    assert.equal((await http(server.port, "/api/worker/mcp", mcp)).status, 401, "UI token cannot use worker MCP");
+    assert.equal((await http(server.port, "/api/worker/mcp?t=wtok", { ...mcp, headers: host })).status, 401, "worker tokens are header-only");
+    assert.equal((await http(server.port, "/api/state", { headers: { ...host, "x-swarm-token": "wtok" } })).status, 401, "worker cannot see UI state or transcripts");
   });
 
   it("streams a snapshot then live events over SSE", async () => {
@@ -363,6 +370,101 @@ describe("server", () => {
       req.end();
     });
     assert.deepEqual(events.slice(0, 2), ["snapshot", "board"]);
+  });
+});
+
+describe("native swarm readiness", () => {
+  it("refuses native CLIs before invoking them, creating a worktree, or dispatching", async (t) => {
+    const cwd = gitRepo();
+    const log = join(cwd, ".git", "native.log");
+    const fixtureEnv = { SWARM_CLAUDE_BIN: join(HERE, "fake-native.mjs"), SWARM_CODEX_BIN: join(HERE, "fake-native.mjs"), FAKE_NATIVE_LOG: log };
+    const previous = new Map(Object.keys(fixtureEnv).map((key) => [key, process.env[key]]));
+    Object.assign(process.env, fixtureEnv);
+    t.after(() => { for (const [key, value] of previous) value === undefined ? delete process.env[key] : process.env[key] = value; });
+    const swarm = await Swarm.start({ goal: "Verify the parser", cwd, pi: { command: process.execPath, args: [join(HERE, "fake-pi.mjs")] }, coordinator: new FakeAgent() });
+    t.after(async () => { await swarm.stop(); rmSync(cwd, { recursive: true, force: true }); });
+    const boardBefore = swarm.store.messages();
+    await assert.rejects(swarm.add({ name: "reviewer", harness: "claude", workspace: "worktree", brief: "Verify the parser" }), /cannot verify Claude Code's effective managed permissions or startup hooks/i);
+    await assert.rejects(swarm.add({ name: "checker", harness: "codex", workspace: "worktree", brief: "Verify the parser" }), /cannot verify Codex's effective permissions/i);
+    assert.deepEqual(swarm.liveMembers(), []);
+    assert.deepEqual(swarm.store.messages(), boardBefore);
+    assert.equal(g(cwd, "branch", "--list", "swarm/*"), "");
+    assert.equal(existsSync(log), false);
+  });
+});
+
+describe("native transport (fixture CLI only)", { skip: process.platform === "win32" }, () => {
+  async function fixture(t: import("node:test").TestContext, rules: object[], timeoutMs?: number) {
+    const cwd = tmp();
+    const script = join(cwd, "rules.json");
+    const log = join(cwd, "native.log");
+    writeFileSync(script, JSON.stringify({ builder: rules }));
+    let authorized = true;
+    const records: any[] = [];
+    const posts: { from: string; body: string }[] = [];
+    const server = await startServer({
+      html: () => "", state: () => ({}), transcript: () => null, subscribe: () => () => {},
+      humanPost: async () => { throw new Error("Not part of this fixture"); },
+      workerName: (token) => authorized && token === "fixture-worker-token" ? "builder" : null,
+      workerRead: async () => ({ messages: posts }),
+      workerPost: async (name, body, kind) => {
+        posts.push({ from: name, body });
+        return { id: posts.length, ts: "t", from: name, mentions: [], kind, body };
+      },
+    }, { token: "fixture-ui-token" });
+    // Exercise the retained transport against the fixture executable, never the real native CLI.
+    const worker = nativeWorker({ harness: "claude", cli: { command: process.execPath, args: [join(HERE, "fake-native.mjs")] }, cwd,
+      model: "claude-sonnet-4-6", effort: "high", timeoutMs, rules: "You are the builder.",
+      env: { PI_SWARM_NAME: "builder", PI_SWARM_TOKEN: "fixture-worker-token", FAKE_NATIVE_SCRIPT: script, FAKE_NATIVE_LOG: log },
+      boardUrl: `http://127.0.0.1:${server.port}/api/worker/mcp`, onRecord: (r) => records.push(r), revokeBoard: () => { authorized = false; } });
+    t.after(async () => { await worker.stop(); await server.close(); rmSync(cwd, { recursive: true, force: true }); });
+    return { worker, cwd, records, posts, log: () => readJsonl<any>(log) };
+  }
+
+  it("posts through authenticated MCP and resumes the exact session without replay", async (t) => {
+    const { worker, cwd, posts, log } = await fixture(t, [{ when: "start", post: "@reviewer inspect the parser" }, { when: "recheck", read: true }, { when: "lost", fail: "lost-session" }]);
+    assert.deepEqual(await worker.deliver("start"), { type: "completed", text: "builder finished café\u2028✓" });
+    assert.equal((await worker.deliver("recheck")).type, "completed");
+    assert.match(JSON.stringify(await worker.deliver("lost")), /lost-session/);
+    const launches = log().filter((e) => e.event === "launch");
+    const [first, recheck] = launches;
+    assert.equal(first.cwd, fs.realpathSync(cwd));
+    assert.deepEqual(launches.map((e) => e.resume), [null, first.session, first.session]);
+    assert.equal(recheck.prompt, "recheck");
+    assert.match(first.args.join(" "), /--output-format stream-json.*--restricted.*--permission-mode dontAsk.*--model claude-sonnet-4-6 --effort high/);
+    assert.ok(launches.every((e) => !e.hasTokenInInput && !e.args.some((a: string) => /dangerously|--last|--continue/.test(a))));
+    assert.deepEqual(posts, [{ from: "builder", body: "@reviewer inspect the parser" }]);
+    assert.deepEqual(log().find((e) => e.event === "read").messages, posts);
+  });
+
+  for (const [error, failure] of [["auth", "auth"], ["permission", "permission"], ["malformed", "protocol"], ["wrong-session", "lost-session"]]) {
+    it(`reports ${error} without retrying`, async (t) => {
+      const { worker, log } = await fixture(t, [{ when: "trigger", fail: error }]);
+      if (error === "wrong-session") assert.equal((await worker.deliver("start")).type, "completed");
+      const result = await worker.deliver("trigger");
+      assert.equal(result.type === "failed" && result.failure, failure);
+      assert.equal(log().filter((e) => e.event === "launch").length, error === "wrong-session" ? 2 : 1);
+    });
+  }
+
+  it("cancels the turn and its helper, revoking board access before signalling", async (t) => {
+    const { worker, log, records, posts } = await fixture(t, [{ when: "hold", linger: true, helper: true }]);
+    const turn = worker.deliver("hold");
+    await until(() => log().some((e) => e.event === "ready-to-cancel"), "fixture ready to cancel");
+    await worker.stop();
+    assert.deepEqual(await turn, { type: "cancelled" });
+    assert.equal(log().find((e) => e.event === "late")?.status, 401);
+    const helperPid = log().find((e) => e.event === "ready-to-cancel").helperPid;
+    assert.ok(helperPid);
+    assert.throws(() => process.kill(helperPid, 0), { code: "ESRCH" });
+    assert.ok(!JSON.stringify(records).includes("late transcript"));
+    assert.deepEqual(posts, []);
+  });
+
+  it("times out a hung fixture turn", async (t) => {
+    const { worker, log } = await fixture(t, [{ when: "hold", linger: true }], 1_000);
+    assert.match(JSON.stringify(await worker.deliver("hold")), /"failure":"timeout"/);
+    assert.equal(log().find((e) => e.event === "late")?.status, 401);
   });
 });
 
@@ -482,5 +584,408 @@ describe("swarm end to end (fake pi workers, temp git repo)", () => {
       delete process.env.FAKE_PI_SCRIPT;
       delete process.env.FAKE_PI_LOG;
     }
+  });
+});
+
+describe("structured swarm presets", () => {
+  const report = (report: string, verdict?: string) => JSON.stringify({ report, verdict });
+  const pi = { harness: "pi", model: "fixture/model" } as const;
+  const selection = (a: string, b: string): Selection => ({ rounds: 1, roles: { [a]: pi, [b]: pi } });
+
+  async function run(t: import("node:test").TestContext, source: string, preset: Preset, target: string, picks: Selection, rules: object, managedPiTurnTimeoutMs?: number) {
+    const script = join(tmp("pair-fixture-"), "rules.json");
+    const log = script + ".log";
+    writeFileSync(script, JSON.stringify(rules));
+    const env = { SWARM_CLAUDE_BIN: join(HERE, "fake-native.mjs"), SWARM_CODEX_BIN: join(HERE, "fake-native.mjs"), FAKE_NATIVE_SCRIPT: script, FAKE_NATIVE_LOG: log, FAKE_PI_SCRIPT: script, FAKE_PI_LOG: log };
+    const previous = new Map(Object.keys(env).map((key) => [key, process.env[key]]));
+    Object.assign(process.env, env);
+    const saved: Selection[] = [];
+    const swarm = await Swarm.start({ goal: preset, cwd: source, pi: { command: process.execPath, args: [join(HERE, "fake-pi.mjs")] }, coordinator: new FakeAgent(),
+      managedPiTurnTimeoutMs, workflow: { preset, target, source, selection: picks, save: (value) => saved.push(value) } });
+    t.after(async () => {
+      try { await swarm.stop(); } finally {
+        rmSync(swarm.root, { recursive: true, force: true });
+        rmSync(dirname(script), { recursive: true, force: true });
+        rmSync(source, { recursive: true, force: true });
+        for (const [key, value] of previous) value === undefined ? delete process.env[key] : process.env[key] = value;
+      }
+    });
+    const http = async (path: string, body?: object): Promise<any> => {
+      const res = await fetch(`${swarm.apiBase}${path}`, { headers: { "x-swarm-token": swarm.uiToken, "content-type": "application/json" },
+        ...(body ? { method: "POST", body: JSON.stringify(body) } : {}) });
+      assert.equal(res.status, 200);
+      return res.json();
+    };
+    return { swarm, saved, log: () => readJsonl<any>(log), http, state: () => swarm.workflow!.snapshot(),
+      action: (action: string, override = picks) => http("/api/workflow", { action, selection: override, target }) };
+  }
+
+  it("prefills slash-command roles without carrying model or effort across harness changes", () => {
+    const result = workflowRequest("pair-review", "main...HEAD -- --lead-harness claude --lead-model claude-sonnet-4-6 --lead-effort high --rounds 2", {
+      rounds: 1, roles: { lead: { ...pi, effort: "xhigh" }, peer: { harness: "codex", model: "gpt-5.4" } },
+    });
+    assert.deepEqual(result, { target: "main...HEAD", selection: { rounds: 2, roles: {
+      lead: { harness: "claude", model: "claude-sonnet-4-6", effort: "high" }, peer: { harness: "codex", model: "gpt-5.4", effort: undefined },
+    } } });
+    assert.throws(() => workflowRequest("pair-review", "HEAD -- --lead-harness agy", result.selection), /Choose a harness/);
+  });
+
+  it("pins staged, unstaged and untracked review inputs and releases first reports only after both finish", async (t) => {
+    const source = gitRepo();
+    writeFileSync(join(source, "README.md"), "staged line\n");
+    g(source, "add", "README.md");
+    writeFileSync(join(source, "README.md"), "unstaged line\n");
+    writeFileSync(join(source, "new.txt"), "untracked evidence\n");
+    const before = g(source, "status", "--porcelain");
+    const ignoreBefore = readFileSync(join(source, ".git/info/exclude"), "utf8");
+    const f = await run(t, source, "pair-review", "working tree", selection("lead", "peer"), {
+      lead: [{ when: "Phase: Independent review", text: report("Private lead finding"), readPath: "tree/README.md" },
+        { when: "Phase: Cross-check", text: report("Lead confirmed peer finding.") }, { when: "Phase: Final review", text: report("Consolidated changes.", "changes requested") }],
+      peer: [{ when: "Phase: Independent review", text: report("Private peer finding"), readPath: "tree/new.txt", delayMs: 1_500 },
+        { when: "Phase: Cross-check", text: report("Peer confirmed lead finding.") }],
+    });
+    assert.equal((await f.action("check")).phase, "Workers are ready");
+    assert.deepEqual(f.log(), []);
+    assert.equal((await f.action("start")).status, "running");
+    await until(() => f.swarm.store.member("lead")?.state === "waiting" && f.log().some((e) => e.name === "lead" && e.event === "file"), "first lead report");
+    const during = await f.http("/api/state");
+    assert.deepEqual(during.workflow.reports, []);
+    assert.deepEqual(during.board, []);
+    assert.doesNotMatch(JSON.stringify(await f.http("/api/workers/lead/transcript")), /Private lead finding/);
+    await until(() => f.state().status === "complete", "review verdict");
+    const launches = f.log().filter((e) => e.event === "start");
+    assert.equal(new Set(launches.map((e) => e.cwd)).size, 1);
+    assert.ok(launches[0].cwd !== source);
+    assert.ok(launches.every(({ argv }) => argv[argv.indexOf("--tools") + 1] === "task_read,task_ls"));
+    const prompts = f.log().flatMap((e) => typeof (e.prompt ?? e.message) === "string" ? [{ name: e.name, text: e.prompt ?? e.message }] : []);
+    const independent = prompts.filter((e) => e.text.includes("Phase: Independent review"));
+    assert.equal(independent.length, 2);
+    assert.ok(independent.every((e) => !e.text.includes("Private")));
+    assert.match(prompts.find((e) => e.name === "peer" && e.text.includes("Phase: Cross-check"))!.text, /Private lead finding/);
+    assert.equal(f.log().find((e) => e.event === "file" && e.name === "lead").text, "unstaged line\n");
+    assert.equal(f.log().find((e) => e.event === "file" && e.name === "peer").text, "untracked evidence\n");
+    const patch = readFileSync(join(launches[0].cwd, "review.patch"), "utf8");
+    assert.match(patch, /Staged changes:[\s\S]*\+staged line[\s\S]*Unstaged changes:[\s\S]*\+unstaged line/);
+    const reconnected = await f.http("/api/state");
+    assert.equal(reconnected.workflow.verdict, "changes requested");
+    assert.equal(reconnected.workflow.reports.length, 5);
+    assert.deepEqual(JSON.parse(readFileSync(join(f.swarm.store.dir, "workflow.json"), "utf8")), reconnected.workflow);
+    assert.equal(g(source, "status", "--porcelain"), before);
+    assert.equal(readFileSync(join(source, ".git/info/exclude"), "utf8"), ignoreBefore);
+    assert.equal(f.saved.length, 1);
+  });
+
+  it("pins a three-dot review to the merge base and committed tip, not the live checkout", async (t) => {
+    const source = gitRepo();
+    const base = g(source, "rev-parse", "HEAD");
+    g(source, "switch", "-c", "topic");
+    writeFileSync(join(source, "README.md"), "topic commit\n");
+    g(source, "commit", "-qam", "Topic change");
+    const tip = g(source, "rev-parse", "HEAD");
+    g(source, "switch", "main");
+    writeFileSync(join(source, "README.md"), "diverged main\n");
+    g(source, "commit", "-qam", "Main change");
+    writeFileSync(join(source, "README.md"), "unstaged edit\n");
+    const f = await run(t, source, "pair-review", "main...topic", selection("lead", "peer"), {
+      lead: [{ when: "Phase: Independent review.", readPath: "tree/README.md", text: report("Review the topic commit") },
+        { when: "Phase: Cross-check.", text: report("No disagreements") }, { when: "Phase: Final review.", text: report("No findings", "approve") }],
+      peer: [{ when: "Phase: Independent review.", text: report("No defects") }, { when: "Phase: Cross-check.", text: report("Confirmed") }],
+    });
+    const started = await f.action("start");
+    assert.equal(started.status, "running", started.problem);
+    assert.equal(started.snapshot, `${base}..${tip}`);
+    await until(() => f.log().some((event) => event.event === "file"), "reviewer read the pinned file");
+    assert.equal(f.log().find((e) => e.event === "file").text, "topic commit\n");
+    const patch = readFileSync(join(f.swarm.store.dir, "review", "review.patch"), "utf8");
+    assert.match(patch, /^-hi\n\+topic commit$/m);
+    assert.doesNotMatch(patch, /diverged main|unstaged edit/);
+  });
+
+  it("does not dispatch a review when untracked file bytes change between copies", async (t) => {
+    const source = fs.realpathSync(gitRepo());
+    const first = join(source, "a.txt");
+    const second = join(source, "b.txt");
+    writeFileSync(first, "old A");
+    writeFileSync(second, "old B");
+    const f = await run(t, source, "pair-review", "working tree", selection("lead", "peer"), {});
+    const copy = fs.copyFileSync;
+    const hook = t.mock.method(fs, "copyFileSync", (...[src, dest, mode]: Parameters<typeof copy>) => {
+      copy(src, dest, mode);
+      if (src === first) {
+        // The old A/new B pair never existed in the source checkout.
+        writeFileSync(first, "new A");
+        writeFileSync(second, "new B");
+      }
+    });
+    syncBuiltinESMExports();
+    let state;
+    try { state = await f.action("start"); }
+    finally { hook.mock.restore(); syncBuiltinESMExports(); }
+    assert.equal(readFileSync(second, "utf8"), "new B", "the copy hook changed both source files");
+    assert.equal(state.status, "setup");
+    assert.match(state.problem, /working tree changed during capture/i);
+    assert.deepEqual(f.log(), []);
+    assert.deepEqual(f.swarm.liveMembers(), []);
+  });
+
+  it("confines reviewer file tools to the pinned workspace", { skip: process.platform === "win32" }, async (t) => {
+    const source = fs.realpathSync(gitRepo());
+    const liveFile = join(source, "README.md");
+    writeFileSync(liveFile, "LIVE CHECKOUT CONTENT\n");
+    const read = (path: string) => ["task_read", { path }];
+    const ls = (path: string) => ["task_ls", { path }];
+    const calls = [read(liveFile), ls(source)];
+    const rules = {
+      lead: [{ when: "Phase: Independent review.", calls, text: report("Inspected pinned files") },
+        { when: "Phase: Cross-check.", text: report("No disagreements") }, { when: "Phase: Final review.", text: report("Pinned verdict", "approve") }],
+      peer: [{ when: "Phase: Independent review.", text: report("No defects") }, { when: "Phase: Cross-check.", text: report("Confirmed") }],
+    };
+    const f = await run(t, source, "pair-review", "HEAD", selection("lead", "peer"), rules);
+    const snapshot = join(f.swarm.store.dir, "review");
+    calls.push(read(relative(snapshot, liveFile)), read("tree/nested/link/README.md"), ls("tree/nested/link"), read("tree/README.md"), ls("tree"));
+    writeFileSync(process.env.FAKE_PI_SCRIPT!, JSON.stringify(rules));
+    const write = fs.writeFileSync;
+    const hook = t.mock.method(fs, "writeFileSync", (...[file, data, options]: Parameters<typeof write>) => {
+      write(file, data, options);
+      if (file === join(snapshot, "review.patch")) {
+        mkdirSync(join(snapshot, "tree/nested"));
+        symlinkSync(source, join(snapshot, "tree/nested/link"), "dir");
+      }
+    });
+    syncBuiltinESMExports();
+    let state;
+    try { state = await f.action("start"); }
+    finally { hook.mock.restore(); syncBuiltinESMExports(); }
+    assert.equal(state.status, "running", state.problem);
+    await until(() => f.state().status === "complete", "scoped review");
+    const tools = f.log().filter((e) => e.event === "tool");
+    assert.deepEqual(tools.map((e) => e.isError), [true, true, true, true, true, false, false]);
+    assert.equal(tools[5].text, "hi\n");
+    assert.match(tools[6].text, /README\.md/);
+    assert.ok(tools.slice(0, 5).every((e) => /Swarm permission denied/.test(e.text)));
+    assert.doesNotMatch(JSON.stringify(tools), /LIVE CHECKOUT CONTENT/);
+  });
+
+  it("does not launch on invalid readiness or cancelled setup", async (t) => {
+    const picks = selection("doer", "verifier");
+    const f = await run(t, tmp(), "pair-work", "Produce a sample", picks, {});
+    const bad = { ...picks, roles: { ...picks.roles, verifier: { harness: "pi" as const } } };
+    assert.match((await f.action("start", bad)).problem, /available Pi provider\/model for verifier/);
+    assert.equal((await f.action("cancel")).status, "cancelled");
+    assert.deepEqual(f.log(), []);
+    assert.deepEqual(f.swarm.liveMembers(), []);
+    assert.deepEqual(f.saved, []);
+  });
+
+  it("makes the auditor inspect the actual implementation and runs the correction round", async (t) => {
+    const source = gitRepo();
+    const f = await run(t, source, "pair", "Fix README", selection("implementer", "auditor"), {
+      implementer: [{ when: "Phase: Implement.", writePath: "README.md", writeText: "first draft\n", text: report("Draft ready") },
+        { when: "Phase: Address audit", calls: [["task_edit", { path: "README.md", edits: [{ oldText: "first draft", newText: "corrected" }] }]], text: report("Correction ready") }],
+      auditor: [{ when: "Phase: Orient", text: report("Audit README") },
+        { when: "Phase: Audit.", readPath: "README.md", text: report("Fix wording", "changes requested") }],
+    });
+    await f.action("start");
+    await until(() => f.state().status === "complete", "pair corrections");
+    assert.equal(readFileSync(join(source, "README.md"), "utf8"), "corrected\n");
+    assert.equal(f.log().find((e) => e.event === "file").text, "first draft\n");
+    const tools = (name: string) => { const a = f.log().find((e) => e.name === name && e.event === "start").argv; return a[a.indexOf("--tools") + 1]; };
+    assert.equal(tools("auditor"), "task_read,task_ls");
+    assert.equal(tools("implementer"), "task_read,task_ls,task_edit,task_write");
+    assert.deepEqual(f.state().reports.map((r) => r.phase), ["Implement", "Orient", "Audit", "Address audit"]);
+  });
+
+  it("shows the scoped Pi auditor staged and unstaged changes and untracked paths", async (t) => {
+    const source = gitRepo();
+    writeFileSync(join(source, "retired.txt"), "deleted evidence\n");
+    g(source, "add", "retired.txt");
+    g(source, "commit", "-qm", "Add retired file");
+    g(source, "rm", "retired.txt");
+    writeFileSync(join(source, "README.md"), "unstaged evidence\n");
+    const f = await run(t, source, "pair", "Update documentation", selection("implementer", "auditor"), {
+      implementer: [{ when: "Phase: Implement", writePath: "draft notes.md", writeText: "untracked evidence\n", text: report("Draft ready") },
+        { when: "Phase: Address audit", text: report("Done") }],
+      auditor: [{ when: "Phase: Orient", text: report("Check the docs") },
+        { when: "Phase: Audit.", readPath: "draft notes.md", text: report("Checked the patch and draft", "approve") }],
+    });
+    await f.action("start");
+    await until(() => f.state().status === "complete", "Pi audit");
+    const audit = f.log().find((e) => e.event === "prompt" && e.message.includes("Phase: Audit."));
+    assert.match(audit.message, /Staged changes:[\s\S]*diff --git a\/retired\.txt b\/retired\.txt[\s\S]*\n-deleted evidence\n/);
+    assert.match(audit.message, /Unstaged changes:[\s\S]*\n\+unstaged evidence\n/);
+    assert.match(audit.message, /Untracked paths.*\["draft notes\.md"\]/);
+    assert.equal(f.log().find((e) => e.event === "file").text, "untracked evidence\n");
+  });
+
+  it("stops before auditing if Git evidence exceeds the inline limit", async (t) => {
+    const source = gitRepo();
+    writeFileSync(join(source, "README.md"), "x".repeat(70_000) + "\n");
+    const f = await run(t, source, "pair", "Review the draft", selection("implementer", "auditor"), {
+      implementer: [{ when: "Phase: Implement", text: report("Draft ready") }],
+      auditor: [{ when: "Phase: Orient", text: report("Read the full diff") }],
+    });
+    await f.action("start");
+    await until(() => f.state().status !== "running", "oversized audit");
+    assert.equal(f.state().status, "failed");
+    assert.match(f.state().problem!, /exceeds 64 KiB/);
+    assert.ok(!f.log().some((e) => e.event === "prompt" && e.message.includes("Phase: Audit.")));
+  });
+
+  for (const kind of ["binary change", "submodule change", "assume-unchanged", "skip-worktree", "invalid UTF-8"]) {
+    it(`stops before an audit verdict on ${kind}`, async (t) => {
+      const source = gitRepo();
+      if (kind === "binary change") {
+        writeFileSync(join(source, "asset.bin"), Buffer.from([0, 1, 2, 3]));
+        g(source, "add", "asset.bin");
+        g(source, "commit", "-qm", "Add a binary asset");
+        g(source, "rm", "asset.bin");
+      } else if (kind === "submodule change") {
+        const submodule = gitRepo();
+        t.after(() => rmSync(submodule, { recursive: true, force: true }));
+        g(source, "-c", "protocol.file.allow=always", "submodule", "add", "-q", "--", submodule, "vendor/sub");
+        g(source, "config", "submodule.vendor/sub.ignore", "all");
+        g(source, "config", "diff.submodule", "log");
+        g(source, "commit", "-qam", "Add the submodule");
+        writeFileSync(join(source, "vendor/sub/README.md"), "Hidden submodule edit\n");
+        assert.equal(g(source, "diff", "--"), "", "normal git diff obeys the local ignore rule");
+      } else if (kind === "invalid UTF-8") {
+        writeFileSync(join(source, ".gitattributes"), "*.bin diff\n");
+        writeFileSync(join(source, "asset.bin"), Buffer.from([0x80, 0x0a]));
+        g(source, "add", ".gitattributes", "asset.bin");
+        g(source, "commit", "-qm", "Add forced-text binary");
+        writeFileSync(join(source, "asset.bin"), Buffer.from([0x81, 0x0a]));
+        assert.match(g(source, "diff", "--binary", "--"), /-�\n\+�/, "lossy decoding would erase the difference");
+      } else {
+        g(source, "update-index", `--${kind}`, "README.md");
+        writeFileSync(join(source, "README.md"), "Hidden tracked edit\n");
+        assert.equal(g(source, "diff", "--"), "", "Git diff misses the hidden tracked edit");
+      }
+      const f = await run(t, source, "pair", "Check edits", selection("implementer", "auditor"), {
+        implementer: [{ when: "Phase: Implement", text: report("Draft ready") }, { when: "Phase: Address audit", text: report("Done") }],
+        auditor: [{ when: "Phase: Orient", text: report("Review the changes") }, { when: "Phase: Audit.", text: report("Looks fine", "approve") }],
+      });
+      assert.equal((await f.action("start")).status, "running");
+      await until(() => f.state().status !== "running", "audit evidence check");
+      assert.equal(f.state().status, "failed");
+      assert.match(f.state().problem!, new RegExp(kind, "i"));
+      assert.equal(f.state().verdict, undefined);
+      assert.ok(!f.log().some((e) => e.event === "prompt" && e.message.includes("Phase: Audit.")));
+    });
+  }
+
+  it("blocks managed Pi writes to coordinator state and linked files outside the task", { skip: process.platform === "win32" }, async (t) => {
+    const source = tmp();
+    const outside = join(source, "outside.txt");
+    writeFileSync(outside, "original\n");
+    const write = (path: string) => ["task_write", { path, content: "changed\n" }];
+    const edit = (path: string) => ["task_edit", { path, edits: [{ oldText: "original", newText: "changed" }] }];
+    const calls = [write(outside), write("../work-sibling/escaped.txt"), edit(outside), edit("hard-link.txt"),
+      write("linked-directory/new/deep.txt"), write("dangling-link.txt"), write(".git/config"), write("nested/in-scope.txt")];
+    const f = await run(t, source, "pair-work", "Create sample.txt", selection("doer", "verifier"), {
+      verifier: [{ when: "Phase: Plan", text: report("Check the artifact") }],
+      doer: [{ when: "Phase: Do.", calls, text: report("This report must not count") }],
+    });
+    const work = join(f.swarm.store.dir, "work");
+    mkdirSync(work);
+    linkSync(outside, join(work, "hard-link.txt"));
+    symlinkSync(source, join(work, "linked-directory"), "dir");
+    symlinkSync(join(source, "missing.txt"), join(work, "dangling-link.txt"));
+    await f.action("start");
+    await until(() => f.state().status === "blocked", "guarded Pi write denial");
+    assert.equal(f.swarm.store.member("doer")?.failure, "permission");
+    assert.equal(readFileSync(outside, "utf8"), "original\n");
+    assert.equal(readFileSync(join(work, "nested/in-scope.txt"), "utf8"), "changed\n");
+    for (const path of [join(f.swarm.store.dir, "work-sibling"), join(source, "new"), join(source, "missing.txt"), join(work, ".git")]) {
+      assert.equal(existsSync(path), false, path);
+    }
+    assert.deepEqual(f.log().filter((e) => e.event === "tool").map((e) => e.isError), [true, true, true, true, true, true, true, false]);
+    assert.deepEqual(f.state().reports.map((r) => r.phase), ["Plan"]);
+  });
+
+  it("plans before any deliverable, verifies it outside Git, and reports exhaustion without acceptance", async (t) => {
+    const f = await run(t, tmp(), "pair-work", "Create sample.txt", selection("doer", "verifier"), {
+      doer: [{ when: "Phase: Do.", writePath: "sample.txt", writeText: "first sample", text: report("sample.txt ready") },
+        { when: "Phase: Address verification", writePath: "sample.txt", writeText: "second sample", text: report("Revised sample.txt") }],
+      verifier: [{ when: "Phase: Plan", text: report("Check the literal file contents") },
+        { when: "Phase: Verify", readPath: "sample.txt", text: report("No matching sample", "changes requested") }],
+    });
+    await f.action("start");
+    await until(() => f.state().status === "exhausted", "round exhaustion");
+    assert.deepEqual(f.log().filter((e) => e.event === "prompt").map((e) => e.name), ["verifier", "doer", "verifier", "doer"]);
+    assert.equal(f.log().find((e) => e.event === "file").text, "first sample");
+    assert.equal(readFileSync(join(f.state().artifact!, "sample.txt"), "utf8"), "second sample");
+    assert.equal(f.state().verdict, "changes requested");
+  });
+
+  it("stops pair work on acceptance even with rounds remaining", async (t) => {
+    const f = await run(t, tmp(), "pair-work", "Create sample.txt", { ...selection("doer", "verifier"), rounds: 3 }, {
+      doer: [{ when: "Phase: Do.", writePath: "sample.txt", writeText: "accepted sample", text: report("sample.txt ready") }],
+      verifier: [{ when: "Phase: Plan", retry: true, text: report("Check the literal file contents") },
+        { when: "Phase: Verify", readPath: "sample.txt", text: report("Sample matches", "accept") }],
+    });
+    await f.action("start");
+    await until(() => f.state().status === "complete", "acceptance");
+    assert.equal(f.state().round, 1);
+    assert.equal(f.state().verdict, "accept");
+    assert.equal(f.log().filter((e) => e.event === "prompt").length, 3);
+  });
+
+  it("refuses a Codex pair role before Check or Start can launch either worker", { skip: process.platform === "win32" }, async (t) => {
+    const picks = { rounds: 1, roles: { doer: { harness: "codex" as const }, verifier: pi } };
+    const f = await run(t, tmp(), "pair-work", "Create sample.txt", picks, {});
+    for (const action of ["check", "start"]) {
+      const state = await f.action(action);
+      assert.equal(state.status, "setup");
+      assert.match(state.problem, /@doer: Codex.*does not reliably report sandbox denials/);
+      assert.equal(state.selection.roles.doer.harness, "codex");
+    }
+    assert.deepEqual(f.log(), []);
+    assert.deepEqual(f.swarm.liveMembers(), []);
+    assert.deepEqual(f.saved, []);
+  });
+
+  it("refuses a Claude pair role with the selection intact and without running the CLI", async (t) => {
+    const picks = { rounds: 1, roles: { implementer: pi, auditor: { harness: "claude" as const, model: "claude-sonnet-4-6", effort: "high" } } };
+    const f = await run(t, gitRepo(), "pair", "Audit documentation", picks, {});
+    for (const action of ["check", "start"]) {
+      const state = await f.action(action);
+      assert.equal(state.status, "setup");
+      assert.match(state.problem, /@auditor:.*effective managed permissions or startup hooks/);
+      assert.deepEqual(state.selection, picks);
+    }
+    assert.deepEqual(f.log(), []);
+    assert.deepEqual(f.swarm.liveMembers(), []);
+    assert.deepEqual(f.saved, []);
+  });
+
+  for (const [outcome, failure] of [[{ stopReason: "error" }, "exit"], [{ linger: true }, "timeout"]] as const) {
+    it(`stops before verification when Pi reports ${failure} after emitting valid report text`, async (t) => {
+      const f = await run(t, tmp(), "pair-work", "Create sample.txt", selection("doer", "verifier"), {
+        verifier: [{ when: "Phase: Plan", text: report("Check the artifact") }, { when: "Phase: Verify", text: report("Accept", "accept") }],
+        doer: [{ when: "Phase: Do.", ...outcome, text: report("This report must not count") }],
+      }, failure === "timeout" ? 1_200 : undefined);
+      await f.action("start");
+      await until(() => f.state().status !== "running", "Pi turn outcome", 4_000);
+      assert.equal(f.state().status, "failed");
+      assert.equal(f.swarm.store.member("doer")?.failure, failure);
+      assert.deepEqual(f.state().reports.map((r) => r.phase), ["Plan"]);
+      assert.deepEqual(f.log().filter((e) => e.event === "prompt").map((e) => e.name), ["verifier", "doer"]);
+      if (failure === "timeout") assert.ok(f.log().some((e) => e.name === "doer" && e.event === "linger"), "deadline fired after the acknowledged turn had emitted its report");
+      assert.throws(() => process.kill(f.log().find((e) => e.event === "start" && e.name === "doer").pid, 0), { code: "ESRCH" });
+    });
+  }
+
+  it("does not advance when an independent reviewer returns malformed output", async (t) => {
+    const source = gitRepo();
+    const f = await run(t, source, "pair-review", "HEAD", selection("lead", "peer"), {
+      lead: [{ when: "Independent review", text: report("Unreleased lead report") }],
+      peer: [{ when: "Independent review", text: "I am done without a valid report." }],
+    });
+    await f.action("start");
+    await until(() => f.state().status === "failed", "invalid report failure");
+    assert.match(f.state().problem!, /@peer did not return a valid Independent review report/);
+    assert.equal(f.state().reports.length, 0);
+    assert.equal(f.state().verdict, undefined);
+    assert.equal(f.log().filter((e) => e.event === "prompt").length, 2);
   });
 });

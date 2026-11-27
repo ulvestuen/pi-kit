@@ -10,9 +10,10 @@ facts and checks.
   shipped where shipping was asked for, start the next item without asking.
 - Keep progress in the A3 or plan file in the repository (`a3/<slug>.md`), so
   any later session can resume from it rather than from chat history.
-- Do not end your turn while work you started is still running, such as pair
-  workers, CI runs, or deploys. Keep waiting (`pair.mjs wait`, `gh run watch`)
-  instead of posting a progress update and stopping.
+- Do not end your turn while work you started is still running, such as CI
+  runs or deploys. Keep waiting (for example, `gh run watch`) instead of
+  posting a progress update and stopping. For pair runs, check the status in
+  the Swarm browser; setup awaiting the user's Start is not a running job.
 - Stop and hand back only when every item is done, on a blocker you cannot
   resolve, or on a decision only the user can make. Say which one it is.
 

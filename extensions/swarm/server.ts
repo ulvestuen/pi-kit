@@ -9,6 +9,7 @@ import type { BoardMessage, Kind } from "./store.ts";
 export interface ServerApi {
   html(): string;
   state(): unknown;
+  workflowAction?(input: unknown): Promise<unknown>;
   transcript(name: string): unknown[] | null;
   humanPost(body: string): Promise<BoardMessage>;
   workerName(token: string): string | null;
@@ -25,6 +26,38 @@ export interface SwarmServer {
 
 const MAX_BODY = 256 * 1024;
 const HEARTBEAT_MS = 15_000;
+
+const BOARD_TOOLS = [
+  { name: "board_read", description: "Read the swarm board and current roster.", inputSchema: { type: "object", properties: {} } },
+  { name: "board_post", description: "Post as yourself. Use @name to wake the member who should act next.", inputSchema: {
+    type: "object", required: ["body"], properties: { body: { type: "string" }, kind: { type: "string", enum: ["message", "result", "question"] } },
+  } },
+];
+
+/** Stateless Streamable HTTP MCP, sharing the same per-worker identity and board as Pi. */
+async function boardMcp(api: ServerApi, name: string, rpc: any, res: ServerResponse) {
+  if (rpc?.jsonrpc !== "2.0" || typeof rpc.method !== "string") return send(res, 400, { error: "invalid JSON-RPC request" });
+  if (rpc.id === undefined) { res.writeHead(202).end(); return; }
+  const respond = (result: unknown) => send(res, 200, { jsonrpc: "2.0", id: rpc.id, result });
+  switch (rpc.method) {
+    case "initialize": {
+      const requested = rpc.params?.protocolVersion;
+      const protocolVersion = ["2025-03-26", "2025-06-18", "2025-11-25"].includes(requested) ? requested : "2025-11-25";
+      return respond({ protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "swarm-board", version: "1.0.0" } });
+    }
+    case "ping": return respond({});
+    case "tools/list": return respond({ tools: BOARD_TOOLS });
+    case "tools/call": {
+      const tool = rpc.params?.name;
+      const args = rpc.params?.arguments;
+      const text = (value: unknown, isError = false) => respond({ isError, content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value) }] });
+      if (tool === "board_read") return text(await api.workerRead(name, new URLSearchParams()));
+      if (tool === "board_post" && typeof args?.body === "string" && args.body.trim()) return text(await api.workerPost(name, args.body, args.kind ?? "message"));
+      return text("Unknown board tool or missing body.", true);
+    }
+    default: return send(res, 200, { jsonrpc: "2.0", id: rpc.id, error: { code: -32601, message: "Method not found" } });
+  }
+}
 
 function send(res: ServerResponse, status: number, data: unknown, type = "application/json; charset=utf-8") {
   const body = typeof data === "string" && !type.startsWith("application/json") ? data : JSON.stringify(data);
@@ -79,11 +112,19 @@ export function startServer(api: ServerApi, options: { token: string; port?: num
 
       // Worker endpoints: authenticated by a per-worker token, so a worker can only post as itself.
       if (path.startsWith("/api/worker/")) {
-        const name = api.workerName(token);
+        const workerToken = String(req.headers["x-swarm-token"] ?? "");
+        const name = api.workerName(workerToken);
         if (!name) return send(res, 401, { error: "unknown worker token" });
+        if (path === "/api/worker/mcp") {
+          if (req.method !== "POST") return send(res, 405, { error: "MCP accepts POST only" });
+          const rpc = await readBody(req);
+          if (!api.workerName(workerToken)) return send(res, 401, { error: "worker token revoked" });
+          return await boardMcp(api, name, rpc, res);
+        }
         if (req.method === "POST" && path === "/api/worker/board") {
           const body = await readBody(req);
-          if (typeof body.body !== "string" || !body.body.trim()) return send(res, 400, { error: "body is required" });
+          if (!api.workerName(workerToken)) return send(res, 401, { error: "worker token revoked" });
+          if (typeof body?.body !== "string" || !body.body.trim()) return send(res, 400, { error: "body is required" });
           return send(res, 200, await api.workerPost(name, body.body, body.kind ?? "message"));
         }
         if (req.method === "GET" && path === "/api/worker/board") return send(res, 200, await api.workerRead(name, url.searchParams));
@@ -97,6 +138,11 @@ export function startServer(api: ServerApi, options: { token: string; port?: num
         return send(res, 200, api.html(), "text/html; charset=utf-8");
       }
       if (req.method === "GET" && path === "/api/state") return send(res, 200, api.state());
+      if (req.method === "POST" && path === "/api/workflow" && api.workflowAction) {
+        const body = await readBody(req);
+        try { return send(res, 200, await api.workflowAction(body)); }
+        catch (error) { return send(res, 400, { error: (error as Error).message }); }
+      }
       const transcript = path.match(/^\/api\/workers\/([a-z][a-z0-9-]*)\/transcript$/);
       if (req.method === "GET" && transcript) {
         const records = api.transcript(transcript[1]);
