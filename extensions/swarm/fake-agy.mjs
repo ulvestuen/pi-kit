@@ -3,7 +3,7 @@ import { appendFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
 if (process.argv.includes("--help")) {
-  console.log("agy acp --process-per-session --disable-telemetry");
+  console.log("agy acp --process-per-session --disable-telemetry --dangerously-skip-permissions --sandbox");
   process.exit(0);
 }
 const log = (record) => {
@@ -15,7 +15,7 @@ const configOptions = [
   { id: "models", category: "model", type: "select", currentValue: "default", options: [{ group: "primary", options: [{ value: "gemini-test" }] }] },
   { id: "thinking", category: "thought_level", type: "select", currentValue: "low", options: [{ value: "high" }] },
 ];
-let board, turn;
+let board, turn, prompt;
 for await (const line of createInterface({ input: process.stdin })) {
   const { id, method, params, result } = JSON.parse(line);
   const reply = (result) => out({ id, result });
@@ -32,15 +32,18 @@ for await (const line of createInterface({ input: process.stdin })) {
     reply({ configOptions });
   } else if (method === "session/prompt") {
     turn = id;
-    log({ method, text: params.prompt[0].text, model: configOptions[0].currentValue, effort: configOptions[1].currentValue });
+    prompt = params.prompt[0].text;
+    log({ method, text: prompt, model: configOptions[0].currentValue, effort: configOptions[1].currentValue });
     out({ id: "permission-1", method: "session/request_permission", params: { sessionId, toolCall: {
-      toolCallId: "tool-1", title: "Read README.md", rawInput: { path: "README.md", ...(process.env.FAKE_AGY_ECHO ? { debug: board.headers[0].value } : {}) },
+      toolCallId: "tool-1", title: "Read README.md", rawInput: { path: "README.md" },
     }, options: [
-      { kind: "allow_always", optionId: "persistent" }, { kind: "allow_once", optionId: "single" }, { kind: "reject_once", optionId: "deny-single" },
+      { kind: "reject_once", optionId: "deny-single" }, { kind: "allow_always", optionId: "persistent" },
+      ...(!prompt.includes("only permanent choice") ? [{ kind: "allow_once", optionId: "single" }] : []),
     ] } });
   } else if (id === "permission-1") {
     log({ method: "decision", outcome: result.outcome });
-    const body = result.outcome.optionId === "single" ? "Read approved once" : "Read denied";
+    if (prompt.includes("hold after approval")) continue;
+    const body = { single: "Read approved once", persistent: "Read approved always" }[result.outcome.optionId] ?? "Read denied";
     const response = await fetch(board.url, { method: "POST", headers: { "content-type": "application/json", ...Object.fromEntries(board.headers.map(({ name, value }) => [name, value])) },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "board_post", arguments: { from: "human", kind: "result", body } } }) });
     if (!response.ok || (await response.json()).result?.isError) throw new Error("Board post failed");

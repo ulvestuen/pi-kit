@@ -1,21 +1,23 @@
-// Stand-in for native pair CLIs. These probes run as ordinary files and child
-// processes, deliberately ignoring the harness flags so only the OS can stop them.
+// Stand-in for native pair CLIs, including their session and approval protocols.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 
 const args = process.argv.slice(2);
 const send = (value) => console.log(JSON.stringify(value));
 if (args.includes("--help")) {
-  console.log("--restricted --permission-prompts --strict-mcp-config --output-format --resume --json --sandbox --ignore-user-config --ignore-rules resume --process-per-session");
+  console.log("--output-format --resume --json resume --process-per-session --dangerously-skip-permissions --dangerously-bypass-approvals-and-sandbox --sandbox");
   process.exit(0);
 }
 const role = process.env.PI_SWARM_NAME;
 const claude = args.includes("--print");
-const sessionFile = join(process.env.HOME, "fixture-session");
+assert.ok(args.includes(claude || args[0] === "acp" ? "--dangerously-skip-permissions" : "--dangerously-bypass-approvals-and-sandbox"));
+assert.ok(!args.some((arg) => /--restricted|--tools|--mcp-config|mcp_servers\.swarm_board/.test(arg)));
+assert.equal(process.env.PI_SWARM_TOKEN, undefined);
+const sessionFile = join(process.env.HOME, `${role}-fixture-session`);
 function session(resume) {
   if (resume) {
     assert.equal(readFileSync(sessionFile, "utf8"), resume);
@@ -28,28 +30,17 @@ function session(resume) {
 }
 function report(prompt) {
   const phase = /Phase: (.*?)\. Round:/.exec(prompt)?.[1];
-  assert.equal(process.cwd(), "/workspace");
-  assert.equal(process.env.PI_SWARM_TOKEN, undefined);
-  assert.equal(existsSync(".git/HEAD"), false);
   const outside = /Outside: (\/[^\n]+)/.exec(prompt)?.[1];
-  if (outside) {
-    assert.equal(existsSync(outside), false);
-    assert.notEqual(spawnSync("/bin/sh", ["-c", 'echo changed >> "$1"', "probe", outside]).status, 0);
-    if (existsSync("escape") || phase === "Implement") assert.throws(() => writeFileSync("escape", "changed"), { code: "ENOENT" });
-  }
   if (phase === "Implement") {
-    assert.throws(() => writeFileSync(".git/HEAD", "changed"), { code: "EROFS" });
-    writeFileSync("README.md", "implemented inside sandbox\n");
-  } else if (phase === "Do") writeFileSync("sample.txt", "delivered inside sandbox\n");
-  else if (phase !== "Address audit") {
-    assert.throws(() => writeFileSync("forbidden", "changed"), { code: "EROFS" });
-    assert.notEqual(spawnSync("/bin/sh", ["-c", "echo changed >> ./forbidden"]).status, 0);
-  }
+    assert.ok(existsSync(".git/HEAD"));
+    assert.equal(spawnSync("/bin/sh", ["-c", 'printf "wrote outside\n" > "$1"', "probe", outside]).status, 0);
+    writeFileSync("README.md", "implemented in checkout\n");
+  } else if (phase === "Do") writeFileSync("sample.txt", "delivered in task directory\n");
   if (phase === "Audit") {
-    assert.match(prompt, /\+implemented inside sandbox/);
-    assert.equal(readFileSync("README.md", "utf8"), "implemented inside sandbox\n");
+    assert.match(prompt, /\+implemented in checkout/);
+    assert.equal(readFileSync("README.md", "utf8"), "implemented in checkout\n");
   }
-  if (phase === "Verify") assert.equal(readFileSync("sample.txt", "utf8"), "delivered inside sandbox\n");
+  if (phase === "Verify") assert.equal(readFileSync("sample.txt", "utf8"), "delivered in task directory\n");
   return JSON.stringify({ report: `${role}: ${phase}`, verdict: phase === "Verify" ? "accept" : "approve" });
 }
 
@@ -74,14 +65,14 @@ if (args[0] !== "acp") {
     const { id, method, params, result } = JSON.parse(line);
     if (method === "initialize") rpc({ id, result: { protocolVersion: 1, agentCapabilities: { sessionCapabilities: { resume: {} } } } });
     else if (method === "session/new" || method === "session/resume") {
-      assert.equal(params.cwd, "/workspace");
+      assert.equal(realpathSync(params.cwd), process.cwd());
       assert.deepEqual(params.mcpServers, []);
       sessionId = session(params.sessionId);
       rpc({ id, result: { sessionId } });
     } else if (method === "session/prompt") {
       const prompt = params.prompt[0].text;
       pending = { id, prompt };
-      rpc({ id: "approval", method: "session/request_permission", params: { sessionId, toolCall: { toolCallId: "test", title: "Try sandboxed task file", rawInput: { path: "sample.txt" } }, options: [{ kind: "allow_once", optionId: "once" }] } });
+      rpc({ id: "approval", method: "session/request_permission", params: { sessionId, toolCall: { toolCallId: "test", title: "Access task file", rawInput: { path: "sample.txt" } }, options: [{ kind: "allow_once", optionId: "once" }] } });
     } else if (id === "approval") {
       assert.equal(result.outcome.optionId, "once");
       const text = report(pending.prompt);

@@ -7,11 +7,10 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { antigravityWorker, type ApprovalChoice } from "./antigravity.ts";
+import { antigravityWorker } from "./antigravity.ts";
 import type { PiCommand } from "./driver.ts";
 import { nativeInvocation, nativeWorker } from "./native.ts";
-import { pairSandbox } from "./pair-sandbox.ts";
-import { COORDINATOR, HUMAN, Router, validName, type AgentHandle, type PendingApproval, type SwarmEvent } from "./router.ts";
+import { COORDINATOR, HUMAN, Router, validName, type AgentHandle, type SwarmEvent } from "./router.ts";
 import { startServer, type SwarmServer } from "./server.ts";
 import { KINDS, Mutex, SwarmStore, type BoardMessage, type Kind, type Member, type Workspace } from "./store.ts";
 import { DEFAULT_TURN_TIMEOUT_MS, HARNESSES, failed, piWorker, probe, type Harness, type TranscriptEvent, type TurnResult, type WorkerAdapter } from "./worker.ts";
@@ -106,7 +105,7 @@ export function newSwarmId(now = new Date()): string {
 export function workerRules(goal: string, member: Pick<Member, "name" | "workspace" | "cwd" | "branch" | "harness">, base?: string): string {
   const where =
     member.workspace === "worktree"
-      ? `Your workspace is your own git worktree at ${member.cwd} on branch ${member.branch}. Do not touch the main checkout.${member.harness === "claude" ? " Your tools cannot run git commands; hand off the worktree path and identify any uncommitted changes." : ` Edit and commit there; @coordinator merges your branch into ${base ?? "the base branch"}.`}`
+      ? `Your workspace is your own git worktree at ${member.cwd} on branch ${member.branch}. Edit and commit there; @coordinator merges your branch into ${base ?? "the base branch"}.`
       : `Your workspace is the shared main checkout at ${member.cwd}. Other members may be working there too: stay inside your track, and prefer reading and verifying over editing files outside it.`;
   return [
     `<swarm-worker>`,
@@ -134,7 +133,6 @@ export class Swarm {
   private readonly workerChanges = new Mutex();
   private readonly workers = new Map<string, WorkerAdapter>();
   private readonly tokens = new Map<string, string>();
-  private readonly approvals = new Map<string, { request: PendingApproval; token: string; decide(choice: ApprovalChoice): void }>();
   private readonly git: Git;
   private stopping = false;
 
@@ -384,7 +382,7 @@ export class Swarm {
 
   private createWorker(member: Pick<Member, "name" | "cwd" | "workspace" | "branch" | "harness" | "model" | "effort">, token: string, base: string | undefined, policy?: "read" | "write", preflightCwd = this.root): WorkerAdapter {
     const { name, cwd, harness, model, effort } = member;
-    const rules = policy ? `Follow the assigned workflow phase. Use only this checkout for the task. ${policy === "read" ? "Do not edit files." : "Only edit task files; do not commit, merge or push."} Return your final report as instructed.` : workerRules(this.goal, member, base);
+    const rules = policy ? `Follow the assigned workflow phase. ${policy === "read" ? "Do not edit files." : "Only edit task files; do not commit, merge or push."} Return your final report as instructed.` : workerRules(this.goal, member, base);
     const env = { PI_SWARM_ROLE: "worker", PI_SWARM_ID: this.id, PI_SWARM_NAME: name, PI_SWARM_URL: this.apiBase, PI_SWARM_TOKEN: token };
     const onRecord = (record: TranscriptEvent, live?: boolean) => {
       if (this.stopping || !this.tokens.has(token)) return;
@@ -395,22 +393,13 @@ export class Swarm {
     if (harness && harness !== "pi") {
       const childEnv: NodeJS.ProcessEnv = { ...process.env, ...env };
       for (const key of UNSET_ENV) delete childEnv[key];
-      const cli = nativeInvocation(harness, preflightCwd);
-      const sandbox = policy ? pairSandbox({ cli, cwd, harness, policy, stateDir: this.store.dir, env: childEnv }) : undefined;
-      const options = { cli, cwd, preflightCwd, env: childEnv, model, effort, sandbox,
-        rules, boardUrl: `${this.apiBase}/api/worker/mcp`, timeoutMs: this.options.nativeTurnTimeoutMs, onRecord,
+      const boardUrl = policy ? undefined : `${this.apiBase}/api/worker/mcp`;
+      if (!boardUrl || harness === "agy") delete childEnv.PI_SWARM_TOKEN;
+      const options = { cli: nativeInvocation(harness, preflightCwd), cwd, preflightCwd, env: childEnv, model, effort,
+        rules, timeoutMs: this.options.nativeTurnTimeoutMs, onRecord,
         revokeBoard: () => this.tokens.delete(token) };
-      if (harness !== "agy") return nativeWorker({ ...options, harness, policy });
-      delete childEnv.PI_SWARM_TOKEN;
-      return antigravityWorker({ ...options, boardToken: token,
-        approve: (details, decide) => {
-          const id = randomBytes(18).toString("base64url");
-          const request = { ...details, id, name, title: this.redact(details.title), details: this.redact(details.details) };
-          this.approvals.set(id, { request, token, decide });
-          this.emitApprovals();
-          return () => { if (this.approvals.delete(id)) this.emitApprovals(); };
-        },
-      });
+      if (harness !== "agy") return nativeWorker({ ...options, harness, boardUrl });
+      return antigravityWorker({ ...options, board: boardUrl ? { url: boardUrl, token } : undefined });
     }
     const args = [
       ...(this.options.workerArgs ?? []),
@@ -484,28 +473,12 @@ export class Swarm {
     this.router.emitEvent({ type: "transcript", name, record });
   }
 
-  private pendingApprovals() {
-    return [...this.approvals.values()].map(({ request }) => request);
-  }
-
-  private emitApprovals() {
-    this.router.emitEvent({ type: "approvals", approvals: this.pendingApprovals() });
-  }
-
   private serverApi() {
     const html = existsSync(UI_FILE) ? readFileSync(UI_FILE, "utf8") : "<!doctype html><p>ui.html missing</p>";
     return {
       html: () => html,
-      state: () => ({ id: this.id, goal: this.goal, dir: this.workflow ? this.store.dir : relative(this.root, this.store.dir) || this.store.dir, limits: this.limits, roster: this.store.getRoster(), board: this.store.messages(), queued: this.router.queued(), approvals: this.pendingApprovals(), workflow: this.workflow?.snapshot() }),
+      state: () => ({ id: this.id, goal: this.goal, dir: this.workflow ? this.store.dir : relative(this.root, this.store.dir) || this.store.dir, limits: this.limits, roster: this.store.getRoster(), board: this.store.messages(), queued: this.router.queued(), workflow: this.workflow?.snapshot() }),
       workflowAction: this.workflow ? (input: unknown) => this.workflow!.action(input) : undefined,
-      approve: (id: string, choice: ApprovalChoice) => {
-        const pending = this.approvals.get(id);
-        if (this.stopping || !pending || !this.tokens.has(pending.token) || (choice === "allow" && !pending.request.canAllow)) return false;
-        this.approvals.delete(id);
-        pending.decide(choice);
-        this.emitApprovals();
-        return true;
-      },
       transcript: (name: string) => (this.store.member(name) ? this.store.transcript(name) : null),
       humanPost: (body: string) => this.post(HUMAN, body, "message"),
       workerName: (token: string) => this.tokens.get(token) ?? null,
@@ -520,7 +493,6 @@ export class Swarm {
           if (event.type === "board") listener("board", event.message);
           else if (event.type === "roster") listener("roster", { members: event.members, queued: this.router.queued() });
           else if (event.type === "workflow") listener("workflow", event.workflow);
-          else if (event.type === "approvals") listener("approvals", event.approvals);
           else listener("transcript", { name: event.name, record: event.record });
         }),
     };

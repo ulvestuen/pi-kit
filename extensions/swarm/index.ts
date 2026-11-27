@@ -31,7 +31,7 @@ export function coordinatorRules(swarm: Pick<Swarm, "id" | "goal" | "limits">): 
     `You are @coordinator of Pi swarm ${swarm.id}. Goal: ${swarm.goal}`,
     "- Split the goal into a few non-overlapping tracks with clear owners and done criteria. Spawn one worker per track with swarm_add; its brief is posted to the board as an @mention and wakes it.",
     '- Use workspace "worktree" for every worker that edits files in parallel with others; use "inherit" (shared checkout) for readers, reviewers, and verifiers. A worktree is not a sandbox.',
-    "- Default to Pi. For native Claude Code, Codex, or Antigravity CLI, select claude, codex, or agy respectively. Native workers require host opt-in. Ask before substituting another harness or provider.",
+    "- Default to Pi. For native Claude Code, Codex, or Antigravity CLI, select claude, codex, or agy respectively. Ask before substituting another harness or provider.",
     "- Wire collaboration in the briefs: say who hands work to whom (for example builder → @verifier → @coordinator).",
     `- Workers wake only when mentioned and report with @coordinator. After spawning, end your turn: you are woken with unread board messages. Never poll swarm_status in a loop.`,
     "- Merge finished worktree branches yourself (git merge in the main checkout), then swarm_kill the worker to remove its worktree. swarm_kill refuses unmerged work unless force is set; only force when the user agrees to discard it.",
@@ -281,7 +281,7 @@ export default function swarmExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "swarm_workflow",
     label: "Open pair workflow setup",
-    description: "Open browser setup for pair, pair-review, or pair-work. Native roles require Linux with Bubblewrap. Keep the user's explicit selections without substituting a harness. The user starts the run in the browser.",
+    description: "Open browser setup for pair, pair-review, or pair-work. Keep the user's explicit selections without substituting a harness. The user starts the run in the browser.",
     parameters: Type.Object({
       preset: StringEnum(presets),
       target: Type.String({ description: "Task or local review target; empty for the working tree" }),
@@ -309,7 +309,7 @@ export default function swarmExtension(pi: ExtensionAPI) {
       name: Type.String({ description: "Short lowercase handle, e.g. builder, verifier, docs" }),
       brief: Type.String({ description: "The assignment: scope, files it owns, done criteria, and whom to @mention when done" }),
       workspace: Type.Optional(StringEnum(["inherit", "worktree"] as const, { description: "inherit (default) = shared main checkout; worktree = separate Git checkout and branch, not a sandbox" })),
-      harness: Type.Optional(StringEnum(HARNESSES, { description: "pi (default), claude (Claude Code), codex, or agy (Antigravity CLI). Native harnesses require host opt-in." })),
+      harness: Type.Optional(StringEnum(HARNESSES, { description: "pi (default), claude (Claude Code), codex, or agy (Antigravity CLI). Native harnesses run with auto-approval, without a sandbox." })),
       model: Type.Optional(Type.String({ description: "Pi provider/model or native CLI model ID. Omit for the coordinator's model in Pi, or the CLI default in a native harness." })),
       effort: Type.Optional(Type.String({ description: "Explicit reasoning effort for the selected harness/model; omit to retain the default." })),
     }),

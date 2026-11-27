@@ -9,7 +9,7 @@ const name = process.env.PI_SWARM_NAME;
 if (process.env.FAKE_NATIVE_LOG) appendFileSync(process.env.FAKE_NATIVE_LOG, JSON.stringify({ name, event: "invoked" }) + "\n");
 if (args.includes("--version")) { console.log("fake 9.9.9"); process.exit(0); }
 if (args.includes("--help")) {
-  console.log("--resume --output-format --permission-mode --permission-prompts --tools --setting-sources --settings --restricted --strict-mcp-config --mcp-config --effort --json --sandbox --ignore-user-config --ignore-rules --skip-git-repo-check --no-session-persistence --ephemeral resume SESSION_ID PROMPT");
+  console.log("--resume --output-format --dangerously-skip-permissions --json --dangerously-bypass-approvals-and-sandbox resume SESSION_ID PROMPT");
   process.exit(0);
 }
 if (args[1] === "status") {

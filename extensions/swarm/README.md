@@ -44,10 +44,7 @@ running free-form swarm:
 
 ## Mixed swarms
 
-In a trusted Git repository, start Pi with `SWARM_TRUST_NATIVE_CONFIG=1 pi`
-to enable native workers on Linux or macOS. Sign in to the harnesses you want
-to use before starting Pi. They must be on `PATH` or specified with
-`SWARM_CLAUDE_BIN`, `SWARM_CODEX_BIN`, or `SWARM_AGY_BIN`. Then enter:
+On Linux or macOS, sign in to the harnesses you want to use and start `pi` as usual. The CLIs must be on `PATH` or specified with `SWARM_CLAUDE_BIN`, `SWARM_CODEX_BIN`, or `SWARM_AGY_BIN`. No Swarm trust setting is required. Then enter:
 
 ```text
 /swarm Use native Claude Code for @reader, native Codex for @checker, and native agy for @summarizer. Have them hand off observations about README.md in that order, then report to @coordinator. Do not edit files.
@@ -66,22 +63,9 @@ Pass native model IDs and effort to the coordinator in your request, or omit
 them to use each CLI's defaults. Antigravity checks explicit IDs against the
 model and thinking options the account exposes over ACP.
 
-- **Claude Code (`claude`)** uses restricted print mode, with the Swarm board
-  and a limited set of file tools. It does not offer shell access or interactive
-  approvals. Managed settings still apply.
-- **Codex (`codex`)** uses `exec` with workspace-write sandboxing and denies
-  requests that require escalation. It ignores user config and user/project
-  command rules; system and managed policies still apply. Its JSON output may
-  not report every denial reliably.
-- **Antigravity CLI (`agy`)** uses [ACP](https://antigravity.google/docs/cli/acp)
-  and honors its native permissions. When it requests a decision, select
-  **Allow once** or **Deny** in the dashboard; a board post cannot approve it.
-  The request expires if the worker is stopped or its turn times out. Native
-  rules that already allow or deny an action do not prompt.
+Claude Code, Codex, and Antigravity run headlessly in their native permission bypass modes. Swarm also answers any approval requests Antigravity still sends over [ACP](https://antigravity.google/docs/cli/acp); there is no dashboard approval step. Swarm does not change saved trust settings or override OS permissions, CLI hard denials, or organization-managed settings. No harness is substituted on failure.
 
-A worktree separates checkouts, not accounts or permissions. The opt-in is
-for trusted repositories, native settings, and startup hooks; these workers
-are not isolated from the host by Swarm. No harness is substituted on failure.
+**Native workers are not isolated.** They use your usual CLI settings and sign-in, can run shell commands, and can access files outside the task directory as your user. A worktree separates checkouts, not permissions. Use native workers with repositories, inputs, and CLI settings you trust.
 
 ## Pair workflows
 
@@ -101,37 +85,13 @@ saved per workflow in `swarm-picks.json` in your Pi agent directory. Slash optio
 also accept `--<role>-effort` and `--rounds`; use the role names below.
 
 - `/pair`: `implementer` can edit the current checkout; `auditor` gets staged and unstaged diffs and untracked paths, then reads relevant files in the checkout. Tracked binary changes, changed submodules, invalid UTF-8 evidence, and index entries marked `assume-unchanged` or `skip-worktree` stop the audit without a verdict. The run also stops if Git evidence exceeds 64 KiB; use `/pair-review` for a larger snapshot. The default is three audit rounds. The verdict is the last audit verdict, before the final correction.
-- `/pair-review`: `lead` and `peer` use read-only tools scoped to the same copied snapshot. Target defaults to `working tree` (staged, unstaged, and non-ignored untracked files), or name a local revision or range such as `main...HEAD`. Fetch PR refs first; PR numbers and URLs are not Git targets. Only regular files are supported. Capture checks for drift, but is not atomic; pause other edits or select a revision. First reports stay private until both complete, followed by cross-checking (one round by default) and a consolidated verdict.
+- `/pair-review`: `lead` and `peer` review the same copied snapshot. Target defaults to `working tree` (staged, unstaged, and non-ignored untracked files), or name a local revision or range such as `main...HEAD`. Fetch PR refs first; PR numbers and URLs are not Git targets. Only regular files are supported. Capture checks for drift, but is not atomic; pause other edits or select a revision. First reports stay private until both complete, followed by cross-checking (one round by default) and a consolidated verdict.
 - `/pair-work`: `verifier` plans checks before `doer` starts. The verifier reads the actual deliverable and gives a verdict; reaching the round limit (three by default) without acceptance is not success. This workflow also works outside Git.
 
 Choose `pi`, `claude`, `codex`, or `agy` independently for each role. Pi uses
 scoped file tools, with no shell and no access to links or Git metadata.
 
-Native pair roles require `SWARM_TRUST_NATIVE_CONFIG=1` and **Linux with working
-unprivileged user namespaces and Bubblewrap** (`bwrap` on PATH or an absolute
-`SWARM_BWRAP_BIN`). Use the native CLI on PATH or point `SWARM_CLAUDE_BIN`,
-`SWARM_CODEX_BIN`, or `SWARM_AGY_BIN` at its standalone executable if a package
-launcher cannot run in the sandbox. The readiness check tests the mounts and
-CLI interface; it does not sign in or call a model. A failed check does not
-launch the role outside the sandbox or switch it to Pi.
-
-The sandbox exposes the assigned task directory as `/workspace`: read-only
-for reviewers, writable for implementers and doers. Present `.git` and `.swarm`
-entries are masked. Nested mounts, hard-linked files, and existing special
-files are refused. Use a trusted checkout and do not change its mounts or add
-file aliases from outside the sandbox during a run. The host home and Swarm
-state are not mounted. Each role has separate private CLI state and temporary
-files, with a read-only system runtime. This is a filesystem boundary, not a
-network firewall; the CLI still needs access to its provider.
-
-Native pair roles do not use host CLI settings or keyrings. Swarm passes the
-selected harness's supported API credential variables or copies its file-based
-credential into the role's private home (`.claude/.credentials.json`,
-`.codex/auth.json`, or `.gemini/antigravity-cli/antigravity-oauth-token`, when
-present). The private home is removed when the workflow stops. An `agy`
-permission request can be answered in the dashboard, but **Allow once** never
-adds a writable mount or exposes another directory. Claude Code and Codex
-headless permissions do not pause for dashboard approval.
+Native pair roles start directly in the assigned task directory with the same auto-approval and filesystem access as [mixed swarms](#mixed-swarms). Reviewer roles are instructed not to edit, but that is not enforced for a native harness. **Check workers** verifies the CLI interface; it does not sign in or call a model for native roles.
 
 Structured turns have a one-hour deadline. Native roles resume their own
 exact sessions. No pair role uses the mention board; Swarm passes each phase
@@ -168,7 +128,7 @@ pi-kit package registers the Swarm extension and all three commands directly.
   - Wakes beyond `--max-active` wait in a FIFO queue.
   - `--max-wakes` stops runaway ping-pong between members.
   - System notices only ever wake `@coordinator`.
-- **Single writer.** Only the coordinator process writes `.swarm/<id>/`:
+- **Single writer.** The coordinator manages writes to `.swarm/<id>/`:
   - Every write to the board, roster, and transcripts goes through one async
     mutex.
   - `roster.json` is replaced atomically (temp file and rename).

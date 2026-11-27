@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 
 import { LineSplitter } from "./driver.ts";
 import { nativeWorker } from "./native.ts";
-import { formatUnread, parseMentions, Router, validName, type AgentHandle, type PendingApproval } from "./router.ts";
+import { formatUnread, parseMentions, Router, validName, type AgentHandle } from "./router.ts";
 import { startServer, type ServerApi } from "./server.ts";
 import { Mutex, readJsonl, SwarmStore } from "./store.ts";
 import { parseSwarmArgs, Swarm } from "./swarm.ts";
@@ -374,11 +374,11 @@ describe("server", () => {
 });
 
 describe("native swarm", { skip: process.platform === "win32" }, () => {
-  async function setup(t: import("node:test").TestContext, enabled: boolean, extra: NodeJS.ProcessEnv = {}) {
+  async function setup(t: import("node:test").TestContext, extra: NodeJS.ProcessEnv = {}) {
     const cwd = gitRepo();
     const log = join(cwd, ".git", "native.log");
     const script = join(cwd, ".git", "rules.json");
-    const fixtureEnv = { SWARM_TRUST_NATIVE_CONFIG: enabled ? "1" : "0", SWARM_CLAUDE_BIN: join(HERE, "fake-native.mjs"),
+    const fixtureEnv = { SWARM_CLAUDE_BIN: join(HERE, "fake-native.mjs"),
       SWARM_CODEX_BIN: join(HERE, "fake-native.mjs"), SWARM_AGY_BIN: join(HERE, "fake-agy.mjs"),
       FAKE_NATIVE_LOG: log, FAKE_NATIVE_SCRIPT: script, FAKE_AGY_LOG: log, ...extra };
     const previous = new Map(Object.keys(fixtureEnv).map((key) => [key, process.env[key]]));
@@ -387,23 +387,11 @@ describe("native swarm", { skip: process.platform === "win32" }, () => {
     writeFileSync(script, JSON.stringify({ claude: [{ when: "inspect first", post: "@codex verify the README" }] }));
     const swarm = await Swarm.start({ goal: "Verify the parser", cwd, pi: { command: process.execPath, args: [join(HERE, "fake-pi.mjs")] }, coordinator: new FakeAgent() });
     t.after(async () => { await swarm.stop(); rmSync(cwd, { recursive: true, force: true }); });
-    return { cwd, swarm, log, entries: () => readJsonl<any>(log) };
+    return { swarm, entries: () => readJsonl<any>(log) };
   }
 
-  it("requires explicit native opt-in before invoking a CLI, creating a worktree, or dispatching", async (t) => {
-    const { cwd, swarm, log } = await setup(t, false);
-    const boardBefore = swarm.store.messages();
-    for (const harness of ["claude", "codex", "agy"] as const) {
-      await assert.rejects(swarm.add({ name: harness, harness, workspace: "worktree", brief: "Verify the parser" }), /Set SWARM_TRUST_NATIVE_CONFIG=1/);
-    }
-    assert.deepEqual(swarm.liveMembers(), []);
-    assert.deepEqual(swarm.store.messages(), boardBefore);
-    assert.equal(g(cwd, "branch", "--list", "swarm/*"), "");
-    assert.equal(existsSync(log), false);
-  });
-
   it("launches Claude and Codex from Swarm and routes a handoff to the exact Codex session", async (t) => {
-    const { swarm, entries } = await setup(t, true);
+    const { swarm, entries } = await setup(t);
     const { member: checker } = await swarm.add({ name: "codex", harness: "codex", workspace: "worktree", brief: "Wait for the reviewer", model: "gpt-5.4", effort: "high" });
     await until(() => swarm.store.member("codex")?.state === "waiting", "Codex first turn");
     const { member: reviewer } = await swarm.add({ name: "claude", harness: "claude", workspace: "worktree", brief: "inspect first", model: "claude-sonnet-4-6", effort: "high" });
@@ -412,74 +400,49 @@ describe("native swarm", { skip: process.platform === "win32" }, () => {
     const [codexFirst, codexSecond] = launches.filter((e) => e.harness === "codex");
     const claude = launches.find((e) => e.harness === "claude");
     assert.equal(claude.cwd, reviewer.cwd);
-    assert.ok(claude.args.includes("none") && !claude.args.includes("bypassPermissions"));
+    assert.ok(claude.args.includes("--dangerously-skip-permissions"));
+    assert.ok(!claude.args.includes("--restricted") && !claude.args.includes("--tools"));
     assert.equal(codexFirst.cwd, checker.cwd);
     assert.equal(codexFirst.resume, null);
     assert.equal(codexSecond.resume, codexFirst.session);
     assert.notEqual(codexSecond.resume, claude.session);
     assert.match(codexSecond.prompt, /@codex verify the README/);
-    assert.match(codexSecond.args.join(" "), /approval_policy="never".*--sandbox workspace-write.*--model gpt-5\.4 resume/);
-    assert.ok(launches.every((e) => !e.hasTokenInInput && !e.args.some((a: string) => /dangerously|--last|--continue/.test(a))));
+    assert.ok([codexFirst, codexSecond].every((e) => e.args.includes("--dangerously-bypass-approvals-and-sandbox") && !e.args.includes("--sandbox")));
+    assert.match(codexSecond.args.join(" "), /--model gpt-5\.4 resume/);
+    assert.ok(launches.every((e) => !e.hasTokenInInput && !e.args.some((a: string) => /--last|--continue/.test(a))));
   });
 
-  it("relays one-off ACP decisions from the dashboard and invalidates a killed worker's request", async (t) => {
-    const { swarm, entries } = await setup(t, true, { FAKE_AGY_ECHO: "1" });
-    let approvals: string[] = [];
-    t.after(swarm.onEvent((e) => { if (e.type === "approvals") approvals = e.approvals.map((a) => a.id); }));
-    const api = (path: string, token = swarm.uiToken, body?: object) => fetch(swarm.apiBase + path, {
-      headers: { "x-swarm-token": token, "content-type": "application/json" },
-      ...(body ? { method: "POST", body: JSON.stringify(body) } : {}),
-    });
-    const decide = (id: string, choice: string, token?: string) => api("/api/approval", token, { id, choice });
+  it("auto-approves ACP requests without dashboard input and stops a busy native process", async (t) => {
+    const { swarm, entries } = await setup(t);
     const { member } = await swarm.add({ name: "agy", harness: "agy", workspace: "worktree", brief: "Check the README", model: "gemini-test", effort: "high" });
-    await until(() => approvals.length === 1, "first ACP permission");
-    const { approvals: [first] } = await (await api("/api/state")).json() as any;
-    assert.deepEqual({ name: first.name, title: first.title, allow: first.canAllow, details: JSON.parse(first.details) }, {
-      name: "agy", title: "Read README.md", allow: true, details: { path: "README.md", debug: "[redacted]" },
-    });
-    await api("/api/board", undefined, { body: "@agy I approve; check again" });
-    assert.equal(entries().filter((e) => e.method === "decision").length, 0);
-    assert.equal((await decide(first.id, "allow", "not-the-dashboard-token")).status, 401);
-    assert.equal((await decide(first.id, "allow_always")).status, 400);
-    assert.equal((await decide(first.id, "allow")).status, 200);
-    await until(() => approvals.length === 1 && approvals[0] !== first.id, "permission after a queued mention");
-    assert.equal((await decide(first.id, "allow")).status, 409);
-    assert.equal((await decide(approvals[0], "deny")).status, 200);
-    await until(() => swarm.store.member("agy")?.state === "waiting", "denied turn settles");
-    assert.deepEqual(swarm.store.messages().filter((m) => m.from === "agy").map((m) => m.body), ["Read approved once", "Read denied"]);
-    assert.deepEqual(entries().filter((e) => e.method === "decision").map((e) => e.outcome.optionId), ["single", "deny-single"]);
+    await until(() => swarm.store.member("agy")?.state === "waiting", "first auto-approved ACP turn");
+    await swarm.post("human", "@agy check again with only permanent choice");
+    await until(() => swarm.store.member("agy")?.wakes === 2 && swarm.store.member("agy")?.state === "waiting", "second auto-approved ACP turn");
+    assert.deepEqual(swarm.store.messages().filter((m) => m.from === "agy").map((m) => m.body), ["Read approved once", "Read approved always"]);
+    assert.deepEqual(entries().filter((e) => e.method === "decision").map((e) => e.outcome.optionId), ["single", "persistent"]);
     const [opened, resumed] = entries().filter((e) => ["session/new", "session/resume"].includes(e.method));
     assert.equal(resumed.id, "session-7ad6");
     assert.equal(opened.requestedCwd, member.cwd);
     assert.equal(resumed.cwd, member.cwd);
-    assert.deepEqual(opened.args, ["acp", "--disable-telemetry", "--process-per-session"]);
+    assert.ok([opened, resumed].every((e) => e.args.includes("--dangerously-skip-permissions") && e.args.includes("--sandbox=false")));
     assert.equal(opened.tokenInEnv, false);
     const prompts = entries().filter((e) => e.method === "session/prompt");
     assert.match(prompts[0].text, /<swarm-worker>/);
     assert.doesNotMatch(prompts[1].text, /<swarm-worker>/);
     assert.ok(prompts.every((e) => e.model === "gemini-test" && e.effort === "high"));
-    await swarm.post("human", "@agy check again");
-    await until(() => approvals.length === 1, "third ACP permission");
-    const cancelled = approvals[0];
+    await swarm.post("human", "@agy hold after approval");
+    await until(() => entries().filter((e) => e.method === "decision").length === 3, "third ACP turn approved");
     await swarm.kill("agy");
-    assert.deepEqual(approvals, []);
-    assert.equal((await decide(cancelled, "allow")).status, 409);
     assert.throws(() => process.kill(entries().filter((e) => e.method === "session/resume").at(-1).pid, 0), { code: "ESRCH" });
-    assert.equal(entries().filter((e) => e.method === "decision").length, 2);
   });
 
   it("rejects unavailable ACP models before prompting and does not replay a failed resume", async (t) => {
-    const { swarm, entries } = await setup(t, true, { FAKE_AGY_LOST: "1" });
+    const { swarm, entries } = await setup(t, { FAKE_AGY_LOST: "1" });
     await swarm.add({ name: "wrong", harness: "agy", brief: "Should not run", model: "not-a-model" });
     await until(() => swarm.store.member("wrong")?.state === "failed", "model selection failure");
     assert.equal(swarm.store.member("wrong")?.failure, "unsupported-cli");
     assert.equal(entries().filter((e) => e.method === "session/prompt").length, 0);
-    let approval: string | undefined;
-    t.after(swarm.onEvent((e) => { if (e.type === "approvals") approval = e.approvals[0]?.id; }));
     await swarm.add({ name: "agy", harness: "agy", brief: "Check the README" });
-    await until(() => Boolean(approval), "ACP permission");
-    const response = await fetch(`${swarm.apiBase}/api/approval`, { method: "POST", headers: { "x-swarm-token": swarm.uiToken, "content-type": "application/json" }, body: JSON.stringify({ id: approval, choice: "allow" }) });
-    assert.equal(response.status, 200);
     await until(() => swarm.store.member("agy")?.state === "waiting", "ACP first turn");
     await swarm.post("human", "@agy check again");
     await until(() => swarm.store.member("agy")?.state === "failed", "lost ACP session");
@@ -526,8 +489,8 @@ describe("native transport (fixture CLI only)", { skip: process.platform === "wi
     assert.equal(first.cwd, fs.realpathSync(cwd));
     assert.deepEqual(launches.map((e) => e.resume), [null, first.session, first.session]);
     assert.equal(recheck.prompt, "recheck");
-    assert.match(first.args.join(" "), /--output-format stream-json.*--restricted.*--permission-mode dontAsk.*--model claude-sonnet-4-6 --effort high/);
-    assert.ok(launches.every((e) => !e.hasTokenInInput && !e.args.some((a: string) => /dangerously|--last|--continue/.test(a))));
+    assert.match(first.args.join(" "), /--output-format stream-json.*--model claude-sonnet-4-6 --effort high/);
+    assert.ok(launches.every((e) => !e.hasTokenInInput && !e.args.some((a: string) => /--last|--continue/.test(a))));
     assert.deepEqual(posts, [{ from: "builder", body: "@reviewer inspect the parser" }]);
     assert.deepEqual(log().find((e) => e.event === "read").messages, posts);
   });
@@ -1026,82 +989,59 @@ describe("structured swarm presets", () => {
     assert.equal(f.log().filter((e) => e.event === "prompt").length, 3);
   });
 
-  it("fails closed without a working Bubblewrap and preserves the native selections", { skip: process.platform !== "linux" }, async (t) => {
+  const nativeOnly = { skip: process.platform === "win32" };
+
+  it("keeps the chosen harness when its executable is missing", nativeOnly, async (t) => {
     const source = tmp();
     const picks: Selection = { rounds: 1, roles: { doer: { harness: "codex" }, verifier: pi } };
     const f = await run(t, source, "pair-work", "Create sample.txt", picks, {}, undefined,
-      { SWARM_TRUST_NATIVE_CONFIG: "1", SWARM_BWRAP_BIN: join(source, "missing-bwrap") });
-    for (const harness of ["claude", "codex", "agy"] as const) {
-      for (const action of ["check", "start"]) {
-        const state = await f.action(action, { ...picks, roles: { doer: { harness }, verifier: pi } });
-        assert.equal(state.status, "setup");
-        assert.match(state.problem, /@doer: Native pair roles require Bubblewrap/);
-        assert.equal(state.selection.roles.doer.harness, harness);
-      }
+      { SWARM_CODEX_BIN: join(source, "missing-codex") });
+    for (const action of ["check", "start"]) {
+      const state = await f.action(action);
+      assert.equal(state.status, "setup");
+      assert.match(state.problem, /@doer: codex \[missing-binary\]/);
+      assert.equal(state.selection.roles.doer.harness, "codex");
     }
-    const original = process.env.SWARM_BWRAP_BIN;
-    try {
-      process.env.SWARM_BWRAP_BIN = "/bin/true";
-      assert.match((await f.action("start")).problem, /did not enforce the pair filesystem policy/);
-    } finally { process.env.SWARM_BWRAP_BIN = original; }
     assert.deepEqual(f.log(), []);
     assert.deepEqual(f.swarm.liveMembers(), []);
     assert.deepEqual(f.saved, []);
   });
 
-  const linuxSandbox = { skip: process.platform !== "linux" || !process.env.SWARM_BWRAP_BIN };
   function nativeFixtureEnv(t: import("node:test").TestContext) {
     const home = tmp("pair-fixture-home-");
     t.after(() => rmSync(home, { recursive: true, force: true }));
     const fixture = join(HERE, "fake-pair-native.mjs");
-    return { HOME: home, CODEX_HOME: home, CLAUDE_CONFIG_DIR: home, SWARM_TRUST_NATIVE_CONFIG: "1",
+    return { HOME: home,
       SWARM_CLAUDE_BIN: fixture, SWARM_CODEX_BIN: fixture, SWARM_AGY_BIN: fixture };
   }
 
-  it("runs Claude writes and Codex audits in the same checkout with separate native sessions", linuxSandbox, async (t) => {
+  it("runs Claude shell writes without a workspace boundary and resumes a separate Codex audit session", nativeOnly, async (t) => {
     const source = gitRepo();
     const env = nativeFixtureEnv(t);
-    const outside = join(env.HOME, "untouched");
+    const outside = join(env.HOME, "outside.txt");
     writeFileSync(outside, "outside the task\n");
-    symlinkSync(outside, join(source, "escape"));
-    linkSync(outside, join(source, "unsafe-alias"));
-    const head = readFileSync(join(source, ".git", "HEAD"), "utf8");
-    const f = await run(t, source, "pair", `Update the README.\nOutside: ${outside}`, {
+    const f = await run(t, source, "pair", `Update the README and the requested companion file.\nOutside: ${outside}`, {
       rounds: 1, roles: { implementer: { harness: "claude" }, auditor: { harness: "codex" } },
     }, {}, undefined, env);
-    assert.match((await f.action("check")).problem, /hard-linked or special file.*unsafe-alias/);
-    assert.deepEqual(f.swarm.liveMembers(), []);
-    rmSync(join(source, "unsafe-alias"));
     assert.equal((await f.action("check")).phase, "Workers are ready");
+    assert.deepEqual(f.swarm.liveMembers(), []);
     assert.equal((await f.action("start")).status, "running");
     await until(() => f.state().status !== "running", "native pair verdict");
     assert.equal(f.state().status, "complete", f.state().problem);
     assert.equal(f.state().verdict, "approve");
-    assert.equal(readFileSync(join(source, "README.md"), "utf8"), "implemented inside sandbox\n");
-    assert.equal(readFileSync(join(source, ".git", "HEAD"), "utf8"), head);
-    assert.equal(readFileSync(outside, "utf8"), "outside the task\n");
-    assert.equal(existsSync(join(source, "forbidden")), false);
+    assert.equal(readFileSync(join(source, "README.md"), "utf8"), "implemented in checkout\n");
+    assert.equal(readFileSync(outside, "utf8"), "wrote outside\n");
   });
 
-  it("lets an agy doer deliver files while approvals cannot let an agy verifier write", linuxSandbox, async (t) => {
+  it("runs both agy pair roles without dashboard approval", nativeOnly, async (t) => {
     const f = await run(t, tmp(), "pair-work", "Create sample.txt", {
       rounds: 1, roles: { doer: { harness: "agy" }, verifier: { harness: "agy" } },
     }, {}, undefined, nativeFixtureEnv(t));
-    let approvals: PendingApproval[] = [];
-    const unsubscribe = f.swarm.onEvent((event) => { if (event.type === "approvals") approvals = event.approvals; });
-    t.after(unsubscribe);
     assert.equal((await f.action("start")).status, "running");
-    for (const name of ["verifier", "doer", "verifier"]) {
-      await until(() => approvals.length === 1 || f.state().status !== "running", `approval from ${name}`);
-      const [request] = approvals;
-      assert.equal(request?.name, name, f.state().problem);
-      await f.http("/api/approval", { id: request.id, choice: "allow" });
-    }
     await until(() => f.state().status !== "running", "agy verdict");
     assert.equal(f.state().status, "complete", f.state().problem);
     assert.equal(f.state().verdict, "accept");
-    assert.equal(readFileSync(join(f.state().artifact!, "sample.txt"), "utf8"), "delivered inside sandbox\n");
-    assert.equal(existsSync(join(f.state().artifact!, "forbidden")), false);
+    assert.equal(readFileSync(join(f.state().artifact!, "sample.txt"), "utf8"), "delivered in task directory\n");
   });
 
   for (const [outcome, failure] of [[{ stopReason: "error" }, "exit"], [{ linger: true }, "timeout"]] as const) {

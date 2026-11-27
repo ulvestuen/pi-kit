@@ -23,9 +23,8 @@ export function failed(failure: Failure, reason: string): TurnResult & { type: "
   return { type: "failed", failure, reason };
 }
 
-export function requireNativeOptIn(harness: Exclude<Harness, "pi">, env: NodeJS.ProcessEnv) {
+export function requireNativePlatform(harness: Exclude<Harness, "pi">) {
   if (process.platform === "win32") throw new Error(`${harness} workers require process-group cleanup, which Swarm does not support on Windows.`);
-  if (env.SWARM_TRUST_NATIVE_CONFIG !== "1") throw new Error(`${harness} is disabled. Set SWARM_TRUST_NATIVE_CONFIG=1 before starting Pi only if you trust the checkout, native configuration, and startup hooks.`);
 }
 
 export async function probe(cli: PiCommand, args: string[], cwd: string, env?: NodeJS.ProcessEnv) {

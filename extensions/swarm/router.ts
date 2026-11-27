@@ -3,7 +3,6 @@
 // never mid-tool-call. Active workers are capped; extra wakes wait in FIFO order. See a3/swarm.md.
 
 import { EventEmitter } from "node:events";
-import type { ApprovalDetails } from "./antigravity.ts";
 import { Mutex, type BoardMessage, type Kind, type Member, type SwarmStore } from "./store.ts";
 import type { PairWorkflow } from "./workflow.ts";
 
@@ -41,13 +40,10 @@ export interface RouterOptions {
   maxPromptChars?: number;
 }
 
-export type PendingApproval = ApprovalDetails & { id: string; name: string };
-
 export type SwarmEvent =
   | { type: "board"; message: BoardMessage }
   | { type: "roster"; members: Member[] }
   | { type: "workflow"; workflow: ReturnType<PairWorkflow["snapshot"]> }
-  | { type: "approvals"; approvals: PendingApproval[] }
   | { type: "transcript"; name: string; record: unknown };
 
 export function formatUnread(name: string, messages: BoardMessage[], maxChars = 60_000): string {

@@ -1,8 +1,7 @@
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { LineSplitter, type PiCommand } from "./driver.ts";
-import type { PairSandbox } from "./pair-sandbox.ts";
-import { DEFAULT_TURN_TIMEOUT_MS, failed, probe, requireNativeOptIn, type TranscriptEvent, type TurnResult, type WorkerAdapter } from "./worker.ts";
+import { DEFAULT_TURN_TIMEOUT_MS, failed, probe, requireNativePlatform, type TranscriptEvent, type TurnResult, type WorkerAdapter } from "./worker.ts";
 
 type NativeHarness = "claude" | "codex";
 const SESSION_ID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -34,40 +33,27 @@ interface NativeOptions {
   preflightCwd?: string;
   model?: string;
   effort?: string;
-  policy?: "read" | "write";
-  sandbox?: PairSandbox;
   rules: string;
   env: NodeJS.ProcessEnv;
-  boardUrl: string;
+  boardUrl?: string;
   timeoutMs?: number;
   onRecord(record: TranscriptEvent): void;
   revokeBoard(): void;
 }
 
-function launchArgs({ harness, model, effort, boardUrl, policy }: NativeOptions, session?: string): string[] {
+function launchArgs({ harness, model, effort, boardUrl }: NativeOptions, session?: string): string[] {
   const selectedModel = model ? ["--model", model] : [];
   if (harness === "claude") {
-    const mcp = { mcpServers: policy ? {} : { swarm_board: { type: "http", url: boardUrl, headers: { "x-swarm-token": "${PI_SWARM_TOKEN}" } } } };
-    const settings = { disableAllHooks: true, fallbackModel: [], autoMemoryEnabled: false,
-      // Edit path rules cover both Edit and Write. Don't pre-approve the bare tool names.
-      ...(policy !== "read" ? { permissions: { allow: ["Edit(./**)"] } } : {}) };
+    const mcp = { mcpServers: { swarm_board: { type: "http", url: boardUrl, alwaysLoad: true, headers: { "x-swarm-token": "${PI_SWARM_TOKEN}" } } } };
     return ["--print", "--output-format", "stream-json", "--verbose",
-      "--restricted", "--permission-mode", "dontAsk", "--permission-prompts", "none", "--setting-sources", "", "--settings", JSON.stringify(settings),
-      "--tools", policy === "read" ? "Read,Glob,Grep" : "Read,Glob,Grep,Edit,Write",
-      ...(!policy ? ["--allowedTools", "mcp__swarm_board__board_post,mcp__swarm_board__board_read"] : []),
-      "--strict-mcp-config", "--mcp-config", JSON.stringify(mcp), ...selectedModel, ...(effort ? ["--effort", effort] : []),
+      "--dangerously-skip-permissions", "--settings", JSON.stringify({ sandbox: { enabled: false } }),
+      ...(boardUrl ? ["--mcp-config", JSON.stringify(mcp)] : []), ...selectedModel, ...(effort ? ["--effort", effort] : []),
       ...(session ? ["--resume", session] : [])];
   }
-  // `exec` needs config overrides, not the interactive CLI's approval flag. The board uses MCP, not shell networking.
-  return ["-c", 'approval_policy="never"', "-c", 'approvals_reviewer="user"',
-    "-c", "sandbox_workspace_write.network_access=false", "-c", "sandbox_workspace_write.exclude_slash_tmp=true",
-    "-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true", "-c", "sandbox_workspace_write.writable_roots=[]",
-    "-c", 'shell_environment_policy.exclude=["PI_SWARM_TOKEN"]',
-    ...(policy ? [] : ["-c", `mcp_servers.swarm_board.url=${JSON.stringify(boardUrl)}`,
-      "-c", 'mcp_servers.swarm_board.env_http_headers={"x-swarm-token"="PI_SWARM_TOKEN"}', "-c", "mcp_servers.swarm_board.required=true"]),
+  return [...(boardUrl ? ["-c", 'shell_environment_policy.exclude=["PI_SWARM_TOKEN"]', "-c", `mcp_servers.swarm_board.url=${JSON.stringify(boardUrl)}`,
+    "-c", 'mcp_servers.swarm_board.env_http_headers={"x-swarm-token"="PI_SWARM_TOKEN"}', "-c", "mcp_servers.swarm_board.required=true"] : []),
     ...(effort ? ["-c", `model_reasoning_effort=${JSON.stringify(effort)}`] : []),
-    // Saved `allow` rules can bypass the command sandbox; this flag leaves system/managed rules intact.
-    "exec", "--json", "--sandbox", policy === "read" ? "read-only" : "workspace-write", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check",
+    "exec", "--json", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check",
     ...selectedModel,
     ...(session ? ["resume", session] : []), "-"];
 }
@@ -82,21 +68,20 @@ function reportedFailure(harness: NativeHarness, output: string, resuming: boole
 }
 
 export function nativeWorker(options: NativeOptions): WorkerAdapter {
-  const { harness, cli, cwd, model, onRecord, sandbox } = options;
+  const { harness, cli, cwd, model, onRecord, boardUrl } = options;
   let session: string | undefined;
   let stopped = false;
   let active: { done: Promise<TurnResult>; cancel: () => void } | undefined;
 
   return {
     async preflight() {
-      if (options.policy && !sandbox) throw new Error("Native pair roles require a filesystem sandbox.");
-      requireNativeOptIn(harness, options.env);
+      requireNativePlatform(harness);
       validateNativeModel(harness, model, options.effort);
       const helpArgs = harness === "claude" ? ["--help"] : ["exec", "--help"];
       const required = harness === "claude"
-        ? ["--restricted", "--permission-prompts", "--strict-mcp-config", "--output-format", "--resume"]
-        : ["--json", "--sandbox", "--ignore-user-config", "--ignore-rules", "resume"];
-      const help = sandbox ? await sandbox.preflight(helpArgs) : await probe(cli, helpArgs, options.preflightCwd ?? cwd, options.env);
+        ? ["--dangerously-skip-permissions", "--output-format", "--resume"]
+        : ["--json", "--dangerously-bypass-approvals-and-sandbox", "resume"];
+      const help = await probe(cli, helpArgs, options.preflightCwd ?? cwd, options.env);
       if (help.code === "ENOENT") throw new Error(`${harness} [missing-binary]: put the native CLI on PATH or set SWARM_${harness.toUpperCase()}_BIN.`);
       if (!help.ok || !required.every((flag) => help.output.includes(flag))) throw new Error(`${harness} [unsupported-cli]: this version does not support Swarm's headless launch. Check '${harness} ${helpArgs.join(" ")}'.`);
     },
@@ -104,10 +89,7 @@ export function nativeWorker(options: NativeOptions): WorkerAdapter {
       if (stopped) return { type: "cancelled" };
       const previous = session;
       const args = launchArgs(options, previous);
-      let launch;
-      try { launch = sandbox ? sandbox.launch(args) : { cli: { ...cli, args: [...cli.args, ...args] }, cwd, env: options.env }; }
-      catch (error) { return failed("permission", (error as Error).message); }
-      const child = spawn(launch.cli.command, launch.cli.args, { cwd: launch.cwd, env: launch.env, detached: true, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+      const child = spawn(cli.command, [...cli.args, ...args], { cwd, env: options.env, detached: true, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
       const signalGroup = (signal: NodeJS.Signals) => {
         if (child.pid) {
           try { process.kill(-child.pid, signal); } catch (error: any) { if (error.code !== "ESRCH") throw error; }
@@ -160,7 +142,7 @@ export function nativeWorker(options: NativeOptions): WorkerAdapter {
               interrupt(failed("unsupported-cli", `Claude Code selected a different model than ${model}.`));
             }
             const board = Array.isArray(record.mcp_servers) && record.mcp_servers.find((m: any) => m?.name === "swarm_board");
-            if (!sandbox && (!board || !["connected", "pending"].includes(board.status))) interrupt(failed("protocol", "Claude Code did not connect to the swarm board."));
+            if (boardUrl && (!board || !["connected", "pending", "cached"].includes(board.status))) interrupt(failed("protocol", "Claude Code did not connect to the swarm board."));
           } else if (record.type === "assistant" && !record.parent_tool_use_id) {
             const content = record.message?.content;
             if (Array.isArray(content)) assistant(content.filter((c: any) => c?.type === "text").map((c: any) => c.text).join("\n"));
@@ -233,7 +215,6 @@ export function nativeWorker(options: NativeOptions): WorkerAdapter {
       stopped = true;
       active?.cancel();
       await active?.done;
-      sandbox?.cleanup();
     },
   };
 }

@@ -63,15 +63,6 @@
   button.send { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 0 16px; font: inherit; font-weight: 600; cursor: pointer; }
   button.send:disabled { opacity: .5; cursor: default; }
   .hint { color: var(--dim); font-size: 12px; margin-top: 4px; }
-  #approvals { max-height: 34vh; overflow-y: auto; }
-  .approval { margin: 0 0 8px; padding: 10px; border: 1px solid var(--working); border-radius: 8px; background: var(--bg); }
-  .approval h2 { margin: 0; font-size: 14px; color: var(--working); }
-  .approval p { margin: 4px 0; overflow-wrap: anywhere; }
-  .approval pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 9vh; overflow: auto; margin: 6px 0; }
-  .approval button { padding: 4px 10px; margin-right: 6px; font: inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
-  .approval button:hover:not(:disabled) { border-color: var(--accent); }
-  .approval button:disabled { opacity: .5; cursor: default; }
-  #approval-error { color: var(--killed); font-size: 12px; }
   #ac { position: absolute; bottom: calc(100% - 4px); left: 18px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.3); min-width: 200px; padding: 4px; display: none; }
   #ac div { padding: 5px 10px; border-radius: 6px; cursor: pointer; display: flex; justify-content: space-between; gap: 12px; }
   #ac div.sel { background: var(--panel2); color: var(--accent); }
@@ -116,8 +107,6 @@
 <aside><h2>Members</h2><div id="roster"></div><div id="queued"></div></aside>
 <main id="feed"><div class="empty">No messages yet.</div></main>
 <footer id="composer">
-  <div id="approvals" aria-live="polite"></div>
-  <div id="approval-error" role="alert"></div>
   <div id="ac" role="listbox"></div>
   <form id="form">
     <textarea id="input" rows="1" placeholder="Post as human — @name or @all wakes members (Enter to send, Shift+Enter for a new line)"></textarea>
@@ -134,7 +123,7 @@
 const token = new URLSearchParams(location.search).get("t") || "";
 const api = (path, init = {}) => fetch(path + (path.includes("?") ? "&" : "?") + "t=" + encodeURIComponent(token), { ...init, headers: { "content-type": "application/json", ...(init.headers || {}) } });
 const $ = (id) => document.getElementById(id);
-const state = { roster: { members: [] }, board: [], queued: [], open: null, records: [], live: "", pair: false };
+const state = { roster: { members: [] }, board: [], queued: [], open: null, records: [], live: "" };
 
 // ---- rendering helpers (everything is escaped before markdown is applied) ----
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -272,9 +261,6 @@ function recordEl(r) {
     const label = r.type === "agent_start" ? "worker started" : r.type === "turn_cancelled" ? "turn cancelled" : r.resumed ? "native session resumed" : "native session started";
     el.className = "tx sys"; el.innerHTML = `<div class="lbl">${label} · ${esc(time(r.ts))}</div>`; return el;
   }
-  if (r.type === "permission_decided") {
-    el.className = "tx sys"; el.textContent = r.choice === "allow" ? "Permission allowed once" : "Permission denied"; return el;
-  }
   if (r.type === "turn_failed") { el.className = "tx tool err"; el.innerHTML = `<div class="lbl">turn failed · ${esc(r.failure)}</div><div>${esc(r.reason)}</div>`; return el; }
   if (r.type === "exit" || r.type === "extension_error" || r.type === "auto_retry_start") { el.className = "tx sys"; el.innerHTML = `<div class="lbl">${esc(r.type)}</div><pre>${esc(short(r))}</pre>`; return el; }
   return null;
@@ -326,11 +312,11 @@ function renderWorkflow(w) {
       body.innerHTML = `<form id="workflow-form">
         <label>${w.preset === "pair-review" ? "Review target" : "Task"}<textarea rows="2" name="target" required>${esc(w.target)}</textarea></label>
         ${w.preset === "pair-review" ? '<div class="detail">Working tree, a local Git revision, or a revision range (e.g. main...HEAD).</div>' : ""}
-        <p class="detail">Native harnesses require Linux with Bubblewrap. Check workers before starting.</p>
+        <p class="detail">Native harnesses auto-approve tool calls and run with your account’s filesystem access.</p>
         <div class="roles">${w.roles.map((role) => {
           const pick = w.selection.roles[role];
           return `<fieldset data-role="${esc(role)}"><legend>${esc(role)}</legend>
-            <span class="detail">${role === "implementer" || role === "doer" ? "Can edit task files" : "Read-only task files"}</span>
+            <span class="detail" data-role-scope></span>
             <label>Harness<select data-harness aria-label="${esc(role)} harness">${w.harnesses.map((h) => `<option value="${h}"${pick.harness === h ? " selected" : ""}>${harnessLabel(h)}</option>`).join("")}</select></label>
             <label>Model<input data-model aria-label="${esc(role)} model" value="${esc(pick.model || "")}" autocomplete="off" placeholder="Native CLI default"></label>
             <label>Effort<input data-effort aria-label="${esc(role)} effort" value="${esc(pick.effort || "")}" placeholder="Model default" autocomplete="off"></label></fieldset>`;
@@ -359,6 +345,8 @@ function selectModelList(fields) {
   const isPi = fields.querySelector("[data-harness]").value === "pi";
   if (isPi) model.setAttribute("list", "workflow-models"); else model.removeAttribute("list");
   model.placeholder = isPi ? "provider/model" : "Native CLI default";
+  const writes = ["implementer", "doer"].includes(fields.dataset.role);
+  fields.querySelector("[data-role-scope]").textContent = writes ? "Edits task files" : isPi ? "Read-only task files" : "Review only (not enforced)";
 }
 
 async function workflowAction(action) {
@@ -377,49 +365,15 @@ async function workflowAction(action) {
   } catch (error) { $("workflow-error").textContent = error.message; }
 }
 
-function renderApprovals(approvals) {
-  const box = $("approvals");
-  const next = new Set(approvals.map((approval) => approval.id));
-  for (const card of [...box.children]) if (!next.has(card.dataset.approval)) card.remove();
-  for (const { id, name, title, details, canAllow } of approvals) {
-    if ([...box.children].some((card) => card.dataset.approval === id)) continue;
-    const card = document.createElement("section");
-    card.className = "approval";
-    card.dataset.approval = id;
-    card.innerHTML = `<h2>Permission requested by @${esc(name)}</h2><p>${esc(title)}</p><pre tabindex="0">${esc(details)}</pre>
-      ${state.pair ? '<p class="hint">Allow once does not change the role’s filesystem restrictions.</p>' : ""}
-      <button type="button" value="deny">Deny</button>${canAllow ? '<button type="button" value="allow">Allow once</button>' : ""}`;
-    card.addEventListener("click", async (event) => {
-      const choice = event.target.closest("button")?.value;
-      if (!choice) return;
-      const buttons = [...card.querySelectorAll("button")];
-      buttons.forEach((button) => button.disabled = true);
-      $("approval-error").textContent = "";
-      try {
-        const response = await api("/api/approval", { method: "POST", body: JSON.stringify({ id, choice }) });
-        if (!response.ok) throw new Error((await response.json()).error);
-        card.remove();
-      } catch (error) {
-        $("approval-error").textContent = `Could not send decision: ${error.message}`;
-        buttons.forEach((button) => button.disabled = false);
-      }
-    });
-    box.append(card);
-  }
-  $("composer").hidden = state.pair && !box.childElementCount && !$("approval-error").textContent;
-}
-
 // ---- live updates ----
 function applySnapshot(s) {
   state.roster = s.roster; state.board = s.board; state.queued = s.queued || [];
-  state.pair = Boolean(s.workflow);
-  $("form").hidden = $("hint").hidden = state.pair;
+  $("composer").hidden = Boolean(s.workflow);
   $("title").textContent = "Pi swarm " + s.id;
   $("goal").textContent = s.goal; $("goal").title = s.goal;
   document.title = "swarm · " + s.goal.slice(0, 60);
   $("hint").textContent = `Limits: ${s.limits.maxActive} active, ${s.limits.maxWorkers} workers · state in ${s.dir}`;
   renderRoster();
-  renderApprovals(s.approvals || []);
   if (s.workflow) renderWorkflow(s.workflow); else renderBoard();
 }
 function connect() {
@@ -429,7 +383,6 @@ function connect() {
   es.addEventListener("snapshot", (e) => applySnapshot(JSON.parse(e.data)));
   es.addEventListener("board", (e) => { if (!$("workflow")) addMessage(JSON.parse(e.data)); });
   es.addEventListener("workflow", (e) => renderWorkflow(JSON.parse(e.data)));
-  es.addEventListener("approvals", (e) => renderApprovals(JSON.parse(e.data)));
   es.addEventListener("roster", (e) => { const d = JSON.parse(e.data); state.roster.members = d.members; state.queued = d.queued || []; renderRoster(); });
   es.addEventListener("transcript", (e) => {
     const { name, record } = JSON.parse(e.data);

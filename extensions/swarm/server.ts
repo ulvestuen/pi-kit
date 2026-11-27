@@ -4,14 +4,12 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { ApprovalChoice } from "./antigravity.ts";
 import type { BoardMessage, Kind } from "./store.ts";
 
 export interface ServerApi {
   html(): string;
   state(): unknown;
   workflowAction?(input: unknown): Promise<unknown>;
-  approve?(id: string, choice: ApprovalChoice): boolean;
   transcript(name: string): unknown[] | null;
   humanPost(body: string): Promise<BoardMessage>;
   workerName(token: string): string | null;
@@ -144,13 +142,6 @@ export function startServer(api: ServerApi, options: { token: string; port?: num
         const body = await readBody(req);
         try { return send(res, 200, await api.workflowAction(body)); }
         catch (error) { return send(res, 400, { error: (error as Error).message }); }
-      }
-      if (req.method === "POST" && path === "/api/approval" && api.approve) {
-        const body = await readBody(req);
-        if (typeof body?.id !== "string" || (body.choice !== "allow" && body.choice !== "deny")) return send(res, 400, { error: "Approval ID and allow or deny choice required" });
-        return api.approve(body.id, body.choice)
-          ? send(res, 200, { ok: true })
-          : send(res, 409, { error: "This decision is not available for that request." });
       }
       const transcript = path.match(/^\/api\/workers\/([a-z][a-z0-9-]*)\/transcript$/);
       if (req.method === "GET" && transcript) {

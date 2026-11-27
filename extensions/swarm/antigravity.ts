@@ -1,10 +1,6 @@
 import { spawn } from "node:child_process";
 import { LineSplitter, type PiCommand } from "./driver.ts";
-import type { PairSandbox } from "./pair-sandbox.ts";
-import { DEFAULT_TURN_TIMEOUT_MS, failed, probe, requireNativeOptIn, type TranscriptEvent, type TurnResult, type WorkerAdapter } from "./worker.ts";
-
-export type ApprovalChoice = "allow" | "deny";
-export type ApprovalDetails = { title: string; details: string; canAllow: boolean };
+import { DEFAULT_TURN_TIMEOUT_MS, failed, probe, requireNativePlatform, type TranscriptEvent, type TurnResult, type WorkerAdapter } from "./worker.ts";
 
 interface Options {
   cli: PiCommand;
@@ -13,47 +9,40 @@ interface Options {
   env: NodeJS.ProcessEnv;
   model?: string;
   effort?: string;
-  sandbox?: PairSandbox;
   rules: string;
-  boardUrl: string;
-  boardToken: string;
+  board?: { url: string; token: string };
   timeoutMs?: number;
   onRecord(record: TranscriptEvent): void;
   revokeBoard(): void;
-  approve(details: ApprovalDetails, decide: (choice: ApprovalChoice) => void): () => void;
 }
 
-const args = ["acp", "--disable-telemetry", "--process-per-session"];
+const args = ["acp", "--disable-telemetry", "--process-per-session", "--dangerously-skip-permissions", "--sandbox=false"];
 const cancelled = { type: "cancelled" } as const;
 const protocol = () => failed("protocol", "agy sent an unexpected ACP message.");
 const acpCancelled = { outcome: { outcome: "cancelled" } };
 
 export function antigravityWorker(options: Options): WorkerAdapter {
-  const { cli, cwd, env, model, effort, onRecord, sandbox } = options;
+  const { cli, cwd, env, model, effort, onRecord, board } = options;
   let sessionId: string | undefined;
   let stopped = false;
   let active: { stop(): void; done: Promise<TurnResult> } | undefined;
 
   return {
     async preflight() {
-      requireNativeOptIn("agy", env);
-      const help = sandbox ? await sandbox.preflight(["acp", "--help"]) : await probe(cli, ["acp", "--help"], options.preflightCwd, env);
+      requireNativePlatform("agy");
+      const help = await probe(cli, ["acp", "--help"], options.preflightCwd, env);
       if (help.code === "ENOENT") throw new Error("agy [missing-binary]: put Antigravity CLI on PATH or set SWARM_AGY_BIN.");
-      if (!help.ok || !help.output.includes("--process-per-session")) throw new Error("agy [unsupported-cli]: this Antigravity CLI does not expose the required ACP interface. Check `agy acp --help`.");
+      if (!help.ok || !["--process-per-session", "--dangerously-skip-permissions", "--sandbox"].every((flag) => help.output.includes(flag))) throw new Error("agy [unsupported-cli]: this Antigravity CLI does not expose the required ACP interface. Check `agy acp --help`.");
     },
     async deliver(prompt) {
       if (stopped) return cancelled;
       const previous = sessionId;
-      let launch;
-      try { launch = sandbox ? sandbox.launch(args) : { cli: { ...cli, args: [...cli.args, ...args] }, cwd, env }; }
-      catch (error) { return failed("permission", (error as Error).message); }
-      const child = spawn(launch.cli.command, launch.cli.args, { cwd: launch.cwd, env: launch.env, detached: true, stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
+      const child = spawn(cli.command, [...cli.args, ...args], { cwd, env, detached: true, stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
       const signal = (sig: NodeJS.Signals) => {
         if (child.pid) {
           try { process.kill(-child.pid, sig); } catch (error: any) { if (error.code !== "ESRCH") throw error; }
         }
       };
-      const permissions = new Map<string | number, () => void>();
       let pending: { id: number; method: string; resolve(result: any): void } | undefined;
       let prompting = false;
       let nextId = 0;
@@ -65,8 +54,6 @@ export function antigravityWorker(options: Options): WorkerAdapter {
         if (outcome) return;
         outcome = result;
         clearTimeout(timer);
-        for (const cleanup of permissions.values()) cleanup();
-        permissions.clear();
         pending?.resolve(undefined);
         pending = undefined;
         if (result.type === "failed" || stopped) {
@@ -100,26 +87,19 @@ export function antigravityWorker(options: Options): WorkerAdapter {
             write({ id: msg.id, error: { code: -32601, message: "Client method not supported" } });
             return;
           }
-          if (!prompting || msg.params?.sessionId !== sessionId || permissions.has(msg.id) || permissions.size >= 16) return finish(protocol());
-          const { toolCall, options: choices } = msg.params;
-          const once = (kind: string) => Array.isArray(choices) ? choices.find((choice) => choice?.kind === kind && typeof choice.optionId === "string")?.optionId : undefined;
-          const allow = once("allow_once"), deny = once("reject_once");
-          const title = typeof toolCall?.title === "string" && toolCall.title.trim() ? toolCall.title : "Antigravity tool request";
-          const details = JSON.stringify(toolCall?.rawInput ?? toolCall?.content ?? toolCall?.locations ?? null, null, 2);
-          const canAllow = Boolean(allow && toolCall?.toolCallId && (title !== "Antigravity tool request" || details !== "null")) && details.length <= 16_000 && title.length <= 500;
-          const cleanup = options.approve({ title: title.slice(0, 500), details: details.length > 16_000 ? "Request details exceed the display limit. Deny and ask the worker to narrow the operation." : details === "null" ? "Antigravity supplied no additional details." : details, canAllow }, (choice) => {
-            if (!permissions.delete(msg.id) || outcome) return;
-            const optionId = choice === "allow" ? allow : deny;
-            onRecord({ type: "permission_decided", choice });
-            write({ id: msg.id, result: optionId ? { outcome: { outcome: "selected", optionId } } : acpCancelled });
-          });
-          permissions.set(msg.id, cleanup);
+          if (!prompting || msg.params?.sessionId !== sessionId) return finish(protocol());
+          const choices = msg.params.options;
+          if (!Array.isArray(choices)) return finish(protocol());
+          // Approve the current action without persisting a rule if the CLI offers that choice.
+          const allow = (kind: string) => choices.find((choice) => choice?.kind === kind && typeof choice.optionId === "string")?.optionId;
+          const optionId = allow("allow_once") ?? allow("allow_always");
+          write({ id: msg.id, result: optionId === undefined ? acpCancelled : { outcome: { outcome: "selected", optionId } } });
           return;
         }
         if (!pending || msg.id !== pending.id) return finish(protocol());
         if (msg.error && typeof msg.error.code === "number") {
           if (/authentication required|unauthenticated|not logged in/i.test(String(msg.error.message))) {
-            return finish(failed("auth", `agy authentication required. Sign in to Antigravity CLI, then ${sandbox ? "start a new pair run" : "add a new worker"}.`));
+            return finish(failed("auth", `agy authentication required. Sign in to Antigravity CLI, then ${board ? "add a new worker" : "start a new pair run"}.`));
           }
           if (/permission denied|workspace trust|untrusted workspace/i.test(String(msg.error.message))) return finish(failed("permission", "agy refused an action under its native permission or workspace trust policy."));
           if (pending.method === "session/resume") return finish(failed("lost-session", "agy could not resume the saved session; no fresh session was started."));
@@ -150,10 +130,10 @@ export function antigravityWorker(options: Options): WorkerAdapter {
         onRecord({ type: "agent_start" });
         const init = await request("initialize", { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: "pi-swarm", version: "1.0.0" } });
         if (outcome) return;
-        if (init.protocolVersion !== 1 || (!sandbox && init.agentCapabilities?.mcpCapabilities?.http !== true) || !init.agentCapabilities?.sessionCapabilities?.resume) {
-          return finish(failed("unsupported-cli", `agy must support ACP v1, exact session resume${sandbox ? "" : ", and HTTP MCP"}.`));
+        if (init.protocolVersion !== 1 || (board && init.agentCapabilities?.mcpCapabilities?.http !== true) || !init.agentCapabilities?.sessionCapabilities?.resume) {
+          return finish(failed("unsupported-cli", `agy must support ACP v1, exact session resume${board ? ", and HTTP MCP" : ""}.`));
         }
-        const setup = { cwd: sandbox?.cwd ?? cwd, mcpServers: sandbox ? [] : [{ name: "swarm_board", type: "http", url: options.boardUrl, headers: [{ name: "x-swarm-token", value: options.boardToken }] }] };
+        const setup = { cwd, mcpServers: board ? [{ name: "swarm_board", type: "http", url: board.url, headers: [{ name: "x-swarm-token", value: board.token }] }] : [] };
         const session = previous ? await request("session/resume", { ...setup, sessionId: previous }) : await request("session/new", setup);
         if (outcome) return;
         // Resume may omit the ID; when returned it must match the ID we asked for.
@@ -181,7 +161,6 @@ export function antigravityWorker(options: Options): WorkerAdapter {
         const result = await request("session/prompt", { sessionId, prompt: [{ type: "text", text: previous ? prompt : `${options.rules}\n\n${prompt}` }] });
         prompting = false;
         if (outcome) return;
-        if (permissions.size) return finish(protocol());
         if (text) onRecord({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text }] } });
         if (result.stopReason === "end_turn") finish({ type: "completed", text });
         else if (result.stopReason === "cancelled") finish(cancelled);
@@ -195,7 +174,6 @@ export function antigravityWorker(options: Options): WorkerAdapter {
       stopped = true;
       active?.stop();
       await active?.done;
-      sandbox?.cleanup();
     },
   };
 }
