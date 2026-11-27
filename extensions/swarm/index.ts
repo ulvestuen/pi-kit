@@ -31,7 +31,7 @@ export function coordinatorRules(swarm: Pick<Swarm, "id" | "goal" | "limits">): 
     `You are @coordinator of Pi swarm ${swarm.id}. Goal: ${swarm.goal}`,
     "- Split the goal into a few non-overlapping tracks with clear owners and done criteria. Spawn one worker per track with swarm_add; its brief is posted to the board as an @mention and wakes it.",
     '- Use workspace "worktree" for every worker that edits files in parallel with others; use "inherit" (shared checkout) for readers, reviewers, and verifiers. A worktree is not a sandbox.',
-    "- Pi is the available harness. If the user requests native Claude Code or Codex, explain that Swarm cannot verify their effective permissions before launch. Ask before using a different harness or provider.",
+    "- Default to Pi. For native Claude Code, Codex, or Antigravity CLI, select claude, codex, or agy respectively. Native workers require host opt-in. Ask before substituting another harness or provider.",
     "- Wire collaboration in the briefs: say who hands work to whom (for example builder → @verifier → @coordinator).",
     `- Workers wake only when mentioned and report with @coordinator. After spawning, end your turn: you are woken with unread board messages. Never poll swarm_status in a loop.`,
     "- Merge finished worktree branches yourself (git merge in the main checkout), then swarm_kill the worker to remove its worktree. swarm_kill refuses unmerged work unless force is set; only force when the user agrees to discard it.",
@@ -123,7 +123,7 @@ export default function swarmExtension(pi: ExtensionAPI) {
         if (HARNESSES.includes(prior?.harness)) pick = prior;
         else if (typeof legacy?.roles?.[role] === "string") {
           const [, spec, effort] = /^(.*?)(?::([a-z]+))?$/.exec(legacy.roles[role])!;
-          const match = /^(claude|codex)\/(.+)$/.exec(spec);
+          const match = /^(claude|codex|agy)\/(.+)$/.exec(spec);
           pick = { harness: (match?.[1] as WorkerPick["harness"]) ?? "pi", model: match?.[2] ?? spec, effort };
         } else {
           const preferred = i === 0 ? ["anthropic/claude-opus-5-5"] : ["openai/gpt-6.1-sol", "opencode/gpt-6.1-sol"];
@@ -281,13 +281,13 @@ export default function swarmExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "swarm_workflow",
     label: "Open pair workflow setup",
-    description: "Open browser setup for pair, pair-review, or pair-work. Pi roles can run; native Claude Code and Codex fail readiness. Keep the user's explicit selections without substituting a harness. The user starts the run in the browser.",
+    description: "Open browser setup for pair, pair-review, or pair-work. Native roles require Linux with Bubblewrap. Keep the user's explicit selections without substituting a harness. The user starts the run in the browser.",
     parameters: Type.Object({
       preset: StringEnum(presets),
       target: Type.String({ description: "Task or local review target; empty for the working tree" }),
       rounds: Type.Optional(Type.Integer({ minimum: 1, maximum: 10 })),
       roles: Type.Optional(Type.Record(Type.String(), Type.Object({
-        harness: Type.Optional(StringEnum(["pi", "claude"] as const)), model: Type.Optional(Type.String()), effort: Type.Optional(Type.String()),
+        harness: Type.Optional(StringEnum(HARNESSES)), model: Type.Optional(Type.String()), effort: Type.Optional(Type.String()),
       }))),
     }),
     async execute(_id, params, _signal, _update, ctx) {
@@ -298,8 +298,7 @@ export default function swarmExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "swarm_add",
     label: "Swarm add",
-    description:
-      "Spawn a headless Pi worker and post its brief to wake it. Native harnesses fail readiness; a worktree separates checkouts, not permissions.",
+    description: "Spawn a headless worker and post its brief to wake it. A worktree separates checkouts, not permissions.",
     promptSnippet: "Spawn a named swarm worker and post its brief to the board",
     promptGuidelines: [
       "Use swarm_add once per non-overlapping track; give every worker that edits files in parallel workspace \"worktree\".",
@@ -310,7 +309,7 @@ export default function swarmExtension(pi: ExtensionAPI) {
       name: Type.String({ description: "Short lowercase handle, e.g. builder, verifier, docs" }),
       brief: Type.String({ description: "The assignment: scope, files it owns, done criteria, and whom to @mention when done" }),
       workspace: Type.Optional(StringEnum(["inherit", "worktree"] as const, { description: "inherit (default) = shared main checkout; worktree = separate Git checkout and branch, not a sandbox" })),
-      harness: Type.Optional(StringEnum(["pi", "claude"] as const, { description: "pi (default); claude is recognized but cannot launch" })),
+      harness: Type.Optional(StringEnum(HARNESSES, { description: "pi (default), claude (Claude Code), codex, or agy (Antigravity CLI). Native harnesses require host opt-in." })),
       model: Type.Optional(Type.String({ description: "Pi provider/model or native CLI model ID. Omit for the coordinator's model in Pi, or the CLI default in a native harness." })),
       effort: Type.Optional(Type.String({ description: "Explicit reasoning effort for the selected harness/model; omit to retain the default." })),
     }),

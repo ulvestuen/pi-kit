@@ -99,7 +99,7 @@ node skills/doctor.mjs
 The extensions target Pi **1.1.0+** using the `@earendil-works` SDK packages.
 
 - [`threema/`](./threema/) – Threema integration for pi
-- [`extensions/swarm/`](./extensions/swarm/) – `/swarm <goal>` coordinates headless Pi workers on an `@mention` board. `/pair`, `/pair-review`, and `/pair-work` use the same runtime with fixed roles and phases. Choose each role's model and effort in the browser or in your request. Native harnesses are paused pending permission verification. [Pair setup and migration](./extensions/swarm/#pair-workflows).
+- [`extensions/swarm/`](./extensions/swarm/) – `/swarm <goal>` coordinates headless Pi, Claude Code, Codex, and Antigravity CLI workers on an `@mention` board. Native workers require [explicit host opt-in](./extensions/swarm/#mixed-swarms). `/pair`, `/pair-review`, and `/pair-work` use the same harnesses and configurable models and effort, with scoped Pi tools or Linux filesystem isolation for native roles. [Pair setup and migration](./extensions/swarm/#pair-workflows).
 
 ### Prompt aliases
 

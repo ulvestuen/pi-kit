@@ -3,7 +3,7 @@ import { RpcWorker, type PiCommand, type RpcWorkerOptions } from "./driver.ts";
 
 export const DEFAULT_TURN_TIMEOUT_MS = 60 * 60_000;
 export const PI_WRITE_DENIED = "Swarm permission denied: only regular task files and directories inside the assigned workspace are writable.";
-export const HARNESSES = ["pi", "claude", "codex"] as const;
+export const HARNESSES = ["pi", "claude", "codex", "agy"] as const;
 export type Harness = (typeof HARNESSES)[number];
 export type Failure = "missing-binary" | "unsupported-cli" | "auth" | "permission" | "timeout" | "lost-session" | "protocol" | "exit";
 export type TurnResult =
@@ -21,6 +21,11 @@ export type TranscriptEvent = { type: string; [key: string]: unknown };
 
 export function failed(failure: Failure, reason: string): TurnResult & { type: "failed" } {
   return { type: "failed", failure, reason };
+}
+
+export function requireNativeOptIn(harness: Exclude<Harness, "pi">, env: NodeJS.ProcessEnv) {
+  if (process.platform === "win32") throw new Error(`${harness} workers require process-group cleanup, which Swarm does not support on Windows.`);
+  if (env.SWARM_TRUST_NATIVE_CONFIG !== "1") throw new Error(`${harness} is disabled. Set SWARM_TRUST_NATIVE_CONFIG=1 before starting Pi only if you trust the checkout, native configuration, and startup hooks.`);
 }
 
 export async function probe(cli: PiCommand, args: string[], cwd: string, env?: NodeJS.ProcessEnv) {

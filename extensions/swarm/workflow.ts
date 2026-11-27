@@ -51,7 +51,7 @@ export function workflowRequest(preset: Preset, args: string, defaults: Selectio
   const names = tokens.flatMap((token) => token.kind === "option" ? [token.name] : []);
   if (new Set(names).size !== names.length) throw new Error("Specify each workflow option only once.");
   const roles = Object.fromEntries(PRESETS[preset].roles.map((role) => [role, {
-    harness: values[`${role}-harness`] as Harness | undefined, model: values[`${role}-model`], effort: values[`${role}-effort`],
+    harness: values[`${role}-harness`] as Pick["harness"] | undefined, model: values[`${role}-model`], effort: values[`${role}-effort`],
   }]));
   return { target, selection: applyPicks(preset, defaults, { rounds: values.rounds !== undefined ? Number(values.rounds) : undefined, roles }) };
 }
@@ -122,7 +122,7 @@ export class PairWorkflow {
 
   snapshot() {
     const { preset, piModels } = this.options;
-    return { preset, ...PRESETS[preset], piModels, ...this.state };
+    return { preset, ...PRESETS[preset], harnesses: HARNESSES, piModels, ...this.state };
   }
 
   private update(patch: Partial<State>) {
@@ -145,8 +145,6 @@ export class PairWorkflow {
     try {
       const roles = PRESETS[preset].roles.map((name, i) => {
         const pick = selection.roles[name];
-        // exec JSONL can omit a startup denial and still end with turn.completed.
-        if (pick.harness === "codex") throw new Error(`@${name}: Codex does not reliably report sandbox denials. Choose Pi for this role.`);
         if (pick.harness === "pi") {
           if (!pick.model) throw new Error(`Choose an available Pi provider/model for ${name}.`);
           validatePi?.(pick.model, pick.effort);

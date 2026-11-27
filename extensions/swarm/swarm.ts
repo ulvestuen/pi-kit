@@ -7,9 +7,11 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { antigravityWorker, type ApprovalChoice } from "./antigravity.ts";
 import type { PiCommand } from "./driver.ts";
 import { nativeInvocation, nativeWorker } from "./native.ts";
-import { COORDINATOR, HUMAN, Router, validName, type AgentHandle, type SwarmEvent } from "./router.ts";
+import { pairSandbox } from "./pair-sandbox.ts";
+import { COORDINATOR, HUMAN, Router, validName, type AgentHandle, type PendingApproval, type SwarmEvent } from "./router.ts";
 import { startServer, type SwarmServer } from "./server.ts";
 import { KINDS, Mutex, SwarmStore, type BoardMessage, type Kind, type Member, type Workspace } from "./store.ts";
 import { DEFAULT_TURN_TIMEOUT_MS, HARNESSES, failed, piWorker, probe, type Harness, type TranscriptEvent, type TurnResult, type WorkerAdapter } from "./worker.ts";
@@ -132,6 +134,7 @@ export class Swarm {
   private readonly workerChanges = new Mutex();
   private readonly workers = new Map<string, WorkerAdapter>();
   private readonly tokens = new Map<string, string>();
+  private readonly approvals = new Map<string, { request: PendingApproval; token: string; decide(choice: ApprovalChoice): void }>();
   private readonly git: Git;
   private stopping = false;
 
@@ -389,12 +392,25 @@ export class Swarm {
       if (live) this.router.emitEvent({ type: "transcript", name, record: { ...this.safeRecord(record), ts: Date.now() } });
       else void this.record(name, record);
     };
-    if (harness === "claude" || harness === "codex") {
+    if (harness && harness !== "pi") {
       const childEnv: NodeJS.ProcessEnv = { ...process.env, ...env };
       for (const key of UNSET_ENV) delete childEnv[key];
-      return nativeWorker({ harness, cli: nativeInvocation(harness, preflightCwd), cwd, env: childEnv, model, effort, policy,
+      const cli = nativeInvocation(harness, preflightCwd);
+      const sandbox = policy ? pairSandbox({ cli, cwd, harness, policy, stateDir: this.store.dir, env: childEnv }) : undefined;
+      const options = { cli, cwd, preflightCwd, env: childEnv, model, effort, sandbox,
         rules, boardUrl: `${this.apiBase}/api/worker/mcp`, timeoutMs: this.options.nativeTurnTimeoutMs, onRecord,
-        revokeBoard: () => this.tokens.delete(token) });
+        revokeBoard: () => this.tokens.delete(token) };
+      if (harness !== "agy") return nativeWorker({ ...options, harness, policy });
+      delete childEnv.PI_SWARM_TOKEN;
+      return antigravityWorker({ ...options, boardToken: token,
+        approve: (details, decide) => {
+          const id = randomBytes(18).toString("base64url");
+          const request = { ...details, id, name, title: this.redact(details.title), details: this.redact(details.details) };
+          this.approvals.set(id, { request, token, decide });
+          this.emitApprovals();
+          return () => { if (this.approvals.delete(id)) this.emitApprovals(); };
+        },
+      });
     }
     const args = [
       ...(this.options.workerArgs ?? []),
@@ -468,12 +484,28 @@ export class Swarm {
     this.router.emitEvent({ type: "transcript", name, record });
   }
 
+  private pendingApprovals() {
+    return [...this.approvals.values()].map(({ request }) => request);
+  }
+
+  private emitApprovals() {
+    this.router.emitEvent({ type: "approvals", approvals: this.pendingApprovals() });
+  }
+
   private serverApi() {
     const html = existsSync(UI_FILE) ? readFileSync(UI_FILE, "utf8") : "<!doctype html><p>ui.html missing</p>";
     return {
       html: () => html,
-      state: () => ({ id: this.id, goal: this.goal, dir: this.workflow ? this.store.dir : relative(this.root, this.store.dir) || this.store.dir, limits: this.limits, roster: this.store.getRoster(), board: this.store.messages(), queued: this.router.queued(), workflow: this.workflow?.snapshot() }),
+      state: () => ({ id: this.id, goal: this.goal, dir: this.workflow ? this.store.dir : relative(this.root, this.store.dir) || this.store.dir, limits: this.limits, roster: this.store.getRoster(), board: this.store.messages(), queued: this.router.queued(), approvals: this.pendingApprovals(), workflow: this.workflow?.snapshot() }),
       workflowAction: this.workflow ? (input: unknown) => this.workflow!.action(input) : undefined,
+      approve: (id: string, choice: ApprovalChoice) => {
+        const pending = this.approvals.get(id);
+        if (this.stopping || !pending || !this.tokens.has(pending.token) || (choice === "allow" && !pending.request.canAllow)) return false;
+        this.approvals.delete(id);
+        pending.decide(choice);
+        this.emitApprovals();
+        return true;
+      },
       transcript: (name: string) => (this.store.member(name) ? this.store.transcript(name) : null),
       humanPost: (body: string) => this.post(HUMAN, body, "message"),
       workerName: (token: string) => this.tokens.get(token) ?? null,
@@ -488,6 +520,7 @@ export class Swarm {
           if (event.type === "board") listener("board", event.message);
           else if (event.type === "roster") listener("roster", { members: event.members, queued: this.router.queued() });
           else if (event.type === "workflow") listener("workflow", event.workflow);
+          else if (event.type === "approvals") listener("approvals", event.approvals);
           else listener("transcript", { name: event.name, record: event.record });
         }),
     };

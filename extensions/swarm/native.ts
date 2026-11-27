@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { LineSplitter, type PiCommand } from "./driver.ts";
-import { DEFAULT_TURN_TIMEOUT_MS, failed, type TranscriptEvent, type TurnResult, type WorkerAdapter } from "./worker.ts";
+import type { PairSandbox } from "./pair-sandbox.ts";
+import { DEFAULT_TURN_TIMEOUT_MS, failed, probe, requireNativeOptIn, type TranscriptEvent, type TurnResult, type WorkerAdapter } from "./worker.ts";
 
 type NativeHarness = "claude" | "codex";
 const SESSION_ID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -20,8 +21,8 @@ export function validateNativeModel(harness: NativeHarness, model?: string, effo
   }
 }
 
-export function nativeInvocation(harness: NativeHarness, cwd: string): PiCommand {
-  const value = process.env[`SWARM_${harness.toUpperCase()}_BIN`] ?? process.env[`PAIR_${harness.toUpperCase()}_BIN`] ?? harness;
+export function nativeInvocation(harness: NativeHarness | "agy", cwd: string): PiCommand {
+  const value = process.env[`SWARM_${harness.toUpperCase()}_BIN`] ?? (harness === "agy" ? undefined : process.env[`PAIR_${harness.toUpperCase()}_BIN`]) ?? harness;
   const command = value.includes("/") ? resolve(cwd, value) : value;
   return /\.(?:[cm]?js)$/i.test(command) ? { command: "node", args: [resolve(cwd, command)] } : { command, args: [] };
 }
@@ -30,9 +31,11 @@ interface NativeOptions {
   harness: NativeHarness;
   cli: PiCommand;
   cwd: string;
+  preflightCwd?: string;
   model?: string;
   effort?: string;
   policy?: "read" | "write";
+  sandbox?: PairSandbox;
   rules: string;
   env: NodeJS.ProcessEnv;
   boardUrl: string;
@@ -44,15 +47,14 @@ interface NativeOptions {
 function launchArgs({ harness, model, effort, boardUrl, policy }: NativeOptions, session?: string): string[] {
   const selectedModel = model ? ["--model", model] : [];
   if (harness === "claude") {
-    const mcp = { mcpServers: { swarm_board: { type: "http", url: boardUrl, headers: { "x-swarm-token": "${PI_SWARM_TOKEN}" } } } };
+    const mcp = { mcpServers: policy ? {} : { swarm_board: { type: "http", url: boardUrl, headers: { "x-swarm-token": "${PI_SWARM_TOKEN}" } } } };
     const settings = { disableAllHooks: true, fallbackModel: [], autoMemoryEnabled: false,
       // Edit path rules cover both Edit and Write. Don't pre-approve the bare tool names.
       ...(policy !== "read" ? { permissions: { allow: ["Edit(./**)"] } } : {}) };
     return ["--print", "--output-format", "stream-json", "--verbose",
-      "--restricted", "--permission-mode", "dontAsk", "--setting-sources", "", "--settings", JSON.stringify(settings),
+      "--restricted", "--permission-mode", "dontAsk", "--permission-prompts", "none", "--setting-sources", "", "--settings", JSON.stringify(settings),
       "--tools", policy === "read" ? "Read,Glob,Grep" : "Read,Glob,Grep,Edit,Write",
       ...(!policy ? ["--allowedTools", "mcp__swarm_board__board_post,mcp__swarm_board__board_read"] : []),
-      ...(policy ? ["--no-session-persistence"] : []),
       "--strict-mcp-config", "--mcp-config", JSON.stringify(mcp), ...selectedModel, ...(effort ? ["--effort", effort] : []),
       ...(session ? ["--resume", session] : [])];
   }
@@ -61,12 +63,11 @@ function launchArgs({ harness, model, effort, boardUrl, policy }: NativeOptions,
     "-c", "sandbox_workspace_write.network_access=false", "-c", "sandbox_workspace_write.exclude_slash_tmp=true",
     "-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true", "-c", "sandbox_workspace_write.writable_roots=[]",
     "-c", 'shell_environment_policy.exclude=["PI_SWARM_TOKEN"]',
-    "-c", `mcp_servers.swarm_board.url=${JSON.stringify(boardUrl)}`,
-    "-c", 'mcp_servers.swarm_board.env_http_headers={"x-swarm-token"="PI_SWARM_TOKEN"}',
-    "-c", "mcp_servers.swarm_board.required=true",
+    ...(policy ? [] : ["-c", `mcp_servers.swarm_board.url=${JSON.stringify(boardUrl)}`,
+      "-c", 'mcp_servers.swarm_board.env_http_headers={"x-swarm-token"="PI_SWARM_TOKEN"}', "-c", "mcp_servers.swarm_board.required=true"]),
     ...(effort ? ["-c", `model_reasoning_effort=${JSON.stringify(effort)}`] : []),
     // Saved `allow` rules can bypass the command sandbox; this flag leaves system/managed rules intact.
-    "exec", "--json", "--sandbox", "workspace-write", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check",
+    "exec", "--json", "--sandbox", policy === "read" ? "read-only" : "workspace-write", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check",
     ...selectedModel,
     ...(session ? ["resume", session] : []), "-"];
 }
@@ -81,24 +82,32 @@ function reportedFailure(harness: NativeHarness, output: string, resuming: boole
 }
 
 export function nativeWorker(options: NativeOptions): WorkerAdapter {
-  const { harness, cli, cwd, model, onRecord } = options;
+  const { harness, cli, cwd, model, onRecord, sandbox } = options;
   let session: string | undefined;
   let stopped = false;
   let active: { done: Promise<TurnResult>; cancel: () => void } | undefined;
 
   return {
     async preflight() {
-      if (harness === "claude") {
-        // Restricted mode still loads managed settings. Startup hooks can run before stream-json init.
-        throw new Error("claude [unsupported-cli]: Swarm cannot verify Claude Code's effective managed permissions or startup hooks before launch. Choose Pi.");
-      }
-      // CLI help cannot attest to effective permissions or retained system/managed rules.
-      throw new Error("codex [unsupported-cli]: Swarm cannot verify Codex's effective permissions before launch. Choose Pi.");
+      if (options.policy && !sandbox) throw new Error("Native pair roles require a filesystem sandbox.");
+      requireNativeOptIn(harness, options.env);
+      validateNativeModel(harness, model, options.effort);
+      const helpArgs = harness === "claude" ? ["--help"] : ["exec", "--help"];
+      const required = harness === "claude"
+        ? ["--restricted", "--permission-prompts", "--strict-mcp-config", "--output-format", "--resume"]
+        : ["--json", "--sandbox", "--ignore-user-config", "--ignore-rules", "resume"];
+      const help = sandbox ? await sandbox.preflight(helpArgs) : await probe(cli, helpArgs, options.preflightCwd ?? cwd, options.env);
+      if (help.code === "ENOENT") throw new Error(`${harness} [missing-binary]: put the native CLI on PATH or set SWARM_${harness.toUpperCase()}_BIN.`);
+      if (!help.ok || !required.every((flag) => help.output.includes(flag))) throw new Error(`${harness} [unsupported-cli]: this version does not support Swarm's headless launch. Check '${harness} ${helpArgs.join(" ")}'.`);
     },
     async deliver(prompt) {
       if (stopped) return { type: "cancelled" };
-      const previous = options.policy ? undefined : session;
-      const child = spawn(cli.command, [...cli.args, ...launchArgs(options, previous)], { cwd, env: options.env, detached: true, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+      const previous = session;
+      const args = launchArgs(options, previous);
+      let launch;
+      try { launch = sandbox ? sandbox.launch(args) : { cli: { ...cli, args: [...cli.args, ...args] }, cwd, env: options.env }; }
+      catch (error) { return failed("permission", (error as Error).message); }
+      const child = spawn(launch.cli.command, launch.cli.args, { cwd: launch.cwd, env: launch.env, detached: true, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
       const signalGroup = (signal: NodeJS.Signals) => {
         if (child.pid) {
           try { process.kill(-child.pid, signal); } catch (error: any) { if (error.code !== "ESRCH") throw error; }
@@ -151,7 +160,7 @@ export function nativeWorker(options: NativeOptions): WorkerAdapter {
               interrupt(failed("unsupported-cli", `Claude Code selected a different model than ${model}.`));
             }
             const board = Array.isArray(record.mcp_servers) && record.mcp_servers.find((m: any) => m?.name === "swarm_board");
-            if (!board || !["connected", "pending"].includes(board.status)) interrupt(failed("protocol", "Claude Code did not connect to the swarm board."));
+            if (!sandbox && (!board || !["connected", "pending"].includes(board.status))) interrupt(failed("protocol", "Claude Code did not connect to the swarm board."));
           } else if (record.type === "assistant" && !record.parent_tool_use_id) {
             const content = record.message?.content;
             if (Array.isArray(content)) assistant(content.filter((c: any) => c?.type === "text").map((c: any) => c.text).join("\n"));
@@ -224,6 +233,7 @@ export function nativeWorker(options: NativeOptions): WorkerAdapter {
       stopped = true;
       active?.cancel();
       await active?.done;
+      sandbox?.cleanup();
     },
   };
 }
