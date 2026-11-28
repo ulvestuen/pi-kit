@@ -4,7 +4,6 @@
 
 import { EventEmitter } from "node:events";
 import { Mutex, type BoardMessage, type Kind, type Member, type SwarmStore } from "./store.ts";
-import type { PairWorkflow } from "./workflow.ts";
 
 export const COORDINATOR = "coordinator";
 export const HUMAN = "human";
@@ -43,7 +42,6 @@ export interface RouterOptions {
 export type SwarmEvent =
   | { type: "board"; message: BoardMessage }
   | { type: "roster"; members: Member[] }
-  | { type: "workflow"; workflow: ReturnType<PairWorkflow["snapshot"]> }
   | { type: "transcript"; name: string; record: unknown };
 
 export function formatUnread(name: string, messages: BoardMessage[], maxChars = 60_000): string {

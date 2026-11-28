@@ -21,9 +21,6 @@ coordinator (this session)            .swarm/<id>/board.jsonl   append-only log
 | `/swarm ui` | Print the UI URL and open it in your browser |
 | `/swarm status` | Roster, queued wakes, worktree merge status |
 | `/swarm stop` | Stop workers and the web server; remove merged worktrees and report the unmerged ones |
-| `/pair <task>` | Implement, audit the actual changes, and correct them |
-| `/pair-review [target]` | Independently review and cross-check a pinned Git snapshot |
-| `/pair-work <task>` | Plan verification, produce a deliverable, and verify it |
 
 You can also set the limits with `PI_SWARM_MAX_ACTIVE` (default 4),
 `PI_SWARM_MAX_WORKERS` (default 8), `PI_SWARM_MAX_WAKES` (default 50 per
@@ -31,9 +28,7 @@ worker), and `PI_SWARM_PORT` (default: a random free port).
 
 ## Tools
 
-`swarm_workflow` opens browser setup for a pair preset from a normal Pi
-prompt. The following tools are available only to the coordinator of a
-running free-form swarm:
+The following tools are available only to the coordinator of a running swarm:
 
 | Tool | Purpose |
 | --- | --- |
@@ -54,10 +49,10 @@ Run `/swarm ui` to see the workers. Click a worker for its transcript, or
 post `@reader summarize your observation` to wake that worker again.
 `/swarm stop` stops the workers and preserves unmerged or dirty worktrees.
 
-Pi uses the selected `provider/model` or inherits the coordinator's model in a
-free-form swarm. The legacy `provider/model:thinking` form still works. Set
+Pi uses the selected `provider/model` or inherits the coordinator's model.
+The legacy `provider/model:thinking` form still works. Set
 `effort` separately when you want to override the default for a known model.
-Free-form Pi tools and extensions are unchanged; Swarm does not sandbox them.
+Pi tools and extensions are unchanged; Swarm does not sandbox them.
 
 Pass native model IDs and effort to the coordinator in your request, or omit
 them to use each CLI's defaults. Antigravity checks explicit IDs against the
@@ -66,45 +61,6 @@ model and thinking options the account exposes over ACP.
 Claude Code, Codex, and Antigravity run headlessly in their native permission bypass modes. Swarm also answers any approval requests Antigravity still sends over [ACP](https://antigravity.google/docs/cli/acp); there is no dashboard approval step. Swarm does not change saved trust settings or override OS permissions, CLI hard denials, or organization-managed settings. No harness is substituted on failure.
 
 **Native workers are not isolated.** They use your usual CLI settings and sign-in, can run shell commands, and can access files outside the task directory as your user. A worktree separates checkouts, not permissions. Use native workers with repositories, inputs, and CLI settings you trust.
-
-## Pair workflows
-
-Run a slash command or ask in plain language, for example “Pair review the
-working tree with Claude Code as lead and Codex as peer.” To select native
-harnesses and explicit model IDs in a slash command:
-
-```text
-/pair-review working tree -- --lead-harness claude --lead-model claude-sonnet-4-6 --peer-harness codex --peer-model gpt-5.4
-```
-
-The browser prefills your selections. You can change the task or review target,
-harness, model, effort, and round limit, then check readiness and select **Start**.
-Neither worker receives a task until both pass validation. **Cancel** stops the setup
-or run; it does not undo edits already made. The last started selections are
-saved per workflow in `swarm-picks.json` in your Pi agent directory. Slash options
-also accept `--<role>-effort` and `--rounds`; use the role names below.
-
-- `/pair`: `implementer` can edit the current checkout; `auditor` gets staged and unstaged diffs and untracked paths, then reads relevant files in the checkout. Tracked binary changes, changed submodules, invalid UTF-8 evidence, and index entries marked `assume-unchanged` or `skip-worktree` stop the audit without a verdict. The run also stops if Git evidence exceeds 64 KiB; use `/pair-review` for a larger snapshot. The default is three audit rounds. The verdict is the last audit verdict, before the final correction.
-- `/pair-review`: `lead` and `peer` review the same copied snapshot. Target defaults to `working tree` (staged, unstaged, and non-ignored untracked files), or name a local revision or range such as `main...HEAD`. Fetch PR refs first; PR numbers and URLs are not Git targets. Only regular files are supported. Capture checks for drift, but is not atomic; pause other edits or select a revision. First reports stay private until both complete, followed by cross-checking (one round by default) and a consolidated verdict.
-- `/pair-work`: `verifier` plans checks before `doer` starts. The verifier reads the actual deliverable and gives a verdict; reaching the round limit (three by default) without acceptance is not success. This workflow also works outside Git.
-
-Choose `pi`, `claude`, `codex`, or `agy` independently for each role. Pi uses
-scoped file tools, with no shell and no access to links or Git metadata.
-
-Native pair roles start directly in the assigned task directory with the same auto-approval and filesystem access as [mixed swarms](#mixed-swarms). Reviewer roles are instructed not to edit, but that is not enforced for a native harness. **Check workers** verifies the CLI interface; it does not sign in or call a model for native roles.
-
-Structured turns have a one-hour deadline. Native roles resume their own
-exact sessions. No pair role uses the mention board; Swarm passes each phase
-its validated inputs and controls when reports are shared.
-Run state and reports are stored in the run's
-temporary directory, not in the source checkout. `/swarm ui` reopens the view
-while Pi is running; a browser reload restores the run's last state.
-
-The standalone picker and pane launchers have been retired. No terminal
-multiplexer is required. The first setup uses compatible legacy picker
-selections when no new selections have been saved. If you manually registered
-the old picker extension, remove that entry from your Pi configuration; the
-pi-kit package registers the Swarm extension and all three commands directly.
 
 ## How it works
 
@@ -145,16 +101,14 @@ pi-kit package registers the Swarm extension and all three commands directly.
 - a member roster with harness, model, effort, status, and workspace or branch;
 - a transcript drawer that opens when you click a member;
 - the live board with mention highlighting and markdown/code rendering;
-- a composer with `@` autocomplete for free-form swarms;
-- setup, readiness, phase and round status, and reports for pair workflows.
+- a composer with `@` autocomplete.
 
 | Endpoint | |
 | --- | --- |
-| `GET /api/state` | Goal, limits, roster, board, queue, and workflow state |
-| `GET /api/events` | SSE: `snapshot`, then `board`, `roster`, `transcript`, `workflow` |
+| `GET /api/state` | Goal, limits, roster, board, and queue |
+| `GET /api/events` | SSE: `snapshot`, then `board`, `roster`, `transcript` |
 | `GET /api/workers/:name/transcript` | Full transcript records |
 | `POST /api/board` `{ "body": "..." }` | Post as `human`; routes mentions like any other post |
-| `GET` / `POST /api/workflow` | Read workflow state or request check, start, or cancel |
 
 Security:
 

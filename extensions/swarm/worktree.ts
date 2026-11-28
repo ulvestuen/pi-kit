@@ -7,33 +7,14 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 
 export type Git = (args: string[], cwd: string) => Promise<{ code: number; stdout: string; stderr: string }>;
 
-export function gitBytes(args: string[], cwd: string) {
-  return new Promise<{ code: number; stdout: Buffer; stderr: string }>((done) => {
+export const git: Git = (args, cwd) => {
+  return new Promise((done) => {
     execFile("git", args, { cwd, encoding: "buffer", maxBuffer: 16 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
       const code = error ? (typeof (error as any).code === "number" ? (error as any).code : 1) : 0;
-      done({ code, stdout, stderr: stderr.toString("utf8") });
+      done({ code, stdout: stdout.toString("utf8"), stderr: stderr.toString("utf8") });
     });
   });
-}
-
-export const git: Git = async (args, cwd) => {
-  const result = await gitBytes(args, cwd);
-  return { ...result, stdout: result.stdout.toString("utf8") };
 };
-
-export function evidenceText(bytes: Buffer): string {
-  try { return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes); }
-  catch { throw new Error("Cannot review Git evidence containing invalid UTF-8. Review the affected file versions separately."); }
-}
-
-export function visibleIndexPaths(index: string): string[] {
-  // `ls-files -v` lowercases assume-unchanged entries and tags skip-worktree with S.
-  return index.split("\0").filter(Boolean).map((entry) => {
-    const path = entry.slice(2);
-    if (/^[a-zS] /.test(entry)) throw new Error(`Cannot review ${JSON.stringify(path)}: its index entry is marked assume-unchanged or skip-worktree.`);
-    return path;
-  });
-}
 
 async function ok(args: string[], cwd: string, run: Git = git): Promise<string> {
   const r = await run(args, cwd);

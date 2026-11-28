@@ -7,7 +7,7 @@ updated: 2026-11-18
 
 # Improve pi-kit `pair`, `pair-review` and `pair-work`
 
-> Historical plan for the retired pane-based runner. For current usage, see [Swarm pair workflows](../extensions/swarm/README.md#pair-workflows).
+> Historical plan for the retired pane-based runner. The pair presets were also removed from Swarm.
 
 Plan for making the three pair skills start reliably in **every environment**
 (Windows, macOS, Linux; local or remote) and with **every authenticated

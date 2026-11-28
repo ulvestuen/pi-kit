@@ -2,7 +2,6 @@ import { execFile } from "node:child_process";
 import { RpcWorker, type PiCommand, type RpcWorkerOptions } from "./driver.ts";
 
 export const DEFAULT_TURN_TIMEOUT_MS = 60 * 60_000;
-export const PI_WRITE_DENIED = "Swarm permission denied: only regular task files and directories inside the assigned workspace are writable.";
 export const HARNESSES = ["pi", "claude", "codex", "agy"] as const;
 export type Harness = (typeof HARNESSES)[number];
 export type Failure = "missing-binary" | "unsupported-cli" | "auth" | "permission" | "timeout" | "lost-session" | "protocol" | "exit";
@@ -38,43 +37,29 @@ export async function probe(cli: PiCommand, args: string[], cwd: string, env?: N
 
 /** Keep Pi's persistent RPC child, including its private --continue after a crash. */
 export function piWorker(options: Omit<RpcWorkerOptions, "onEvent" | "onExit"> & {
-  managedTimeoutMs?: number;
   onRecord(record: TranscriptEvent, live?: boolean): void;
   onIdleExit(reason: string): void;
 }): WorkerAdapter {
-  const { managedTimeoutMs } = options;
-  const managed = managedTimeoutMs !== undefined;
   let started = false;
   let stopping = false;
   let shutdown: Promise<void> | undefined;
   let finish: ((result: TurnResult) => void) | undefined;
   let text = "";
-  let stopReason: string | undefined;
-  let writeDenied = false;
   const worker = new RpcWorker({
     ...options,
     onEvent(event) {
-      if (stopping || (managed && !finish)) return;
+      if (stopping) return;
       switch (event?.type) {
         case "agent_settled":
-          // Pi settles after retries and even after a provider error. Only the final assistant outcome counts.
-          finish?.(event.aborted || (managed && stopReason === "aborted") ? { type: "cancelled" }
-            : managed && writeDenied ? failed("permission", PI_WRITE_DENIED)
-            : managed && stopReason !== "stop" ? failed("exit", "Pi did not produce a successful final assistant message.")
-            : { type: "completed", text });
+          finish?.(event.aborted ? { type: "cancelled" } : { type: "completed", text });
           break;
         case "message_end":
           if (event.message?.role === "assistant") {
-            stopReason = event.message.stopReason;
             text = event.message.content?.filter((item: any) => item.type === "text").map((item: any) => item.text).join("\n") ?? "";
           }
           options.onRecord(event);
           break;
         case "tool_execution_end":
-          if (managed && event.isError && ["task_edit", "task_write"].includes(event.toolName)
-              && event.result?.content?.some((part: any) => part.type === "text" && part.text.includes(PI_WRITE_DENIED))) writeDenied = true;
-          options.onRecord(event);
-          break;
         case "agent_start":
         case "tool_execution_start":
         case "auto_retry_start":
@@ -101,35 +86,28 @@ export function piWorker(options: Omit<RpcWorkerOptions, "onEvent" | "onExit"> &
   const stop = () => {
     stopping = true;
     finish?.({ type: "cancelled" });
-    return shutdown ??= worker.stop(managed ? 350 : undefined);
+    return shutdown ??= worker.stop();
   };
   return {
-    // The coordinator already runs this Pi; explicit model selections are checked at setup.
+    // The coordinator already runs this Pi.
     async preflight() {},
     async deliver(prompt) {
       if (stopping) return { type: "cancelled" };
       text = "";
-      stopReason = undefined;
-      writeDenied = false;
       const turn = new Promise<TurnResult>((resolve) => { finish = resolve; });
       const resolve = finish!;
-      const timer = managed ? setTimeout(() => resolve(failed("timeout", `Pi turn exceeded ${Math.ceil(managedTimeoutMs / 1000)}s; it was not replayed.`)), managedTimeoutMs) : undefined;
       try {
         if (!worker.running) {
-          worker.start(started && !managed ? ["--continue"] : []);
+          worker.start(started ? ["--continue"] : []);
           started = true;
         }
         void worker.prompt(prompt).then((disposition) => {
-          if (disposition === "handled") resolve(managed ? failed("protocol", "Pi handled the workflow prompt without running a turn.") : { type: "completed", text });
+          if (disposition === "handled") resolve({ type: "completed", text });
         }, (error: Error) => resolve(failed(/timed out/.test(error.message) ? "timeout" : "exit", error.message)));
         const result = await turn;
-        if (result.type === "failed") {
-          if (managed) await stop();
-          else if (worker.running && !stopping) await worker.stop();
-        }
+        if (result.type === "failed" && worker.running && !stopping) await worker.stop();
         return result;
       } finally {
-        clearTimeout(timer);
         finish = undefined;
       }
     },

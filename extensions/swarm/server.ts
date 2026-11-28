@@ -9,7 +9,6 @@ import type { BoardMessage, Kind } from "./store.ts";
 export interface ServerApi {
   html(): string;
   state(): unknown;
-  workflowAction?(input: unknown): Promise<unknown>;
   transcript(name: string): unknown[] | null;
   humanPost(body: string): Promise<BoardMessage>;
   workerName(token: string): string | null;
@@ -138,11 +137,6 @@ export function startServer(api: ServerApi, options: { token: string; port?: num
         return send(res, 200, api.html(), "text/html; charset=utf-8");
       }
       if (req.method === "GET" && path === "/api/state") return send(res, 200, api.state());
-      if (req.method === "POST" && path === "/api/workflow" && api.workflowAction) {
-        const body = await readBody(req);
-        try { return send(res, 200, await api.workflowAction(body)); }
-        catch (error) { return send(res, 400, { error: (error as Error).message }); }
-      }
       const transcript = path.match(/^\/api\/workers\/([a-z][a-z0-9-]*)\/transcript$/);
       if (req.method === "GET" && transcript) {
         const records = api.transcript(transcript[1]);

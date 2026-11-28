@@ -7,10 +7,9 @@ skill, process, and piece of tooling simple and visually understandable.
 
 ```text
 Pi agent
-├─ skills/       A3 problem solving · pair · pair review · pair work · ship · hansei · search · issue trackers · canvas
+├─ skills/       A3 problem solving · ship · hansei · search · issue trackers · canvas
 ├─ prompts/      /a3 · /hansei · /ship
 ├─ extensions/   swarm → /swarm coordinator + @mention board + local web UI
-│                       /pair · /pair-review · /pair-work
 └─ threema/      extension → send + receive messages
 ```
 
@@ -99,7 +98,7 @@ node skills/doctor.mjs
 The extensions target Pi **1.1.0+** using the `@earendil-works` SDK packages.
 
 - [`threema/`](./threema/) – Threema integration for pi
-- [`extensions/swarm/`](./extensions/swarm/) – `/swarm <goal>` coordinates headless Pi, Claude Code, Codex, and Antigravity CLI workers on an `@mention` board. Native workers [auto-approve tools and run without Swarm isolation](./extensions/swarm/#mixed-swarms). `/pair`, `/pair-review`, and `/pair-work` use the same harnesses and configurable models and effort. [Pair setup and migration](./extensions/swarm/#pair-workflows).
+- [`extensions/swarm/`](./extensions/swarm/) – `/swarm <goal>` coordinates headless Pi, Claude Code, Codex, and Antigravity CLI workers on an `@mention` board. Native workers [auto-approve tools and run without Swarm isolation](./extensions/swarm/#mixed-swarms).
 
 ### Prompt aliases
 
@@ -125,9 +124,6 @@ useful, a zero-dependency Node script the agent runs from the shell:
 - [`skills/hansei/`](./skills/hansei/) – reflect on your own agent sessions: counts nudges, rubber-stamp approvals, corrections, repeats, tool errors, and cost per project from local Pi session logs, and compares before vs after a workflow change (`hansei.mjs`, read-only, redacted output)
 - [`skills/kagi-search/`](./skills/kagi-search/) – web search via the Kagi API (`kagi-search.mjs`, needs `KAGI_API_KEY`)
 - [`skills/cloudwatch-logs/`](./skills/cloudwatch-logs/) – look up AWS CloudWatch Logs and run Logs Insights queries directly with an installed, pre-authenticated AWS CLI; no additional credentials or scripts
-- [`skills/pair/`](./skills/pair/) – `/pair <task>`: an implementer edits the checkout; a read-only auditor inspects the changes and drives correction rounds.
-- [`skills/pair-review/`](./skills/pair-review/) – `/pair-review [target]`: two read-only workers review the same pinned Git snapshot independently, then cross-check and issue a consolidated verdict.
-- [`skills/pair-work/`](./skills/pair-work/) – `/pair-work <task>`: a verifier plans checks before seeing the deliverable, then reviews a doer's work until acceptance or round exhaustion. Does not require Git.
 - [`skills/ship/`](./skills/ship/) – push, wait for every GitHub Actions run on the commit, diagnose failures from the lines before `##[error]`, and verify the deployed effect at the live URL (`ship.mjs ci|verify`, needs an authenticated `gh` CLI)
 - [`skills/tldraw-offline/`](./skills/tldraw-offline/) – inspect, edit, lint, and script open tldraw Desktop canvases through the local agent API (`tq.mjs` handles per-launch discovery and authentication)
 - [`skills/decisions/`](./skills/decisions/) – text/image probabilities, choices, and scores via TypeSafe JEV or OpenAI Decisions, plus experimental JEV bounding boxes (`decisions.mjs jev|openai`, needs the selected provider's `TYPESAFE_API_KEY` or `OPENAI_API_KEY`; uses native request/response schemas)

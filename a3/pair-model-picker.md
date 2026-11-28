@@ -5,7 +5,7 @@ owner: idar
 updated: 2026-11-19
 ---
 
-> Historical plan for the retired picker. Model selection now lives in [Swarm pair workflow setup](../extensions/swarm/README.md#pair-workflows).
+> Historical plan for the retired picker. The pair presets and their setup UI were also removed from Swarm.
 
 ## Background
 

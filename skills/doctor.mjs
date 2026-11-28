@@ -10,9 +10,6 @@ export const REQUIREMENTS = [
   ["exa-search", ["EXA_API_KEY"]],
   ["hansei", []],
   ["kagi-search", ["KAGI_API_KEY"]],
-  ["pair", []],
-  ["pair-review", []],
-  ["pair-work", []],
   ["ship", []],
   ["tldraw-offline", []],
 ];

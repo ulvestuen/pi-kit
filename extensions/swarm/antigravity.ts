@@ -10,7 +10,7 @@ interface Options {
   model?: string;
   effort?: string;
   rules: string;
-  board?: { url: string; token: string };
+  board: { url: string; token: string };
   timeoutMs?: number;
   onRecord(record: TranscriptEvent): void;
   revokeBoard(): void;
@@ -99,7 +99,7 @@ export function antigravityWorker(options: Options): WorkerAdapter {
         if (!pending || msg.id !== pending.id) return finish(protocol());
         if (msg.error && typeof msg.error.code === "number") {
           if (/authentication required|unauthenticated|not logged in/i.test(String(msg.error.message))) {
-            return finish(failed("auth", `agy authentication required. Sign in to Antigravity CLI, then ${board ? "add a new worker" : "start a new pair run"}.`));
+            return finish(failed("auth", "agy authentication required. Sign in to Antigravity CLI, then add a new worker."));
           }
           if (/permission denied|workspace trust|untrusted workspace/i.test(String(msg.error.message))) return finish(failed("permission", "agy refused an action under its native permission or workspace trust policy."));
           if (pending.method === "session/resume") return finish(failed("lost-session", "agy could not resume the saved session; no fresh session was started."));
@@ -130,10 +130,10 @@ export function antigravityWorker(options: Options): WorkerAdapter {
         onRecord({ type: "agent_start" });
         const init = await request("initialize", { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: "pi-swarm", version: "1.0.0" } });
         if (outcome) return;
-        if (init.protocolVersion !== 1 || (board && init.agentCapabilities?.mcpCapabilities?.http !== true) || !init.agentCapabilities?.sessionCapabilities?.resume) {
-          return finish(failed("unsupported-cli", `agy must support ACP v1, exact session resume${board ? ", and HTTP MCP" : ""}.`));
+        if (init.protocolVersion !== 1 || init.agentCapabilities?.mcpCapabilities?.http !== true || !init.agentCapabilities?.sessionCapabilities?.resume) {
+          return finish(failed("unsupported-cli", "agy must support ACP v1, exact session resume, and HTTP MCP."));
         }
-        const setup = { cwd, mcpServers: board ? [{ name: "swarm_board", type: "http", url: board.url, headers: [{ name: "x-swarm-token", value: board.token }] }] : [] };
+        const setup = { cwd, mcpServers: [{ name: "swarm_board", type: "http", url: board.url, headers: [{ name: "x-swarm-token", value: board.token }] }] };
         const session = previous ? await request("session/resume", { ...setup, sessionId: previous }) : await request("session/new", setup);
         if (outcome) return;
         // Resume may omit the ID; when returned it must match the ID we asked for.

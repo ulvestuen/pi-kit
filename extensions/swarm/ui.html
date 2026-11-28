@@ -80,25 +80,6 @@
   .tx pre { white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto; background: var(--code); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; margin: 4px 0; font: 12px ui-monospace, Menlo, Consolas, monospace; }
   .thinking { color: var(--dim); font-style: italic; white-space: pre-wrap; }
   #live { white-space: pre-wrap; color: var(--dim); }
-  .workflow { max-width: 850px; margin: 10px auto 28px; }
-  .workflow h2 { font-size: 22px; margin: 0 0 4px; }
-  .workflow h3 { font-size: 15px; margin: 0 0 10px; }
-  .workflow .detail { color: var(--dim); overflow-wrap: anywhere; }
-  .workflow form, .workflow .reports { display: grid; gap: 14px; margin-top: 18px; }
-  .workflow .roles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 10px; }
-  .workflow fieldset, .workflow details, .workflow .outcome { min-width: 0; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
-  .workflow fieldset { display: grid; gap: 8px; }
-  .workflow legend { padding: 0 4px; text-transform: capitalize; }
-  .workflow label { display: grid; gap: 4px; min-width: 0; }
-  .workflow input, .workflow select, .workflow textarea { width: 100%; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; font: inherit; padding: 6px 8px; }
-  .workflow textarea { resize: vertical; }
-  .workflow input[type=number] { width: 86px; }
-  .workflow button { color: var(--text); border: 1px solid var(--line); background: var(--panel2); border-radius: 6px; font: inherit; padding: 7px 12px; cursor: pointer; }
-  .workflow button.primary { color: var(--bg); background: var(--accent); }
-  .workflow button:disabled { opacity: .55; cursor: default; }
-  .workflow .actions { display: flex; flex-wrap: wrap; gap: 8px; }
-  .workflow .problem { color: var(--killed); }
-  .workflow summary { cursor: pointer; }
   @media (max-width: 760px) { body { grid-template-columns: 1fr; grid-template-areas: "head" "side" "feed" "composer"; grid-template-rows: auto auto 1fr auto; } aside { max-height: 30vh; border-right: 0; border-bottom: 1px solid var(--line); } }
 </style>
 </head>
@@ -286,103 +267,22 @@ async function openDrawer(name) {
 $("dclose").onclick = () => { state.open = null; $("drawer").classList.remove("open"); $("drawer").setAttribute("aria-hidden", "true"); renderRoster(); };
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && state.open && $("ac").style.display !== "block") $("dclose").onclick(); });
 
-// ---- structured workflow setup and results ----
-function renderWorkflow(w) {
-  let page = $("workflow");
-  if (!page) {
-    $("feed").innerHTML = '<section class="workflow" id="workflow"><h2 id="workflow-title"></h2><p id="workflow-status" role="status"></p><p id="workflow-error" class="problem" role="alert"></p><div id="workflow-body"></div></section>';
-    page = $("workflow");
-    page.addEventListener("click", (e) => { if (e.target.closest("[data-cancel]")) void workflowAction("cancel"); });
-    page.addEventListener("submit", (e) => { e.preventDefault(); void workflowAction(e.submitter.value); });
-    page.addEventListener("change", (e) => {
-      const select = e.target.closest("[data-harness]");
-      if (!select) return;
-      const fields = select.closest("fieldset");
-      fields.querySelector("[data-model]").value = "";
-      fields.querySelector("[data-effort]").value = "";
-      selectModelList(fields);
-    });
-  }
-  $("workflow-title").textContent = w.title;
-  $("workflow-status").textContent = `${w.phase}${w.round ? ` · Round ${w.round} of ${w.selection.rounds}` : ""}${w.verdict ? ` · Verdict: ${w.verdict}` : ""}`;
-  $("workflow-error").textContent = w.problem || "";
-  const body = $("workflow-body");
-  if (w.status === "setup" || w.status === "checking") {
-    if (!$("workflow-form")) {
-      body.innerHTML = `<form id="workflow-form">
-        <label>${w.preset === "pair-review" ? "Review target" : "Task"}<textarea rows="2" name="target" required>${esc(w.target)}</textarea></label>
-        ${w.preset === "pair-review" ? '<div class="detail">Working tree, a local Git revision, or a revision range (e.g. main...HEAD).</div>' : ""}
-        <p class="detail">Native harnesses auto-approve tool calls and run with your account’s filesystem access.</p>
-        <div class="roles">${w.roles.map((role) => {
-          const pick = w.selection.roles[role];
-          return `<fieldset data-role="${esc(role)}"><legend>${esc(role)}</legend>
-            <span class="detail" data-role-scope></span>
-            <label>Harness<select data-harness aria-label="${esc(role)} harness">${w.harnesses.map((h) => `<option value="${h}"${pick.harness === h ? " selected" : ""}>${harnessLabel(h)}</option>`).join("")}</select></label>
-            <label>Model<input data-model aria-label="${esc(role)} model" value="${esc(pick.model || "")}" autocomplete="off" placeholder="Native CLI default"></label>
-            <label>Effort<input data-effort aria-label="${esc(role)} effort" value="${esc(pick.effort || "")}" placeholder="Model default" autocomplete="off"></label></fieldset>`;
-        }).join("")}</div>
-        <datalist id="workflow-models">${(w.piModels || []).map((model) => `<option value="${esc(model)}"></option>`).join("")}</datalist>
-        <label>Round limit<input name="rounds" type="number" min="1" max="10" required value="${esc(w.selection.rounds)}"></label>
-        <div class="actions"><button class="primary" value="start">Start</button><button value="check">Check workers</button><button type="button" data-cancel>Cancel</button></div>
-      </form>`;
-      body.querySelectorAll("fieldset").forEach(selectModelList);
-    }
-    $("workflow-form").querySelectorAll("textarea,input,select,button:not([data-cancel])").forEach((element) => { element.disabled = w.status === "checking"; });
-    return;
-  }
-  const released = w.reports.length && (w.status === "complete" || w.status === "exhausted") ? w.reports.at(-1) : null;
-  const summary = `<div class="outcome"><h3>${w.preset === "pair-review" ? "Review target" : "Task"}</h3><div class="detail">${esc(w.target)}</div>
-    ${w.snapshot ? `<p class="detail">Snapshot: ${esc(w.snapshot)}</p>` : ""}
-    ${w.artifact ? `<p class="detail">Deliverables: <code>${esc(w.artifact)}</code></p>` : ""}</div>`;
-  const openReports = new Set([...body.querySelectorAll("details[open]")].map((e) => e.dataset.report));
-  body.innerHTML = `${summary}<div class="reports">${(w.status === "running") ? '<div class="actions"><button type="button" data-cancel>Cancel run</button></div>' : ""}
-    ${released ? `<section class="outcome"><h3>${esc(released.phase)}</h3><div class="body">${markdown(released.report)}</div></section>` : ""}
-    ${w.reports.map((r, i) => `<details data-report="${i}"${openReports.has(String(i)) ? " open" : ""}><summary>${esc(r.role)} · ${esc(r.phase)}${r.round ? ` · Round ${r.round}` : ""}${r.verdict ? ` · ${esc(r.verdict)}` : ""}</summary><div class="body">${markdown(r.report)}</div></details>`).join("")}</div>`;
-}
-
-function selectModelList(fields) {
-  const model = fields.querySelector("[data-model]");
-  const isPi = fields.querySelector("[data-harness]").value === "pi";
-  if (isPi) model.setAttribute("list", "workflow-models"); else model.removeAttribute("list");
-  model.placeholder = isPi ? "provider/model" : "Native CLI default";
-  const writes = ["implementer", "doer"].includes(fields.dataset.role);
-  fields.querySelector("[data-role-scope]").textContent = writes ? "Edits task files" : isPi ? "Read-only task files" : "Review only (not enforced)";
-}
-
-async function workflowAction(action) {
-  const form = $("workflow-form");
-  const payload = { action };
-  if (action !== "cancel") {
-    payload.target = form.elements.target.value;
-    payload.selection = { rounds: Number(form.elements.rounds.value), roles: Object.fromEntries([...form.querySelectorAll("fieldset")].map((f) => [f.dataset.role, {
-      harness: f.querySelector("[data-harness]").value, model: f.querySelector("[data-model]").value, effort: f.querySelector("[data-effort]").value,
-    }])) };
-  }
-  try {
-    const res = await api("/api/workflow", { method: "POST", body: JSON.stringify(payload) });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
-  } catch (error) { $("workflow-error").textContent = error.message; }
-}
-
 // ---- live updates ----
 function applySnapshot(s) {
   state.roster = s.roster; state.board = s.board; state.queued = s.queued || [];
-  $("composer").hidden = Boolean(s.workflow);
   $("title").textContent = "Pi swarm " + s.id;
   $("goal").textContent = s.goal; $("goal").title = s.goal;
   document.title = "swarm · " + s.goal.slice(0, 60);
   $("hint").textContent = `Limits: ${s.limits.maxActive} active, ${s.limits.maxWorkers} workers · state in ${s.dir}`;
   renderRoster();
-  if (s.workflow) renderWorkflow(s.workflow); else renderBoard();
+  renderBoard();
 }
 function connect() {
   const es = new EventSource("/api/events?t=" + encodeURIComponent(token));
   es.addEventListener("open", () => { $("conn").className = "live"; $("conn").textContent = "live"; });
   es.addEventListener("error", () => { $("conn").className = "down"; $("conn").textContent = "reconnecting…"; });
   es.addEventListener("snapshot", (e) => applySnapshot(JSON.parse(e.data)));
-  es.addEventListener("board", (e) => { if (!$("workflow")) addMessage(JSON.parse(e.data)); });
-  es.addEventListener("workflow", (e) => renderWorkflow(JSON.parse(e.data)));
+  es.addEventListener("board", (e) => addMessage(JSON.parse(e.data)));
   es.addEventListener("roster", (e) => { const d = JSON.parse(e.data); state.roster.members = d.members; state.queued = d.queued || []; renderRoster(); });
   es.addEventListener("transcript", (e) => {
     const { name, record } = JSON.parse(e.data);

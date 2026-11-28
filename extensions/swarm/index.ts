@@ -3,11 +3,8 @@
 // and each worker's transcript, and lets the human post. See a3/swarm.md and README.md.
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { getSupportedThinkingLevels, StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 
 import { piInvocation } from "./driver.ts";
 import { COORDINATOR } from "./router.ts";
@@ -15,7 +12,6 @@ import { parseSwarmArgs, Swarm } from "./swarm.ts";
 import { HARNESSES } from "./worker.ts";
 import { describeStatus } from "./worktree.ts";
 import { formatMessages } from "./worker-ext.ts";
-import { PRESETS, applyPicks, workflowRequest, type Pick as WorkerPick, type PickOverrides, type Preset } from "./workflow.ts";
 
 export const SWARM_TOOLS = ["swarm_add", "swarm_status", "swarm_kill", "board_post", "board_read"];
 
@@ -50,13 +46,6 @@ function text(t: string, details: unknown = {}) {
   return { content: [{ type: "text" as const, text: t }], details };
 }
 
-function readPicks(name: string): any {
-  try { return JSON.parse(readFileSync(join(getAgentDir(), name), "utf8")); }
-  catch { return {}; }
-}
-
-const presets = Object.keys(PRESETS) as Preset[];
-
 export default function swarmExtension(pi: ExtensionAPI) {
   // Workers load the user's extensions too; their board tools come from worker-ext.ts, and they cannot nest swarms.
   if (process.env.PI_SWARM_ROLE === "worker") return;
@@ -64,7 +53,6 @@ export default function swarmExtension(pi: ExtensionAPI) {
   let swarm: Swarm | null = null;
   let statusCtx: ExtensionContext | null = null;
   let offStatus: (() => void) | null = null;
-  let openingWorkflow = false;
 
   const need = (): Swarm => {
     if (!swarm) throw new Error("No swarm is running. Start one with /swarm <goal>.");
@@ -109,62 +97,6 @@ export default function swarmExtension(pi: ExtensionAPI) {
     await pi.exec(cmd as string, args as string[], { timeout: 5_000 }).catch(() => undefined);
   };
 
-  const openWorkflow = async (preset: Preset, args: string, ctx: ExtensionContext, requested?: PickOverrides) => {
-    if (swarm || openingWorkflow) throw new Error("A swarm is already open. Use /swarm stop before starting a new workflow.");
-    openingWorkflow = true;
-    try {
-      const models = ctx.modelRegistry.getAvailable();
-      const piModels = models.map((model) => `${model.provider}/${model.id}`);
-      const saved = readPicks("swarm-picks.json")?.[preset];
-      const legacy = readPicks("pair-picker.json")?.[preset];
-      const roles = Object.fromEntries(PRESETS[preset].roles.map((role, i) => {
-        const prior = saved?.roles?.[role];
-        let pick: WorkerPick;
-        if (HARNESSES.includes(prior?.harness)) pick = prior;
-        else if (typeof legacy?.roles?.[role] === "string") {
-          const [, spec, effort] = /^(.*?)(?::([a-z]+))?$/.exec(legacy.roles[role])!;
-          const match = /^(claude|codex|agy)\/(.+)$/.exec(spec);
-          pick = { harness: (match?.[1] as WorkerPick["harness"]) ?? "pi", model: match?.[2] ?? spec, effort };
-        } else {
-          const preferred = i === 0 ? ["anthropic/claude-opus-5-5"] : ["openai/gpt-6.1-sol", "opencode/gpt-6.1-sol"];
-          const model = preferred.find((option) => piModels.includes(option)) ?? modelSpec(ctx, "off");
-          pick = { harness: "pi", model, ...(i === 1 && preferred.includes(model ?? "") ? { effort: "xhigh" } : {}) };
-        }
-        return [role, pick];
-      }));
-      const rounds = saved?.rounds ?? legacy?.rounds;
-      const defaults = { rounds: Number.isInteger(rounds) && rounds >= 1 && rounds <= 10 ? rounds : PRESETS[preset].rounds, roles };
-      const request = requested
-        ? { target: args.trim() || (preset === "pair-review" ? "working tree" : ""), selection: applyPicks(preset, defaults, requested) }
-        : workflowRequest(preset, args, defaults);
-      swarm = await Swarm.start({
-        goal: PRESETS[preset].title, cwd: ctx.cwd, pi: piInvocation(), maxActive: 2, maxWorkers: 2,
-        coordinator: { deliver: async () => undefined, stop: async () => undefined },
-        workflow: { preset, source: ctx.cwd, ...request, piModels,
-          validatePi(model, effort) {
-            const index = piModels.indexOf(model);
-            if (index < 0) throw new Error(`Pi model ${model} is not available with the current credentials.`);
-            if (effort && !getSupportedThinkingLevels(models[index]).some((level) => level === effort)) throw new Error(`Pi model ${model} does not support effort ${effort}.`);
-          },
-          save(selection) {
-            const dir = getAgentDir();
-            mkdirSync(dir, { recursive: true });
-            const file = join(dir, "swarm-picks.json");
-            const temp = `${file}.${process.pid}.tmp`;
-            writeFileSync(temp, JSON.stringify({ ...readPicks("swarm-picks.json"), [preset]: selection }, null, 2) + "\n", { mode: 0o600 });
-            renameSync(temp, file);
-          },
-        },
-      });
-      statusCtx = ctx;
-      offStatus = swarm.onEvent((event) => event.type === "roster" && footer());
-      if (ctx.mode === "tui") await openUrl(swarm.url);
-      return `${PRESETS[preset].title} setup: ${swarm.url}\nNo workers launch until you select Start. Use /swarm stop to close the run.`;
-    } finally {
-      openingWorkflow = false;
-    }
-  };
-
   pi.on("session_start", async () => {
     // Nothing survives a reload: keep the tools off until /swarm runs.
     if (!swarm) setTools(false);
@@ -175,7 +107,7 @@ export default function swarmExtension(pi: ExtensionAPI) {
   });
 
   pi.on("before_agent_start", async (event) => {
-    if (swarm && !swarm.workflow) event.systemPromptOptions.sections.swarm = coordinatorRules(swarm);
+    if (swarm) event.systemPromptOptions.sections.swarm = coordinatorRules(swarm);
     else delete event.systemPromptOptions.sections.swarm;
   });
 
@@ -226,7 +158,7 @@ export default function swarmExtension(pi: ExtensionAPI) {
         return;
       }
       if (command.action !== "start") return;
-      if (swarm || openingWorkflow) {
+      if (swarm) {
         ctx.ui.notify("A swarm is already open or starting. Use /swarm stop first.", "warning");
         return;
       }
@@ -267,31 +199,6 @@ export default function swarmExtension(pi: ExtensionAPI) {
       ].join("\n");
       if (ctx.isIdle()) pi.sendUserMessage(body);
       else pi.sendUserMessage(body, { deliverAs: "followUp" });
-    },
-  });
-
-  for (const preset of presets) pi.registerCommand(preset, {
-    description: `${PRESETS[preset].title}: configure and start two headless workers in the Swarm browser`,
-    async handler(args, ctx) {
-      try { ctx.ui.notify(await openWorkflow(preset, args, ctx), "info"); }
-      catch (error) { ctx.ui.notify((error as Error).message, "error"); }
-    },
-  });
-
-  pi.registerTool({
-    name: "swarm_workflow",
-    label: "Open pair workflow setup",
-    description: "Open browser setup for pair, pair-review, or pair-work. Keep the user's explicit selections without substituting a harness. The user starts the run in the browser.",
-    parameters: Type.Object({
-      preset: StringEnum(presets),
-      target: Type.String({ description: "Task or local review target; empty for the working tree" }),
-      rounds: Type.Optional(Type.Integer({ minimum: 1, maximum: 10 })),
-      roles: Type.Optional(Type.Record(Type.String(), Type.Object({
-        harness: Type.Optional(StringEnum(HARNESSES)), model: Type.Optional(Type.String()), effort: Type.Optional(Type.String()),
-      }))),
-    }),
-    async execute(_id, params, _signal, _update, ctx) {
-      return text(await openWorkflow(params.preset, params.target, ctx, params));
     },
   });
 

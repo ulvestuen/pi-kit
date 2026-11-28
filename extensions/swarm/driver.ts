@@ -139,9 +139,10 @@ export class RpcWorker {
   }
 
   /** Abort the run, close stdin (orderly shutdown), then escalate to SIGTERM and SIGKILL. */
-  async stop(graceMs = 3_000): Promise<void> {
+  async stop(): Promise<void> {
     const child = this.child;
     if (!child) return;
+    const graceMs = 3_000;
     this.stopping = true;
     const exited = this.exitPromise!;
     await Promise.race([this.command({ type: "abort" }, graceMs).catch(() => undefined), exited]);

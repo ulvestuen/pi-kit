@@ -35,7 +35,7 @@ interface NativeOptions {
   effort?: string;
   rules: string;
   env: NodeJS.ProcessEnv;
-  boardUrl?: string;
+  boardUrl: string;
   timeoutMs?: number;
   onRecord(record: TranscriptEvent): void;
   revokeBoard(): void;
@@ -47,11 +47,11 @@ function launchArgs({ harness, model, effort, boardUrl }: NativeOptions, session
     const mcp = { mcpServers: { swarm_board: { type: "http", url: boardUrl, alwaysLoad: true, headers: { "x-swarm-token": "${PI_SWARM_TOKEN}" } } } };
     return ["--print", "--output-format", "stream-json", "--verbose",
       "--dangerously-skip-permissions", "--settings", JSON.stringify({ sandbox: { enabled: false } }),
-      ...(boardUrl ? ["--mcp-config", JSON.stringify(mcp)] : []), ...selectedModel, ...(effort ? ["--effort", effort] : []),
+      "--mcp-config", JSON.stringify(mcp), ...selectedModel, ...(effort ? ["--effort", effort] : []),
       ...(session ? ["--resume", session] : [])];
   }
-  return [...(boardUrl ? ["-c", 'shell_environment_policy.exclude=["PI_SWARM_TOKEN"]', "-c", `mcp_servers.swarm_board.url=${JSON.stringify(boardUrl)}`,
-    "-c", 'mcp_servers.swarm_board.env_http_headers={"x-swarm-token"="PI_SWARM_TOKEN"}', "-c", "mcp_servers.swarm_board.required=true"] : []),
+  return ["-c", 'shell_environment_policy.exclude=["PI_SWARM_TOKEN"]', "-c", `mcp_servers.swarm_board.url=${JSON.stringify(boardUrl)}`,
+    "-c", 'mcp_servers.swarm_board.env_http_headers={"x-swarm-token"="PI_SWARM_TOKEN"}', "-c", "mcp_servers.swarm_board.required=true",
     ...(effort ? ["-c", `model_reasoning_effort=${JSON.stringify(effort)}`] : []),
     "exec", "--json", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check",
     ...selectedModel,
@@ -68,7 +68,7 @@ function reportedFailure(harness: NativeHarness, output: string, resuming: boole
 }
 
 export function nativeWorker(options: NativeOptions): WorkerAdapter {
-  const { harness, cli, cwd, model, onRecord, boardUrl } = options;
+  const { harness, cli, cwd, model, onRecord } = options;
   let session: string | undefined;
   let stopped = false;
   let active: { done: Promise<TurnResult>; cancel: () => void } | undefined;
@@ -142,7 +142,7 @@ export function nativeWorker(options: NativeOptions): WorkerAdapter {
               interrupt(failed("unsupported-cli", `Claude Code selected a different model than ${model}.`));
             }
             const board = Array.isArray(record.mcp_servers) && record.mcp_servers.find((m: any) => m?.name === "swarm_board");
-            if (boardUrl && (!board || !["connected", "pending", "cached"].includes(board.status))) interrupt(failed("protocol", "Claude Code did not connect to the swarm board."));
+            if (!board || !["connected", "pending", "cached"].includes(board.status)) interrupt(failed("protocol", "Claude Code did not connect to the swarm board."));
           } else if (record.type === "assistant" && !record.parent_tool_use_id) {
             const content = record.message?.content;
             if (Array.isArray(content)) assistant(content.filter((c: any) => c?.type === "text").map((c: any) => c.text).join("\n"));
